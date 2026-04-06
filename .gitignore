@@ -1,6 +1,0 @@
-node_modules/
-dist/
-tmp/
-.env.oss
-.env.postgres-s3
-.generated-cache/
