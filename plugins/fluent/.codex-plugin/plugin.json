@@ -1,0 +1,61 @@
+{
+  "name": "fluent",
+  "version": "0.1.0",
+  "description": "Fluent helps you plan meals, stay ahead of groceries, log workouts, and make better closet decisions.",
+  "author": {
+    "name": "Fluent"
+  },
+  "license": "MIT",
+  "keywords": [
+    "fluent",
+    "meals",
+    "style",
+    "personal-mcp"
+  ],
+  "mcpServers": "./.mcp.json",
+  "x-fluent": {
+    "backendModesStatus": "legacy-bridge",
+    "backendModes": [
+      "hosted",
+      "local"
+    ],
+    "legacyBackendModes": [
+      "hosted",
+      "local"
+    ],
+    "deploymentTracks": [
+      "cloud",
+      "oss"
+    ],
+    "defaultDeploymentTrack": "oss",
+    "minimumContractVersion": "2026-04-05.fluent-core-v1.31",
+    "requiredHostedScopes": [
+      "meals:read",
+      "meals:write",
+      "health:read",
+      "health:write",
+      "style:read",
+      "style:write"
+    ]
+  },
+  "interface": {
+    "displayName": "Fluent",
+    "shortDescription": "Meals, fitness, groceries, kitchen tracking, and a closet-aware stylist.",
+    "longDescription": "Fluent brings weekly meal planning, grocery prep, workout planning, workout logging, kitchen inventory, and a closet-aware stylist that can actually judge purchases, spot redundancy, and sharpen a wardrobe.",
+    "developerName": "Fluent",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Plan next week around my schedule and turn it into a grocery list I can actually shop from.",
+      "Plan my workouts for this week and keep them realistic.",
+      "Tell me if this clothing purchase is actually right for my wardrobe or just attractive in isolation."
+    ],
+    "brandColor": "#121212",
+    "composerIcon": "./assets/fluent-small.svg",
+    "logo": "./assets/fluent-small.svg",
+    "screenshots": []
+  }
+}
