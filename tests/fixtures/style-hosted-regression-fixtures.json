@@ -1,0 +1,43 @@
+{
+  "cases": {
+    "high_coverage_closet": {
+      "description": "Hosted seeded closet with strong photo and profile coverage should expose wardrobe analysis and low evidence-gap counts.",
+      "minDeliverablePhotoCoverage": 0.75,
+      "minTypedProfileCoverage": 0.6,
+      "minDescriptorCoverage": 0.4
+    },
+    "partial_coverage_closet": {
+      "description": "Any remaining missing photo or descriptor lanes should be surfaced through evidence gaps rather than hidden.",
+      "requiresEvidenceGapReporting": true
+    },
+    "candidate_with_image": {
+      "candidate": {
+        "brand": "Sunspel",
+        "category": "TOP",
+        "colorFamily": "navy",
+        "descriptorConfidence": 0.95,
+        "fabricHand": "smooth",
+        "formality": 3,
+        "imageUrl": "https://cdn.sunspel.com/cdn/shop/files/MSWE8176-BUAA_A.jpg?v=1743426254&width=1200",
+        "name": "Cashmere Crew Neck Jumper",
+        "polishLevel": "refined",
+        "qualityTier": "investment",
+        "structureLevel": "structured",
+        "subcategory": "Sweater",
+        "texture": "fine gauge",
+        "useCases": ["smart casual", "dinner"],
+        "visualWeight": "light"
+      }
+    },
+    "candidate_without_image": {
+      "candidate": {
+        "brand": "Sunspel",
+        "category": "TOP",
+        "colorFamily": "navy",
+        "formality": 3,
+        "name": "Text Only Crew Neck",
+        "subcategory": "Sweater"
+      }
+    }
+  }
+}
