@@ -16,6 +16,10 @@ export interface FluentPreparedStatement {
   run<T = unknown>(): Promise<FluentStatementResult<T>>;
 }
 
+type WrappedCloudflarePreparedStatement = FluentPreparedStatement & {
+  __rawD1PreparedStatement: D1PreparedStatement;
+};
+
 export interface FluentExecResult {
   count: number;
   duration: number;
@@ -79,7 +83,8 @@ export function wrapCloudflareDatabase(db: D1Database): FluentDatabase {
 }
 
 export function wrapCloudflarePreparedStatement(statement: D1PreparedStatement): FluentPreparedStatement {
-  return {
+  const wrapped: WrappedCloudflarePreparedStatement = {
+    __rawD1PreparedStatement: statement,
     all<T = unknown>() {
       return statement.all<T>();
     },
@@ -101,6 +106,8 @@ export function wrapCloudflarePreparedStatement(statement: D1PreparedStatement):
       };
     },
   };
+
+  return wrapped;
 }
 
 export function wrapCloudflareBlobStore(bucket: R2Bucket): FluentBlobStore {
@@ -147,7 +154,8 @@ function wrapCloudflareBlobHead(object: R2Object): Omit<FluentBlobObject, 'array
 }
 
 function toD1PreparedStatement(statement: FluentPreparedStatement): D1PreparedStatement {
-  return statement as D1PreparedStatement;
+  const wrapped = statement as Partial<WrappedCloudflarePreparedStatement>;
+  return wrapped.__rawD1PreparedStatement ?? (statement as D1PreparedStatement);
 }
 
 function toCloudflareHttpMetadata(metadata: FluentBlobHttpMetadata | undefined): R2HTTPMetadata | undefined {

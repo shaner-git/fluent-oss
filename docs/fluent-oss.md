@@ -2,6 +2,16 @@
 
 Fluent OSS is the supported self-hosted open-source runtime for Fluent.
 
+Public release references:
+
+- public release: [Fluent OSS v0.1.0](https://github.com/shaner-git/fluent-oss/releases/tag/v0.1.0)
+- release-pinned docs: [public OSS docs at `v0.1.0`](https://github.com/shaner-git/fluent-oss/tree/v0.1.0/docs/oss)
+- changelog: [../CHANGELOG.md](../CHANGELOG.md)
+- known limitations: [./oss/fluent-oss-known-limitations.md](./oss/fluent-oss-known-limitations.md)
+- setup matrix: [./oss/fluent-oss-setup-matrix.md](./oss/fluent-oss-setup-matrix.md)
+- upgrade notes: [./oss/fluent-oss-upgrade-notes.md](./oss/fluent-oss-upgrade-notes.md)
+- Docker notes: [./oss/fluent-oss-docker-notes.md](./oss/fluent-oss-docker-notes.md)
+
 ## OSS Boundaries
 
 - single-user in v1
@@ -10,8 +20,11 @@ Fluent OSS is the supported self-hosted open-source runtime for Fluent.
 - open `GET /health`
 - open `GET /codex-probe`
 - same MCP contract as Hosted Fluent
+- supported minimum contract version: `2026-04-13.fluent-core-v1.34`
 - local DB and artifacts stored under `~/.fluent/` by default
 - no OAuth, no `/authorize`, no `/token`
+- direct runtime support is documented for Node.js `22.x`
+- public `--track cloud` scaffolds require an explicit `--base-url` until Fluent Cloud is GA
 
 ## Local Laptop Usage
 
@@ -38,6 +51,20 @@ Generate a Codex config:
 ```bash
 npm run scaffold:mcp -- --client codex --track oss --base-url http://127.0.0.1:8788
 ```
+
+Generate a Claude config:
+
+```bash
+npm run scaffold:mcp -- --client claude --track oss --base-url http://127.0.0.1:8788
+```
+
+Generate an OpenClaw config:
+
+```bash
+npm run scaffold:mcp -- --client openclaw --track oss --base-url http://127.0.0.1:8788
+```
+
+For OpenClaw, this scaffold output is the native `mcp.servers.fluent` JSON block you should register with `openclaw mcp set fluent ...`.
 
 ## Docker Compose Usage
 

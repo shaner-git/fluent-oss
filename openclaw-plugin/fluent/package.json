@@ -1,0 +1,54 @@
+{
+  "name": "fluent",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Native OpenClaw plugin packaging for Fluent skills and MCP setup guidance.",
+  "author": {
+    "name": "Fluent"
+  },
+  "license": "MIT",
+  "keywords": [
+    "fluent",
+    "meals",
+    "health",
+    "style",
+    "openclaw",
+    "plugin",
+    "personal-mcp"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "x-fluent": {
+    "backendModesStatus": "legacy-bridge",
+    "backendModes": [
+      "hosted",
+      "local"
+    ],
+    "legacyBackendModes": [
+      "hosted",
+      "local"
+    ],
+    "deploymentTracks": [
+      "cloud",
+      "oss"
+    ],
+    "defaultDeploymentTrack": "oss",
+    "minimumContractVersion": "2026-04-17.fluent-core-v1.35",
+    "requiredHostedScopes": [
+      "meals:read",
+      "meals:write",
+      "health:read",
+      "health:write",
+      "style:read",
+      "style:write",
+      "offline_access"
+    ]
+  }
+}

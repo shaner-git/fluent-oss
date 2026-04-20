@@ -4,6 +4,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { MealsService } from '../src/domains/meals/service';
 import { createLocalRuntime } from '../src/local/runtime';
+import { buildConfirmedOrderSyncMetadata } from '../plugins/fluent/skills/fluent-meals/scripts/confirmed-order-sync.mjs';
 
 const tempRoots: string[] = [];
 const provenance = {
@@ -25,6 +26,7 @@ main().catch((error) => {
 async function main() {
   try {
     await supportsMixedCreateAndUpdateBatchWrites();
+    await persistsConfirmedOrderSyncFromBatchMetadata();
     await hardDeletesInventoryItems();
     await collapsesDuplicateBatchRowsWithMatchingUnits();
     await rejectsAmbiguousDuplicateUnitsWithoutWriting();
@@ -96,6 +98,55 @@ async function supportsMixedCreateAndUpdateBatchWrites() {
     const inventory = await service.getInventory();
     assert.equal(inventory.some((item) => item.normalizedName === 'banana'), true);
     assert.equal(inventory.some((item) => item.normalizedName === 'whole milk'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function persistsConfirmedOrderSyncFromBatchMetadata() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const metadata = buildConfirmedOrderSyncMetadata({
+      retailer: 'voila',
+      retailerOrderId: 'batch-sync-1763107873281',
+      status: 'sync_completed',
+      syncSummary: {
+        confirmedOrder: {
+          confirmedAt: '2026-03-30T19:10:00.000Z',
+          orderId: 'batch-sync-1763107873281',
+          retailer: 'voila',
+        },
+        counts: {
+          explicitSkippedCount: 0,
+          matchedPurchasedCount: 0,
+          missingPlannedCount: 0,
+          orderedExtraCount: 1,
+          unresolvedCount: 0,
+        },
+      },
+      weekStart: '2026-03-30',
+    });
+
+    await service.updateInventoryBatch({
+      items: [
+        {
+          metadata,
+          name: 'Green Grapes 907 g',
+          purchased_at: '2026-03-30T19:10:00.000Z',
+          source: 'confirmed_order_sync',
+          status: 'present',
+        },
+      ],
+      provenance,
+    });
+
+    const sync = await service.getConfirmedOrderSync('voila', 'batch-sync-1763107873281');
+    assert.ok(sync);
+    assert.equal(sync?.status, 'sync_completed');
+    assert.equal(sync?.orderedExtraCount, 1);
+    assert.equal(sync?.weekStart, '2026-03-30');
   } finally {
     runtime.sqliteDb.close();
   }

@@ -9,6 +9,7 @@
   "keywords": [
     "fluent",
     "meals",
+    "health",
     "style",
     "personal-mcp"
   ],
@@ -28,14 +29,15 @@
       "oss"
     ],
     "defaultDeploymentTrack": "oss",
-    "minimumContractVersion": "2026-04-05.fluent-core-v1.31",
+    "minimumContractVersion": "2026-04-17.fluent-core-v1.35",
     "requiredHostedScopes": [
       "meals:read",
       "meals:write",
       "health:read",
       "health:write",
       "style:read",
-      "style:write"
+      "style:write",
+      "offline_access"
     ]
   },
   "interface": {

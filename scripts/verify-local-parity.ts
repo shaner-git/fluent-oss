@@ -3,6 +3,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { FLUENT_CONTRACT_VERSION, FLUENT_RESOURCE_URIS, FLUENT_TOOL_NAMES } from '../src/contract';
+import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../src/fluent-identity';
 import { defaultLocalScopes, ensureLocalTokenState, LOCAL_AUTH_MODEL } from '../src/local/auth';
 import { resolveLocalRuntimePaths } from '../src/local/runtime';
 
@@ -11,6 +12,7 @@ const cwd = path.resolve(args.cwd ?? process.cwd());
 const baseUrl = (args['base-url'] ?? args.baseUrl ?? 'http://127.0.0.1:8788').replace(/\/$/, '');
 const rootDir = args.root ? path.resolve(cwd, args.root) : undefined;
 const paths = resolveLocalRuntimePaths(rootDir);
+const LOCAL_SERVER_START_HINT = 'npm run oss:start';
 
 main().catch((error) => {
   console.error(error);
@@ -18,6 +20,8 @@ main().catch((error) => {
 });
 
 async function main() {
+  await ensureLocalServerAvailable();
+
   const report = {
     baseUrl,
     checkedAt: new Date().toISOString(),
@@ -90,6 +94,17 @@ async function main() {
   process.exit(report.ok ? 0 : 1);
 }
 
+async function ensureLocalServerAvailable() {
+  try {
+    await fetch(`${baseUrl}/health`);
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `OSS parity expects a running local Fluent server at ${baseUrl}. Start it first with \`${LOCAL_SERVER_START_HINT}\` and rerun this verifier.\n${details}`,
+    );
+  }
+}
+
 async function verifyMcpSurface(token: string) {
   const client = new Client({ name: 'fluent-oss-verify', version: '1.0.0' }, { capabilities: {} });
   const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
@@ -124,7 +139,7 @@ async function verifyMcpSurface(token: string) {
         client.callTool({ name: 'style_get_profile', arguments: {} }),
         client.callTool({ name: 'style_get_context', arguments: {} }),
         client.callTool({ name: 'meals_get_inventory_summary', arguments: {} }),
-        client.callTool({ name: 'meals_get_current_plan', arguments: {} }),
+        client.callTool({ name: 'meals_get_plan', arguments: {} }),
       ]);
 
     return {
@@ -180,29 +195,44 @@ async function verifyWrites(db: DatabaseSync) {
       throw new Error('No Fluent domains found in the Fluent OSS runtime.');
     }
 
+    const domainId = String(candidateDomain.domainId);
     const originalLifecycle = String(candidateDomain.lifecycleState ?? 'available');
-    if (!['disabled', 'enabled'].includes(originalLifecycle)) {
-      throw new Error(
-        `OSS parity needs a reversible lifecycle state, but ${String(candidateDomain.domainId)} is ${originalLifecycle}. Import a hosted snapshot with at least one enabled or disabled non-meals domain before rerunning parity.`,
-      );
+    const originalOnboardingState = String(candidateDomain.onboardingState ?? 'not_started');
+    if (originalLifecycle === 'disabled' || originalLifecycle === 'enabled') {
+      await client.callTool({
+        name: 'fluent_disable_domain',
+        arguments: {
+          domain_id: domainId,
+          source_agent: 'verify-local-parity',
+          source_skill: 'fluent-core',
+        },
+      });
+      await client.callTool({
+        name: originalLifecycle === 'disabled' ? 'fluent_disable_domain' : 'fluent_enable_domain',
+        arguments: {
+          domain_id: domainId,
+          source_agent: 'verify-local-parity',
+          source_skill: 'fluent-core',
+        },
+      });
+    } else {
+      await client.callTool({
+        name: 'fluent_enable_domain',
+        arguments: {
+          domain_id: domainId,
+          source_agent: 'verify-local-parity',
+          source_skill: 'fluent-core',
+        },
+      });
+      restoreDomainState(db, domainId, {
+        lifecycleState: originalLifecycle,
+        onboardingState: originalOnboardingState,
+      });
     }
-    await client.callTool({
-      name: 'fluent_disable_domain',
-      arguments: {
-        domain_id: String(candidateDomain.domainId),
-        source_agent: 'verify-local-parity',
-        source_skill: 'fluent-core',
-      },
-    });
-    await client.callTool({
-      name: originalLifecycle === 'disabled' ? 'fluent_disable_domain' : 'fluent_enable_domain',
-      arguments: {
-        domain_id: String(candidateDomain.domainId),
-        source_agent: 'verify-local-parity',
-        source_skill: 'fluent-core',
-      },
-    });
-    const restoredDomain = readDomainLifecycle(db, String(candidateDomain.domainId)) === originalLifecycle;
+    const restoredDomainState = readDomainState(db, domainId);
+    const restoredDomain =
+      restoredDomainState.lifecycleState === originalLifecycle &&
+      restoredDomainState.onboardingState === originalOnboardingState;
 
     const styleProfileResult = await client.callTool({ name: 'style_get_profile', arguments: {} });
     const styleProfile = extractToolStructuredContent(styleProfileResult) as Record<string, unknown>;
@@ -273,8 +303,9 @@ async function verifyWrites(db: DatabaseSync) {
 
     return {
       core: {
-        domainId: String(candidateDomain.domainId),
+        domainId,
         originalLifecycle,
+        originalOnboardingState,
         restored: restoredDomain,
       },
       style: {
@@ -295,11 +326,31 @@ function readEventCount(db: DatabaseSync): number {
   return Number(row?.count ?? 0);
 }
 
-function readDomainLifecycle(db: DatabaseSync, domainId: string): string {
+function readDomainState(db: DatabaseSync, domainId: string) {
   const row = db
-    .prepare('SELECT lifecycle_state FROM fluent_domains WHERE tenant_id = ? AND domain_id = ?')
-    .get('primary', domainId) as { lifecycle_state: string } | undefined;
-  return row?.lifecycle_state ?? '';
+    .prepare('SELECT lifecycle_state, onboarding_state FROM fluent_domains WHERE tenant_id = ? AND domain_id = ?')
+    .get(FLUENT_PRIMARY_TENANT_ID, domainId) as
+    | { lifecycle_state: string | null; onboarding_state: string | null }
+    | undefined;
+  return {
+    lifecycleState: row?.lifecycle_state ?? '',
+    onboardingState: row?.onboarding_state ?? '',
+  };
+}
+
+function restoreDomainState(
+  db: DatabaseSync,
+  domainId: string,
+  input: {
+    lifecycleState: string;
+    onboardingState: string;
+  },
+) {
+  db.prepare(
+    `UPDATE fluent_domains
+     SET lifecycle_state = ?, onboarding_state = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE tenant_id = ? AND domain_id = ?`,
+  ).run(input.lifecycleState, input.onboardingState, FLUENT_PRIMARY_TENANT_ID, domainId);
 }
 
 function readRecipePrepNotes(db: DatabaseSync, recipeId: string): string | null {
@@ -312,7 +363,7 @@ function readRecipePrepNotes(db: DatabaseSync, recipeId: string): string | null 
 function readStyleProfileRawJson(db: DatabaseSync): string | null {
   const row = db
     .prepare('SELECT raw_json FROM style_profile WHERE tenant_id = ? AND profile_id = ?')
-    .get('primary', 'owner') as { raw_json: string | null } | undefined;
+    .get(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID) as { raw_json: string | null } | undefined;
   return row?.raw_json ?? null;
 }
 

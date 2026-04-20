@@ -1,4 +1,4 @@
-import { FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE } from './auth';
+import { FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE, runWithFluentAuthProps } from './auth';
 import { authenticateBearerRequest } from './bearer-auth';
 import { coreBindingsFromCloudEnv, type AppEnv, type CoreRuntimeBindings, type OAuthAppEnv } from './config';
 import { StyleService } from './domains/style/service';
@@ -29,7 +29,7 @@ export async function maybeHandleStyleImageRequest(request: Request, env: AppEnv
     requiredScopes: [FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE],
   });
   if (!(bearerAuth instanceof Response) && bearerAuth) {
-    return serveStyleImage(env, photoId);
+    return runWithFluentAuthProps(bearerAuth.props, () => serveStyleImage(env, photoId));
   }
 
   const expiresAt = url.searchParams.get('exp');

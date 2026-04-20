@@ -1,5 +1,5 @@
 import type { MutationProvenance } from '../../auth';
-import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../../fluent-core';
+import { getFluentIdentityContext } from '../../fluent-identity';
 import type { FluentDatabase } from '../../storage';
 import { shiftDateString } from '../../time';
 import {
@@ -84,6 +84,14 @@ export * from './types-extra';
 export class HealthService {
   constructor(private readonly db: FluentDatabase) {}
 
+  private get tenantId(): string {
+    return getFluentIdentityContext().tenantId;
+  }
+
+  private get profileId(): string {
+    return getFluentIdentityContext().profileId;
+  }
+
   async getPreferences() {
     const row = await this.db
       .prepare(
@@ -91,7 +99,7 @@ export class HealthService {
          FROM health_preferences
          WHERE tenant_id = ? AND profile_id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID)
+      .bind(this.tenantId, this.profileId)
       .first<{
         tenant_id: string;
         profile_id: string;
@@ -101,9 +109,9 @@ export class HealthService {
       }>();
 
     return {
-      profileId: row?.profile_id ?? FLUENT_OWNER_PROFILE_ID,
+      profileId: row?.profile_id ?? this.profileId,
       raw: normalizeHealthPreferences(safeParse(row?.raw_json)),
-      tenantId: row?.tenant_id ?? FLUENT_PRIMARY_TENANT_ID,
+      tenantId: row?.tenant_id ?? this.tenantId,
       updatedAt: row?.updated_at ?? null,
       version: typeof row?.version === 'number' ? row.version : Number(row?.version ?? 1),
     };
@@ -126,8 +134,8 @@ export class HealthService {
           updated_at = excluded.updated_at`,
       )
       .bind(
-        FLUENT_PRIMARY_TENANT_ID,
-        FLUENT_OWNER_PROFILE_ID,
+        this.tenantId,
+        this.profileId,
         version,
         JSON.stringify(normalized),
         before.updatedAt ?? now,
@@ -160,7 +168,7 @@ export class HealthService {
                CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'achieved' THEN 2 ELSE 3 END,
                updated_at DESC`,
           )
-          .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID, normalizedStatus)
+          .bind(this.tenantId, this.profileId, normalizedStatus)
       : this.db
           .prepare(
             `SELECT id, goal_type, title, target_value, target_unit, deadline, status, notes, created_at, updated_at
@@ -170,7 +178,7 @@ export class HealthService {
                CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'achieved' THEN 2 ELSE 3 END,
                updated_at DESC`,
           )
-          .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID);
+          .bind(this.tenantId, this.profileId);
     const result = await statement.all<{
       id: string;
       goal_type: string;
@@ -215,8 +223,8 @@ export class HealthService {
           updated_at = excluded.updated_at`,
       )
       .bind(
-        FLUENT_PRIMARY_TENANT_ID,
-        FLUENT_OWNER_PROFILE_ID,
+        this.tenantId,
+        this.profileId,
         id,
         goalType,
         title,
@@ -261,7 +269,7 @@ export class HealthService {
            updated_at DESC
          LIMIT 1`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID, resolvedToday)
+      .bind(this.tenantId, this.profileId, resolvedToday)
       .first<{ id: string }>();
 
     if (active?.id) {
@@ -276,7 +284,7 @@ export class HealthService {
          ORDER BY start_date DESC, updated_at DESC
          LIMIT 1`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID)
+      .bind(this.tenantId, this.profileId)
       .first<{ id: string }>();
 
     return fallback?.id ? this.getBlockById(fallback.id) : null;
@@ -447,8 +455,8 @@ export class HealthService {
           updated_at = excluded.updated_at`,
       )
       .bind(
-        FLUENT_PRIMARY_TENANT_ID,
-        FLUENT_OWNER_PROFILE_ID,
+        this.tenantId,
+        this.profileId,
         id,
         activeGoal?.id ?? normalizeText(input.goalId),
         startDate,
@@ -472,7 +480,7 @@ export class HealthService {
 
     await this.db
       .prepare(`DELETE FROM health_block_sessions WHERE tenant_id = ? AND block_id = ?`)
-      .bind(FLUENT_PRIMARY_TENANT_ID, id)
+      .bind(this.tenantId, id)
       .run();
 
     for (const session of sessions) {
@@ -484,7 +492,7 @@ export class HealthService {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
-          FLUENT_PRIMARY_TENANT_ID,
+          this.tenantId,
           id,
           session.id,
           session.sequenceIndex,
@@ -512,8 +520,8 @@ export class HealthService {
           updated_at = excluded.updated_at`,
       )
       .bind(
-        FLUENT_PRIMARY_TENANT_ID,
-        FLUENT_OWNER_PROFILE_ID,
+        this.tenantId,
+        this.profileId,
         id,
         existing ? (await this.getBlockState(id))?.activeWeekIndex ?? 0 : 0,
         existing ? (await this.getBlockState(id))?.nextSessionIndex ?? 0 : 0,
@@ -630,7 +638,7 @@ export class HealthService {
     const adjustments = normalizeStringArray(input.adjustments);
     const nextFocus = normalizeText(input.nextFocus);
     const nextBlockConfidence = deriveBlockConfidence({
-      loggedWorkoutCount: projection?.sessions.filter((session) => session.status !== 'planned').length ?? 0,
+      completionSignalCount: projection?.sessions.filter((session) => session.status !== 'planned').length ?? 0,
       plannedSessionCount: projection?.sessions.length ?? 0,
       skippedSessionCount: projection?.sessions.filter((session) => session.status === 'skipped').length ?? 0,
     }, adjustments.length);
@@ -666,8 +674,8 @@ export class HealthService {
           updated_at = excluded.updated_at`,
       )
       .bind(
-        FLUENT_PRIMARY_TENANT_ID,
-        FLUENT_OWNER_PROFILE_ID,
+        this.tenantId,
+        this.profileId,
         id,
         blockId,
         reviewDate,
@@ -705,7 +713,7 @@ export class HealthService {
   async listWorkoutLogs(filters: ListWorkoutLogsFilters = {}): Promise<HealthWorkoutLogRecord[]> {
     const limit = Math.max(1, Math.min(filters.limit ?? 25, 200));
     const where: string[] = ['tenant_id = ?', 'profile_id = ?'];
-    const bindings: unknown[] = [FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID];
+    const bindings: unknown[] = [this.tenantId, this.profileId];
     if (normalizeText(filters.dateFrom)) {
       where.push('date >= ?');
       bindings.push(normalizeText(filters.dateFrom));
@@ -783,8 +791,8 @@ export class HealthService {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
-        FLUENT_PRIMARY_TENANT_ID,
-        FLUENT_OWNER_PROFILE_ID,
+        this.tenantId,
+        this.profileId,
         id,
         date,
         null,
@@ -828,7 +836,7 @@ export class HealthService {
             date,
             completion,
             now,
-            FLUENT_PRIMARY_TENANT_ID,
+            this.tenantId,
             blockId,
           )
           .run();
@@ -864,7 +872,7 @@ export class HealthService {
              ORDER BY date DESC, created_at DESC
              LIMIT ?`,
           )
-          .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID, metricType, limit)
+          .bind(this.tenantId, this.profileId, metricType, limit)
       : this.db
           .prepare(
             `SELECT id, date, metric_type, value, value2, unit, notes, source, source_agent, source_skill,
@@ -874,7 +882,7 @@ export class HealthService {
              ORDER BY date DESC, created_at DESC
              LIMIT ?`,
           )
-          .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID, limit);
+          .bind(this.tenantId, this.profileId, limit);
     const result = await statement.all<{
       id: string;
       date: string;
@@ -914,8 +922,8 @@ export class HealthService {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
-        FLUENT_PRIMARY_TENANT_ID,
-        FLUENT_OWNER_PROFILE_ID,
+        this.tenantId,
+        this.profileId,
         id,
         date,
         metricType,
@@ -976,6 +984,7 @@ export class HealthService {
     const completedEntryCount = Array.from(latestWorkoutBySession.values()).filter((entry) => entry.completion === 'full').length;
     const partialEntryCount = Array.from(latestWorkoutBySession.values()).filter((entry) => entry.completion === 'partial').length;
     const skippedEntryCount = Array.from(latestWorkoutBySession.values()).filter((entry) => entry.completion === 'skipped').length;
+    const completionSignalCount = completedEntryCount + partialEntryCount + skippedEntryCount;
     const remainingEntryCount = Math.max(0, projectedSessions.length - latestWorkoutBySession.size);
     const loadDistribution = buildProjectedLoadDistribution(projectedSessions);
     const trainingSupportSummary = this.buildTrainingSupportSummary({
@@ -990,7 +999,13 @@ export class HealthService {
       activeBlock: summarizeHealthBlock(activeBlock),
       adherenceSummary: {
         completedSessions: completedEntryCount,
+        completionSignalCount,
+        evidenceLevel: deriveAdherenceEvidenceLevel({
+          completionSignalCount,
+          plannedSessionCount: projectedSessions.length,
+        }),
         loggedWorkouts: workoutLogs.length,
+        needsUserCheckIn: projectedSessions.length > 0 && completionSignalCount === 0,
         partialSessions: partialEntryCount,
         plannedSessions: projectedSessions.length,
         remainingSessions: remainingEntryCount,
@@ -1195,7 +1210,7 @@ export class HealthService {
          FROM health_training_blocks
          WHERE tenant_id = ? AND profile_id = ? AND id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID, id)
+      .bind(this.tenantId, this.profileId, id)
       .first<{
         id: string;
         goal_id: string | null;
@@ -1228,7 +1243,7 @@ export class HealthService {
          WHERE tenant_id = ? AND block_id = ?
          ORDER BY sequence_index ASC, id ASC`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, id)
+      .bind(this.tenantId, id)
       .all<{
         id: string;
         sequence_index: number | string | null;
@@ -1274,7 +1289,7 @@ export class HealthService {
          FROM health_block_state
          WHERE tenant_id = ? AND block_id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, blockId)
+      .bind(this.tenantId, blockId)
       .first<{
         block_id: string;
         active_week_index: number | string | null;
@@ -1315,7 +1330,7 @@ export class HealthService {
          FROM health_block_reviews
          WHERE tenant_id = ? AND id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, id)
+      .bind(this.tenantId, id)
       .first<{
         id: string;
         block_id: string;
@@ -1344,7 +1359,7 @@ export class HealthService {
          ORDER BY review_date DESC, updated_at DESC
          LIMIT 1`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID, blockId, beforeOrOnDate ?? null, beforeOrOnDate ?? null)
+      .bind(this.tenantId, this.profileId, blockId, beforeOrOnDate ?? null, beforeOrOnDate ?? null)
       .first<{ id: string }>();
     return row?.id ? this.getBlockReviewById(row.id) : null;
   }
@@ -1356,7 +1371,7 @@ export class HealthService {
          FROM health_goals
          WHERE tenant_id = ? AND id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, id)
+      .bind(this.tenantId, id)
       .first<{
         id: string;
         goal_type: string;
@@ -1381,7 +1396,7 @@ export class HealthService {
          FROM health_workout_logs
          WHERE tenant_id = ? AND id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, id)
+      .bind(this.tenantId, id)
       .first<{
         id: string;
         date: string;
@@ -1415,7 +1430,7 @@ export class HealthService {
          FROM health_body_metrics
          WHERE tenant_id = ? AND id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, id)
+      .bind(this.tenantId, id)
       .first<{
         id: string;
         date: string;
@@ -1933,7 +1948,7 @@ function buildProjectedLoadDistribution(
 function deriveBlockConfidence(
   counts: {
     plannedSessionCount: number;
-    loggedWorkoutCount: number;
+    completionSignalCount: number;
     skippedSessionCount: number;
   },
   adjustmentCount: number,
@@ -1941,7 +1956,7 @@ function deriveBlockConfidence(
   if (counts.plannedSessionCount === 0) {
     return 'medium';
   }
-  const completionRatio = (counts.loggedWorkoutCount - counts.skippedSessionCount * 0.5) / counts.plannedSessionCount;
+  const completionRatio = (counts.completionSignalCount - counts.skippedSessionCount * 0.5) / counts.plannedSessionCount;
   if (completionRatio >= 0.75 && adjustmentCount <= 2) {
     return 'high';
   }
@@ -1949,6 +1964,22 @@ function deriveBlockConfidence(
     return 'medium';
   }
   return 'low';
+}
+
+function deriveAdherenceEvidenceLevel(counts: {
+  plannedSessionCount: number;
+  completionSignalCount: number;
+}): HealthSupportLevel {
+  if (counts.plannedSessionCount === 0) {
+    return 'medium';
+  }
+  if (counts.completionSignalCount === 0) {
+    return 'low';
+  }
+  if (counts.completionSignalCount >= counts.plannedSessionCount) {
+    return 'high';
+  }
+  return 'medium';
 }
 
 function deriveTrainingWeekComplexity(

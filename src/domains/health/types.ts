@@ -80,6 +80,9 @@ export interface HealthReviewAdherenceSummaryRecord {
   skippedSessions: number;
   remainingSessions: number;
   loggedWorkouts: number;
+  completionSignalCount: number;
+  evidenceLevel: HealthSupportLevel;
+  needsUserCheckIn: boolean;
 }
 
 export interface HealthPreferencesRecord {

@@ -73,6 +73,7 @@ export interface RecipeColumns {
   reheatGuidance: string | null;
   servings: number;
   servingNotes: string | null;
+  status: string;
   slug: string;
   totalTimeMinutes: number;
 }
@@ -145,6 +146,7 @@ export function validateRecipeDocument(input: unknown): RecipeDocument {
 }
 
 export function deriveRecipeColumns(recipe: RecipeDocument): RecipeColumns {
+  const status = typeof recipe.status === 'string' && recipe.status.trim().length > 0 ? recipe.status.trim().toLowerCase() : 'active';
   return {
     activeTimeMinutes: recipe.active_time,
     costPerServingCad: recipe.cost_per_serving_cad,
@@ -159,6 +161,7 @@ export function deriveRecipeColumns(recipe: RecipeDocument): RecipeColumns {
     reheatGuidance: typeof recipe.reheat_guidance === 'string' ? recipe.reheat_guidance : null,
     servings: recipe.servings,
     servingNotes: typeof recipe.serving_notes === 'string' ? recipe.serving_notes : null,
+    status,
     slug: slugify(recipe.id),
     totalTimeMinutes: recipe.total_time,
   };

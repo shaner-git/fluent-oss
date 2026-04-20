@@ -1,13 +1,14 @@
-import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../../fluent-core';
+import { getFluentIdentityContext } from '../../fluent-identity';
 import type { FluentDatabase } from '../../storage';
 
 export class StyleRepository {
   constructor(private readonly db: FluentDatabase) {}
 
   get profileKey() {
+    const identity = getFluentIdentityContext();
     return {
-      profileId: FLUENT_OWNER_PROFILE_ID,
-      tenantId: FLUENT_PRIMARY_TENANT_ID,
+      profileId: identity.profileId,
+      tenantId: identity.tenantId,
     };
   }
 

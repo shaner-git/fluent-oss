@@ -1,5 +1,5 @@
 import type { MutationProvenance } from '../../auth';
-import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../../fluent-core';
+import { getFluentIdentityContext } from '../../fluent-identity';
 import type { FluentDatabase, FluentPreparedStatement } from '../../storage';
 import { shiftDateString } from '../../time';
 import { applyJsonPatch, deriveRecipeColumns, validateRecipeDocument } from './recipe-document';
@@ -117,19 +117,28 @@ export class MealsService {
     this.repository = new MealsRepository(db);
   }
 
+  private get tenantId(): string {
+    return getFluentIdentityContext().tenantId;
+  }
+
+  private get profileId(): string {
+    return getFluentIdentityContext().profileId;
+  }
+
   async getCurrentPlan(today?: string): Promise<MealPlanRecord | null> {
     const resolvedToday = today ?? (await this.currentDateString());
     const row = await this.db
       .prepare(
         `SELECT id
          FROM meal_plans
-         WHERE status IN ('active', 'approved')
+         WHERE tenant_id = ?
+           AND status IN ('active', 'approved')
            AND week_start <= ?
            AND (week_end IS NULL OR week_end >= ?)
          ORDER BY week_start DESC
          LIMIT 1`,
       )
-      .bind(resolvedToday, resolvedToday)
+      .bind(this.tenantId, resolvedToday, resolvedToday)
       .first<{ id: string }>();
 
     if (row?.id) {
@@ -140,10 +149,12 @@ export class MealsService {
       .prepare(
         `SELECT id
          FROM meal_plans
-         WHERE status IN ('active', 'approved', 'draft')
+         WHERE tenant_id = ?
+           AND status IN ('active', 'approved', 'draft')
          ORDER BY week_start DESC
          LIMIT 1`,
       )
+      .bind(this.tenantId)
       .first<{ id: string }>();
 
     return fallback?.id ? this.getPlanById(fallback.id) : null;
@@ -151,8 +162,8 @@ export class MealsService {
 
   async getPlanByWeek(weekStart: string): Promise<MealPlanRecord | null> {
     const row = await this.db
-      .prepare(`SELECT id FROM meal_plans WHERE week_start = ? ORDER BY updated_at DESC LIMIT 1`)
-      .bind(weekStart)
+      .prepare(`SELECT id FROM meal_plans WHERE tenant_id = ? AND week_start = ? ORDER BY updated_at DESC LIMIT 1`)
+      .bind(this.tenantId, weekStart)
       .first<{ id: string }>();
 
     return row?.id ? this.getPlanById(row.id) : null;
@@ -170,12 +181,13 @@ export class MealsService {
                 p.summary_json,
                 COUNT(e.id) AS entry_count
          FROM meal_plans p
-         LEFT JOIN meal_plan_entries e ON e.meal_plan_id = p.id
+         LEFT JOIN meal_plan_entries e ON e.tenant_id = p.tenant_id AND e.meal_plan_id = p.id
+         WHERE p.tenant_id = ?
          GROUP BY p.id, p.week_start, p.week_end, p.status, p.generated_at, p.approved_at, p.updated_at, p.summary_json
          ORDER BY p.week_start DESC
          LIMIT ?`,
       )
-      .bind(boundedLimit)
+      .bind(this.tenantId, boundedLimit)
       .all<{
         id: string;
         week_start: string;
@@ -202,7 +214,7 @@ export class MealsService {
   }
 
   async generatePlan(input: GenerateMealPlanInput): Promise<MealPlanGenerationRecord> {
-    const overrides = normalizeGeneratePlanOverrides(input.overrides);
+    const overrides = normalizeGeneratePlanOverrides(input.overrides, input.weekStart);
     const snapshot = await this.buildPlanningSnapshot(
       input.weekStart,
       overrides,
@@ -231,11 +243,13 @@ export class MealsService {
     await this.db
       .prepare(
         `INSERT INTO meal_plan_generations (
-          id, week_start, input_hash, raw_json, source_snapshot_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          id, tenant_id, profile_id, week_start, input_hash, raw_json, source_snapshot_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         generationId,
+        this.tenantId,
+        this.profileId,
         input.weekStart,
         inputHash,
         JSON.stringify(persisted),
@@ -326,9 +340,9 @@ export class MealsService {
       .prepare(
         `UPDATE meal_plan_generations
          SET accepted_candidate_id = ?, accepted_plan_id = ?, updated_at = ?
-         WHERE id = ?`,
+         WHERE tenant_id = ? AND id = ?`,
       )
-      .bind(input.candidateId, acceptedPlan.id, new Date().toISOString(), input.generationId)
+      .bind(input.candidateId, acceptedPlan.id, new Date().toISOString(), this.tenantId, input.generationId)
       .run();
 
     await this.recordDomainEvent({
@@ -355,7 +369,7 @@ export class MealsService {
     const normalized = normalizeMealPlanDocument(input.plan);
     const existing =
       (normalized.id ? await this.getPlanById(normalized.id) : null) ?? (await this.getPlanByWeek(normalized.weekStart));
-    const planId = existing?.id ?? normalized.id ?? `plan:${normalized.weekStart}`;
+    const planId = existing?.id ?? normalized.id ?? `plan:${this.tenantId}:${normalized.weekStart}`;
     const now = new Date().toISOString();
     const status = normalized.status ?? 'approved';
     const approvedAt = status === 'approved' || status === 'active' ? normalized.approvedAt ?? now : normalized.approvedAt;
@@ -363,10 +377,12 @@ export class MealsService {
     await this.db
       .prepare(
         `INSERT INTO meal_plans (
-          id, week_start, week_end, status, generated_at, approved_at, profile_owner,
+          id, tenant_id, profile_id, week_start, week_end, status, generated_at, approved_at, profile_owner,
           requirements_json, summary_json, source_snapshot_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
         ON CONFLICT(id) DO UPDATE SET
+          tenant_id = excluded.tenant_id,
+          profile_id = excluded.profile_id,
           week_start = excluded.week_start,
           week_end = excluded.week_end,
           status = excluded.status,
@@ -380,6 +396,8 @@ export class MealsService {
       )
       .bind(
         planId,
+        this.tenantId,
+        this.profileId,
         normalized.weekStart,
         normalized.weekEnd,
         status,
@@ -394,19 +412,23 @@ export class MealsService {
       )
       .run();
 
-    await this.db.prepare(`DELETE FROM meal_plan_entries WHERE meal_plan_id = ?`).bind(planId).run();
+    await this.db
+      .prepare(`DELETE FROM meal_plan_entries WHERE tenant_id = ? AND meal_plan_id = ?`)
+      .bind(this.tenantId, planId)
+      .run();
 
     for (const [index, entry] of normalized.entries.entries()) {
       await this.db
         .prepare(
           `INSERT INTO meal_plan_entries (
-            id, meal_plan_id, date, day_label, meal_type, recipe_id, recipe_name_snapshot,
+            id, tenant_id, meal_plan_id, date, day_label, meal_type, recipe_id, recipe_name_snapshot,
             selection_status, serves, prep_minutes, total_minutes, leftovers_expected,
             instructions_snapshot_json, notes_json, status, cooked_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           entry.id ?? `${planId}:entry:${index + 1}`,
+          this.tenantId,
           planId,
           entry.date ?? null,
           entry.dayLabel ?? null,
@@ -562,7 +584,7 @@ export class MealsService {
           id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, macros_json,
           cost_per_serving_cad, kid_friendly, instructions_json, mise_en_place_json, prep_notes,
           reheat_guidance, serving_notes, status, raw_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         recipe.id,
@@ -580,6 +602,7 @@ export class MealsService {
         derived.prepNotes,
         derived.reheatGuidance,
         derived.servingNotes,
+        derived.status,
         derived.rawJson,
         now,
         now,
@@ -652,7 +675,7 @@ export class MealsService {
          FROM meal_preferences
          WHERE tenant_id = ? AND profile_id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID)
+      .bind(this.tenantId, this.profileId)
       .first<{
         tenant_id: string;
         profile_id: string;
@@ -698,13 +721,13 @@ export class MealsService {
           updated_at = excluded.updated_at`,
       )
       .bind(
-        FLUENT_PRIMARY_TENANT_ID,
-        FLUENT_OWNER_PROFILE_ID,
+        this.tenantId,
+        this.profileId,
         version,
         JSON.stringify(nextRaw),
         stringifyJson(input.sourceSnapshot ?? null),
-        FLUENT_PRIMARY_TENANT_ID,
-        FLUENT_OWNER_PROFILE_ID,
+        this.tenantId,
+        this.profileId,
         now,
       )
       .run();
@@ -712,7 +735,7 @@ export class MealsService {
     const after = await this.getPreferences();
     await this.recordDomainEvent({
       entityType: 'meal_preferences',
-      entityId: `${FLUENT_PRIMARY_TENANT_ID}:${FLUENT_OWNER_PROFILE_ID}`,
+      entityId: `${after.tenantId}:${after.profileId}`,
       eventType: 'preferences.updated',
       before: before.raw,
       after: after.raw,
@@ -733,9 +756,11 @@ export class MealsService {
                 canonical_unit, canonical_confidence, quantity, unit, location, brand, cost_cad,
                 metadata_json
          FROM meal_inventory_items
-         WHERE status != 'removed'
+         WHERE tenant_id = ?
+           AND status != 'removed'
          ORDER BY name ASC`,
       )
+      .bind(this.tenantId)
       .all<{
         id: string;
         name: string;
@@ -804,15 +829,16 @@ export class MealsService {
           .prepare(
             `SELECT recipe_id, status, last_feedback_json, notes_json, last_used_at, updated_at
              FROM meal_memory
-             WHERE recipe_id = ?
+             WHERE tenant_id = ? AND recipe_id = ?
              ORDER BY recipe_id ASC`,
           )
-          .bind(recipeId)
+          .bind(this.tenantId, recipeId)
       : this.db.prepare(
           `SELECT recipe_id, status, last_feedback_json, notes_json, last_used_at, updated_at
            FROM meal_memory
+           WHERE tenant_id = ?
            ORDER BY recipe_id ASC`,
-        );
+        ).bind(this.tenantId);
 
     const result = await statement.all<{
       recipe_id: string;
@@ -840,8 +866,8 @@ export class MealsService {
               repeat_again, family_acceptance, notes, submitted_by, source_agent, source_skill,
               session_id, confidence, source_type, created_at
        FROM meal_feedback`;
-    const conditions: string[] = [];
-    const values: Array<string | number> = [];
+    const conditions: string[] = ['tenant_id = ?'];
+    const values: Array<string | number> = [this.tenantId];
 
     if (filters.recipeId) {
       conditions.push('recipe_id = ?');
@@ -900,13 +926,15 @@ export class MealsService {
     await this.db
       .prepare(
         `INSERT INTO meal_feedback (
-          id, meal_plan_id, meal_plan_entry_id, recipe_id, date, taste, difficulty, time_reality,
+          id, tenant_id, profile_id, meal_plan_id, meal_plan_entry_id, recipe_id, date, taste, difficulty, time_reality,
           repeat_again, family_acceptance, notes, submitted_by, source_agent, source_skill,
           session_id, confidence, source_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         feedbackId,
+        this.tenantId,
+        this.profileId,
         mealPlanId,
         mealPlanEntryId,
         input.recipeId,
@@ -928,35 +956,27 @@ export class MealsService {
 
     const existingMemory = await this.getMealMemory(input.recipeId);
     const currentMemory = existingMemory[0] ?? null;
-    const nextStatus = deriveMealStatus(currentMemory?.status ?? 'trial', input);
+    const currentStatus =
+      currentMemory?.status === 'active' || currentMemory?.status === 'observed'
+        ? 'trial'
+        : (currentMemory?.status ?? 'trial');
+    const nextStatus = deriveMealStatus(currentStatus, input);
 
-    await this.db
-      .prepare(
-        `INSERT INTO meal_memory (id, recipe_id, status, last_feedback_json, notes_json, last_used_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(recipe_id) DO UPDATE SET
-           status = excluded.status,
-           last_feedback_json = excluded.last_feedback_json,
-           notes_json = excluded.notes_json,
-           last_used_at = excluded.last_used_at,
-           updated_at = excluded.updated_at`,
-      )
-      .bind(
-        currentMemory?.recipeId ? `memory:${currentMemory.recipeId}` : `memory:${input.recipeId}`,
-        input.recipeId,
-        nextStatus,
-        JSON.stringify({
-          taste: input.taste ?? null,
-          difficulty: input.difficulty ?? null,
-          time_reality: input.timeReality ?? null,
-          repeat_again: input.repeatAgain ?? null,
-          family_acceptance: input.familyAcceptance ?? null,
-        }),
-        JSON.stringify(mergeNotes(currentMemory?.notes, input.notes)),
-        date,
-        createdAt,
-      )
-      .run();
+    await this.upsertMealMemoryRecord({
+      recipeId: input.recipeId,
+      status: nextStatus,
+      lastFeedback: {
+        ...(asRecord(currentMemory?.lastFeedback) ?? {}),
+        taste: input.taste ?? null,
+        difficulty: input.difficulty ?? null,
+        time_reality: input.timeReality ?? null,
+        repeat_again: input.repeatAgain ?? null,
+        family_acceptance: input.familyAcceptance ?? null,
+      },
+      notes: mergeNotes(currentMemory?.notes, input.notes),
+      lastUsedAt: date,
+      updatedAt: createdAt,
+    });
 
     const feedbackRecord: MealFeedbackRecord = {
       id: feedbackId,
@@ -1092,7 +1112,10 @@ export class MealsService {
       return null;
     }
 
-    await this.db.prepare(`DELETE FROM meal_inventory_items WHERE normalized_name = ?`).bind(normalizedName).run();
+    await this.db
+      .prepare(`DELETE FROM meal_inventory_items WHERE tenant_id = ? AND normalized_name = ?`)
+      .bind(this.tenantId, normalizedName)
+      .run();
 
     await this.recordDomainEvent({
       entityType: 'meal_inventory_item',
@@ -1159,6 +1182,10 @@ export class MealsService {
       provenance: input.provenance,
     });
 
+    for (const item of input.items) {
+      await this.maybePersistConfirmedOrderSyncFromMetadata(item.metadata, input.provenance);
+    }
+
     return {
       createdCount: beforeRecords.filter((entry) => !entry).length,
       updatedCount: beforeRecords.filter(Boolean).length,
@@ -1185,12 +1212,14 @@ export class MealsService {
     await this.db
       .prepare(
         `INSERT INTO meal_plan_reviews (
-          id, meal_plan_id, week_start, summary, worked_json, skipped_json, next_changes_json,
+          id, tenant_id, profile_id, meal_plan_id, week_start, summary, worked_json, skipped_json, next_changes_json,
           source_agent, source_skill, session_id, confidence, source_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         reviewId,
+        this.tenantId,
+        this.profileId,
         mealPlanId,
         weekStart,
         input.summary ?? null,
@@ -1242,7 +1271,7 @@ export class MealsService {
     await this.db
       .prepare(
         `UPDATE meal_recipes
-         SET slug = ?, name = ?, meal_type = ?, servings = ?, total_time_minutes = ?,
+         SET slug = ?, name = ?, meal_type = ?, status = ?, servings = ?, total_time_minutes = ?,
              active_time_minutes = ?, macros_json = ?, cost_per_serving_cad = ?, kid_friendly = ?,
              instructions_json = ?, mise_en_place_json = ?, prep_notes = ?, reheat_guidance = ?,
              serving_notes = ?, raw_json = ?, updated_at = ?
@@ -1252,6 +1281,7 @@ export class MealsService {
         derived.slug,
         derived.name,
         derived.mealType,
+        derived.status,
         derived.servings,
         derived.totalTimeMinutes,
         derived.activeTimeMinutes,
@@ -1295,18 +1325,19 @@ export class MealsService {
                     meal_plan_id, metadata_json, source_agent, source_skill, session_id,
                     confidence, source_type, created_at, updated_at
              FROM grocery_intents
-             WHERE status = ?
+             WHERE tenant_id = ? AND status = ?
              ORDER BY updated_at DESC, display_name ASC`,
           )
-          .bind(status)
+          .bind(this.tenantId, status)
       : this.db.prepare(
           `SELECT id, normalized_name, display_name, quantity, unit, notes, status, target_window,
                   meal_plan_id, metadata_json, source_agent, source_skill, session_id,
                   confidence, source_type, created_at, updated_at
            FROM grocery_intents
-           WHERE status != 'deleted'
+           WHERE tenant_id = ?
+             AND status != 'deleted'
            ORDER BY updated_at DESC, display_name ASC`,
-        );
+        ).bind(this.tenantId);
 
     const result = await statement.all<{
       id: string;
@@ -1424,9 +1455,9 @@ export class MealsService {
                 matched_purchased_count, ordered_extra_count, explicit_skipped_count,
                 missing_planned_count, unresolved_count, payload_summary_json, created_at, updated_at
          FROM meal_confirmed_order_syncs
-         WHERE retailer = ? AND retailer_order_id = ?`,
+         WHERE tenant_id = ? AND retailer = ? AND retailer_order_id = ?`,
       )
-      .bind(normalizedRetailer, normalizedOrderId)
+      .bind(this.tenantId, normalizedRetailer, normalizedOrderId)
       .first<{
         id: string;
         retailer: string;
@@ -1453,9 +1484,9 @@ export class MealsService {
       .prepare(
         `SELECT id, week_start, meal_plan_id, raw_json, generated_at
          FROM meal_grocery_plans
-         WHERE week_start = ?`,
+         WHERE tenant_id = ? AND week_start = ?`,
       )
-      .bind(weekStart)
+      .bind(this.tenantId, weekStart)
       .first<{
         id: string;
         week_start: string;
@@ -1561,6 +1592,21 @@ export class MealsService {
       quantity: item.quantity ?? null,
       title: String(item.title ?? '').trim(),
     }));
+
+    for (const item of groceryPlan.raw.resolvedItems) {
+      if (item.actionStatus !== 'in_cart') {
+        continue;
+      }
+      const cartMatch = this.findRetailerCartMatch(item, cartMatchState);
+      if (cartMatch) {
+        cartMatch.matched = true;
+      }
+      alreadyInRetailerCart.push({
+        displayName: item.name,
+        matchedCartTitle: cartMatch?.title ?? item.name,
+        quantity: item.quantity ?? null,
+      });
+    }
 
     for (const item of groceryPlan.raw.items) {
       const line = this.toPreparedOrderLine(item.name, item.quantity, item.unit, item.note ?? null);
@@ -1722,7 +1768,9 @@ export class MealsService {
     const preferences = await this.getPreferences();
     const inventory = await this.getInventory();
     const brandPreferences = await this.getBrandPreferences();
-    const groceryIntents = await this.listGroceryIntents('pending');
+    const groceryIntents = (await this.listGroceryIntents('pending')).filter(
+      (intent) => intent.mealPlanId === null || intent.mealPlanId === plan.id,
+    );
     const before = await this.getGroceryPlan(plan.weekStart);
     const recipesById = new Map<string, Record<string, unknown>>();
     for (const entry of plan.entries) {
@@ -1769,13 +1817,15 @@ export class MealsService {
       weekStart: plan.weekStart,
     } satisfies GroceryPlanRecord['raw'];
 
-    const recordId = `grocery-plan:${plan.weekStart}`;
+    const recordId = `grocery-plan:${this.tenantId}:${plan.weekStart}`;
     await this.db
       .prepare(
         `INSERT INTO meal_grocery_plans (
-          id, week_start, meal_plan_id, raw_json, source_snapshot_json, generated_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM meal_grocery_plans WHERE week_start = ?), CURRENT_TIMESTAMP), ?)
-        ON CONFLICT(week_start) DO UPDATE SET
+          id, tenant_id, profile_id, week_start, meal_plan_id, raw_json, source_snapshot_json, generated_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM meal_grocery_plans WHERE tenant_id = ? AND week_start = ?), CURRENT_TIMESTAMP), ?)
+        ON CONFLICT(id) DO UPDATE SET
+          tenant_id = excluded.tenant_id,
+          profile_id = excluded.profile_id,
           meal_plan_id = excluded.meal_plan_id,
           raw_json = excluded.raw_json,
           source_snapshot_json = excluded.source_snapshot_json,
@@ -1784,6 +1834,8 @@ export class MealsService {
       )
       .bind(
         recordId,
+        this.tenantId,
+        this.profileId,
         plan.weekStart,
         plan.id,
         JSON.stringify(raw),
@@ -1793,6 +1845,7 @@ export class MealsService {
           preferenceVersion: preferences.version,
         }),
         generatedAt,
+        this.tenantId,
         plan.weekStart,
         generatedAt,
       )
@@ -1826,10 +1879,10 @@ export class MealsService {
                 notes, metadata_json, source_agent, source_skill, session_id, confidence, source_type,
                 created_at, updated_at
          FROM meal_grocery_plan_actions
-         WHERE week_start = ?
+         WHERE tenant_id = ? AND week_start = ?
          ORDER BY updated_at DESC, item_key ASC`,
       )
-      .bind(weekStart)
+      .bind(this.tenantId, weekStart)
       .all<{
         id: string;
         week_start: string;
@@ -1857,7 +1910,10 @@ export class MealsService {
       input.actionStatus as GroceryPlanSufficiencyStatus,
     );
     const targetItem =
-      isSufficiencyAction || input.actionStatus === 'purchased' || input.actionStatus === 'substituted'
+      isSufficiencyAction ||
+      input.actionStatus === 'purchased' ||
+      input.actionStatus === 'substituted' ||
+      input.actionStatus === 'in_cart'
         ? await this.resolveGroceryPlanItemForAction(input.weekStart, input.itemKey)
         : null;
     if (
@@ -1898,18 +1954,21 @@ export class MealsService {
     if (input.actionStatus === 'purchased' && !targetItem) {
       throw new Error(`Could not find grocery-plan item ${input.itemKey} for purchased receipt confirmation.`);
     }
+    if (input.actionStatus === 'in_cart' && !targetItem) {
+      throw new Error(`Could not find grocery-plan item ${input.itemKey} for cart tracking.`);
+    }
 
     const existing = await this.getGroceryPlanAction(input.weekStart, input.itemKey);
     const now = new Date().toISOString();
-    const id = existing?.id ?? `grocery-plan-action:${input.weekStart}:${input.itemKey}`;
+    const id = existing?.id ?? `grocery-plan-action:${this.tenantId}:${input.weekStart}:${input.itemKey}`;
 
     await this.db
       .prepare(
         `INSERT INTO meal_grocery_plan_actions (
-          id, week_start, meal_plan_id, item_key, action_status, substitute_item_key, substitute_display_name,
+          id, tenant_id, week_start, meal_plan_id, item_key, action_status, substitute_item_key, substitute_display_name,
           notes, metadata_json, source_agent, source_skill, session_id, confidence, source_type, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(week_start, item_key) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
           meal_plan_id = excluded.meal_plan_id,
           action_status = excluded.action_status,
           substitute_item_key = excluded.substitute_item_key,
@@ -1925,6 +1984,7 @@ export class MealsService {
       )
       .bind(
         id,
+        this.tenantId,
         input.weekStart,
         input.mealPlanId ?? null,
         input.itemKey,
@@ -1953,6 +2013,22 @@ export class MealsService {
         purchasedAt: input.purchasedAt ?? now,
         targetItem,
         provenance: input.provenance,
+      });
+    }
+    if ((input.actionStatus === 'confirmed' || input.actionStatus === 'have_enough') && targetItem) {
+      await this.refreshInventoryEvidenceFromCoveredAction({
+        confirmedAt: now,
+        targetItem,
+        provenance: input.provenance,
+      });
+    }
+    if (input.actionStatus === 'substituted' && targetItem) {
+      await this.recordShoppingSubstitutionMemory({
+        substitutedAt: now,
+        substituteDisplayName: input.substituteDisplayName ?? input.substituteItemKey ?? null,
+        substituteItemKey: input.substituteItemKey ?? null,
+        targetItem,
+        weekStart: input.weekStart,
       });
     }
 
@@ -2016,8 +2092,8 @@ export class MealsService {
     }
 
     await this.db
-      .prepare(`DELETE FROM meal_grocery_plan_actions WHERE week_start = ? AND item_key = ?`)
-      .bind(input.weekStart, input.itemKey)
+      .prepare(`DELETE FROM meal_grocery_plan_actions WHERE tenant_id = ? AND week_start = ? AND item_key = ?`)
+      .bind(this.tenantId, input.weekStart, input.itemKey)
       .run();
 
     await this.recordDomainEvent({
@@ -2038,17 +2114,18 @@ export class MealsService {
     const now = new Date().toISOString();
     const existing = input.id
       ? await this.getGroceryIntentById(input.id)
-      : await this.getLatestOpenIntentByName(normalizedName);
+      : await this.getLatestOpenIntentByName(normalizedName, input.mealPlanId ?? null);
     const recordId = existing?.id ?? input.id ?? `grocery-intent:${normalizedName}:${crypto.randomUUID()}`;
 
     await this.db
       .prepare(
         `INSERT INTO grocery_intents (
-          id, normalized_name, display_name, quantity, unit, notes, status, target_window,
+          id, tenant_id, normalized_name, display_name, quantity, unit, notes, status, target_window,
           meal_plan_id, metadata_json, source_agent, source_skill, session_id, confidence,
           source_type, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
+          tenant_id = excluded.tenant_id,
           normalized_name = excluded.normalized_name,
           display_name = excluded.display_name,
           quantity = excluded.quantity,
@@ -2067,6 +2144,7 @@ export class MealsService {
       )
       .bind(
         recordId,
+        this.tenantId,
         normalizedName,
         input.displayName,
         input.quantity ?? null,
@@ -2115,7 +2193,7 @@ export class MealsService {
       .prepare(
         `UPDATE grocery_intents
          SET status = 'deleted', updated_at = ?, source_agent = ?, source_skill = ?, session_id = ?, confidence = ?, source_type = ?
-         WHERE id = ?`,
+         WHERE tenant_id = ? AND id = ?`,
       )
       .bind(
         updatedAt,
@@ -2124,6 +2202,7 @@ export class MealsService {
         input.provenance.sessionId,
         input.provenance.confidence,
         input.provenance.sourceType,
+        this.tenantId,
         input.id,
       )
       .run();
@@ -2151,9 +2230,9 @@ export class MealsService {
                 notes, metadata_json, source_agent, source_skill, session_id, confidence, source_type,
                 created_at, updated_at
          FROM meal_grocery_plan_actions
-         WHERE week_start = ? AND item_key = ?`,
+         WHERE tenant_id = ? AND week_start = ? AND item_key = ?`,
       )
-      .bind(weekStart, itemKey)
+      .bind(this.tenantId, weekStart, itemKey)
       .first<{
         id: string;
         week_start: string;
@@ -2399,7 +2478,7 @@ export class MealsService {
   }
 
   private findRetailerCartMatch(
-    item: GroceryPlanRecord['raw']['items'][number],
+    item: GroceryPlanRecord['raw']['items'][number] | GroceryPlanRecord['raw']['resolvedItems'][number],
     cartItems: Array<{ index: number; matched: boolean; quantity: number | null; title: string }>,
   ) {
     const requestedKeys = [
@@ -2462,6 +2541,34 @@ export class MealsService {
       source: existing?.source ?? 'grocery_plan_action',
       confirmedAt: existing?.confirmedAt ?? null,
       purchasedAt: input.purchasedAt,
+      estimatedExpiry: existing?.estimatedExpiry ?? null,
+      perishability: existing?.perishability ?? inferred.perishability,
+      longLifeDefault: existing ? existing.longLifeDefault : inferred.longLifeDefault,
+      quantity: existing?.quantity ?? null,
+      unit: existing?.unit ?? null,
+      location: existing?.location ?? null,
+      brand: existing?.brand ?? null,
+      costCad: existing?.costCad ?? null,
+      metadata: existing?.metadata ?? null,
+      provenance: input.provenance,
+    });
+  }
+
+  private async refreshInventoryEvidenceFromCoveredAction(input: {
+    confirmedAt: string;
+    targetItem: GroceryPlanRecord['raw']['items'][number] | GroceryPlanRecord['raw']['resolvedItems'][number];
+    provenance: MutationProvenance;
+  }): Promise<void> {
+    const inventory = await this.getInventory();
+    const existing = this.findInventoryRecordForGroceryItem(input.targetItem, inventory);
+    const inferred = this.inferPurchasedInventoryDefaults(input.targetItem, existing);
+
+    await this.updateInventory({
+      name: existing?.name ?? input.targetItem.name,
+      status: 'present',
+      source: existing?.source ?? 'grocery_plan_action',
+      confirmedAt: input.confirmedAt,
+      purchasedAt: existing?.purchasedAt ?? null,
       estimatedExpiry: existing?.estimatedExpiry ?? null,
       perishability: existing?.perishability ?? inferred.perishability,
       longLifeDefault: existing ? existing.longLifeDefault : inferred.longLifeDefault,
@@ -2553,7 +2660,7 @@ export class MealsService {
       confirmedAt: input.confirmedAt ?? null,
       costCad: input.costCad ?? null,
       estimatedExpiry: input.estimatedExpiry ?? null,
-      id: `inventory:${normalizedName}`,
+      id: `inventory:${this.tenantId}:${normalizedName}`,
       location: input.location ?? null,
       longLifeDefault: input.longLifeDefault ? 1 : 0,
       metadataJson: stringifyJson(input.metadata),
@@ -2575,11 +2682,11 @@ export class MealsService {
     return this.db
       .prepare(
         `INSERT INTO meal_inventory_items (
-          id, name, normalized_name, status, source, confirmed_at, purchased_at, estimated_expiry,
+          id, tenant_id, name, normalized_name, status, source, confirmed_at, purchased_at, estimated_expiry,
           perishability, long_life_default, canonical_item_key, canonical_quantity, canonical_unit,
           canonical_confidence, quantity, unit, location, brand, cost_cad, metadata_json, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(normalized_name) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT DO UPDATE SET
           name = excluded.name,
           status = excluded.status,
           source = excluded.source,
@@ -2602,6 +2709,7 @@ export class MealsService {
       )
       .bind(
         payload.id,
+        this.tenantId,
         payload.name,
         payload.normalizedName,
         payload.status,
@@ -2693,9 +2801,9 @@ export class MealsService {
         .prepare(
           `SELECT meal_plan_id
            FROM meal_plan_entries
-           WHERE id = ?`,
+           WHERE tenant_id = ? AND id = ?`,
         )
-        .bind(input.mealPlanEntryId)
+        .bind(this.tenantId, input.mealPlanEntryId)
         .first<{ meal_plan_id: string }>();
 
       if (!row) {
@@ -2761,9 +2869,9 @@ export class MealsService {
         .prepare(
           `UPDATE meal_plan_entries
            SET status = 'cooked', cooked_at = ?, updated_at = ?
-           WHERE id = ?`,
+           WHERE tenant_id = ? AND id = ?`,
         )
-        .bind(input.cookedAt, input.cookedAt, input.entry.id)
+        .bind(input.cookedAt, input.cookedAt, this.tenantId, input.entry.id)
         .run();
       return false;
     }
@@ -2775,9 +2883,9 @@ export class MealsService {
         .prepare(
           `UPDATE meal_plan_entries
            SET date = ?, day_label = ?, status = 'cooked', cooked_at = ?, updated_at = ?
-           WHERE id = ?`,
+           WHERE tenant_id = ? AND id = ?`,
         )
-        .bind(input.cookedDate, cookedDayLabel, input.cookedAt, input.cookedAt, input.entry.id),
+        .bind(input.cookedDate, cookedDayLabel, input.cookedAt, input.cookedAt, this.tenantId, input.entry.id),
     ];
 
     const entriesToShift = plan.entries
@@ -2800,14 +2908,16 @@ export class MealsService {
           .prepare(
             `UPDATE meal_plan_entries
              SET date = ?, day_label = ?, updated_at = ?
-             WHERE id = ?`,
+             WHERE tenant_id = ? AND id = ?`,
           )
-          .bind(shiftedDate, shiftedDayLabel, input.cookedAt, item.id),
+          .bind(shiftedDate, shiftedDayLabel, input.cookedAt, this.tenantId, item.id),
       );
     }
 
     statements.push(
-      this.db.prepare(`UPDATE meal_plans SET updated_at = ? WHERE id = ?`).bind(input.cookedAt, input.entry.mealPlanId),
+      this.db
+        .prepare(`UPDATE meal_plans SET updated_at = ? WHERE tenant_id = ? AND id = ?`)
+        .bind(input.cookedAt, this.tenantId, input.entry.mealPlanId),
     );
 
     await this.db.batch(statements);
@@ -2830,6 +2940,80 @@ export class MealsService {
     return this.repository.getPlanById(planId);
   }
 
+  private async upsertMealMemoryRecord(input: {
+    recipeId: string;
+    status: string;
+    lastFeedback: unknown;
+    notes: unknown;
+    lastUsedAt: string | null;
+    updatedAt: string;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO meal_memory (id, tenant_id, recipe_id, status, last_feedback_json, notes_json, last_used_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+          status = excluded.status,
+          last_feedback_json = excluded.last_feedback_json,
+          notes_json = excluded.notes_json,
+           last_used_at = excluded.last_used_at,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(
+        `memory:${this.tenantId}:${input.recipeId}`,
+        this.tenantId,
+        input.recipeId,
+        input.status,
+        stringifyJson(input.lastFeedback),
+        stringifyJson(input.notes),
+        input.lastUsedAt,
+        input.updatedAt,
+      )
+      .run();
+  }
+
+  private async recordShoppingSubstitutionMemory(input: {
+    substitutedAt: string;
+    substituteDisplayName: string | null;
+    substituteItemKey: string | null;
+    targetItem: import('./types').GroceryPlanItemRecord;
+    weekStart: string;
+  }): Promise<void> {
+    const sourceRecipeIds = Array.from(new Set(input.targetItem.sourceRecipeIds.filter(Boolean)));
+    for (const recipeId of sourceRecipeIds) {
+      const existingMemory = await this.getMealMemory(recipeId);
+      const currentMemory = existingMemory[0] ?? null;
+      const currentLastFeedback = asRecord(currentMemory?.lastFeedback) ?? {};
+      const currentPlannerSignals =
+        asRecord(currentLastFeedback.planner_signals ?? currentLastFeedback.plannerSignals) ?? {};
+      const currentShoppingFriction = asRecord(currentPlannerSignals.shopping_substitution_friction) ?? {};
+      const currentCount = asNonNegativeNumber(currentShoppingFriction.count) ?? 0;
+
+      await this.upsertMealMemoryRecord({
+        recipeId,
+        status: currentMemory?.status ?? 'observed',
+        lastFeedback: {
+          ...currentLastFeedback,
+          planner_signals: {
+            ...currentPlannerSignals,
+            shopping_substitution_friction: {
+              count: currentCount + 1,
+              lastObservedAt: input.substitutedAt,
+              originalItemKey: input.targetItem.itemKey,
+              originalItemName: input.targetItem.name,
+              substituteDisplayName: input.substituteDisplayName,
+              substituteItemKey: input.substituteItemKey,
+              weekStart: input.weekStart,
+            },
+          },
+        },
+        notes: currentMemory?.notes ?? null,
+        lastUsedAt: currentMemory?.lastUsedAt ?? null,
+        updatedAt: input.substitutedAt,
+      });
+    }
+  }
+
   private async getBrandPreferences(): Promise<Map<string, string[]>> {
     return this.repository.getBrandPreferences();
   }
@@ -2842,8 +3026,11 @@ export class MealsService {
     return this.repository.getGroceryIntentById(id);
   }
 
-  private async getLatestOpenIntentByName(normalizedName: string): Promise<GroceryIntentRecord | null> {
-    return this.repository.getLatestOpenIntentByName(normalizedName);
+  private async getLatestOpenIntentByName(
+    normalizedName: string,
+    mealPlanId?: string | null,
+  ): Promise<GroceryIntentRecord | null> {
+    return this.repository.getLatestOpenIntentByName(normalizedName, mealPlanId);
   }
 
   private async recordDomainEvent(input: {
@@ -2964,7 +3151,7 @@ export class MealsService {
     }
 
     const syncedAt = input.syncedAt ?? new Date().toISOString();
-    const id = existing?.id ?? `confirmed-order-sync:${input.retailer}:${input.retailerOrderId}`;
+    const id = existing?.id ?? `confirmed-order-sync:${this.tenantId}:${input.retailer}:${input.retailerOrderId}`;
     const payloadSummaryJson = stringifyJson(input.payloadSummary ?? null);
 
     const noOp =
@@ -2986,11 +3173,11 @@ export class MealsService {
     await this.db
       .prepare(
         `INSERT INTO meal_confirmed_order_syncs (
-          id, retailer, retailer_order_id, week_start, status, confirmed_at, synced_at,
+          id, tenant_id, retailer, retailer_order_id, week_start, status, confirmed_at, synced_at,
           matched_purchased_count, ordered_extra_count, explicit_skipped_count, missing_planned_count,
           unresolved_count, payload_summary_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(retailer, retailer_order_id) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
           week_start = excluded.week_start,
           status = excluded.status,
           confirmed_at = excluded.confirmed_at,
@@ -3005,6 +3192,7 @@ export class MealsService {
       )
       .bind(
         id,
+        this.tenantId,
         input.retailer,
         input.retailerOrderId,
         input.weekStart,
@@ -3112,6 +3300,8 @@ export class MealsService {
           unit: entry.unit,
         })),
         mealMemory: mealMemory.map((entry) => ({
+          lastFeedback: entry.lastFeedback,
+          notes: entry.notes,
           recipeId: entry.recipeId,
           status: entry.status,
         })),
@@ -3157,7 +3347,9 @@ export class MealsService {
           unit: entry.unit,
         })),
         mealMemory: mealMemory.map((entry) => ({
+          lastFeedback: entry.lastFeedback,
           lastUsedAt: entry.lastUsedAt,
+          notes: entry.notes,
           recipeId: entry.recipeId,
           status: entry.status,
           updatedAt: entry.updatedAt,

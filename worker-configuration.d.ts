@@ -35,6 +35,11 @@ interface D1Database {
 }
 
 interface KVNamespace {}
+interface Fetcher {
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+}
+interface DurableObjectNamespace {}
+interface Workflow<T = unknown> {}
 
 interface R2HTTPMetadata {
   cacheControl?: string;

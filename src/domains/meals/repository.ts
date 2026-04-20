@@ -1,5 +1,5 @@
 import type { MutationProvenance } from '../../auth';
-import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../../fluent-core';
+import { getFluentIdentityContext } from '../../fluent-identity';
 import type { FluentDatabase } from '../../storage';
 import { dateStringForTimeZone, shiftDateString, torontoTimeZone, weekdayForDateInTimeZone } from '../../time';
 import {
@@ -28,6 +28,14 @@ import type { PersistedMealPlanCandidateRecord, PersistedMealPlanGenerationRecor
 export class MealsRepository {
   constructor(private readonly db: FluentDatabase) {}
 
+  private get tenantId(): string {
+    return getFluentIdentityContext().tenantId;
+  }
+
+  private get profileId(): string {
+    return getFluentIdentityContext().profileId;
+  }
+
   async currentDateString(): Promise<string> {
     return dateStringForTimeZone(await this.getProfileTimeZone());
   }
@@ -35,7 +43,7 @@ export class MealsRepository {
   async getProfileTimeZone(): Promise<string> {
     const row = await this.db
       .prepare(`SELECT timezone FROM fluent_profile WHERE tenant_id = ? AND profile_id = ?`)
-      .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID)
+      .bind(this.tenantId, this.profileId)
       .first<{ timezone: string | null }>();
 
     return row?.timezone?.trim() || torontoTimeZone();
@@ -63,9 +71,9 @@ export class MealsRepository {
         `SELECT id, week_start, week_end, status, generated_at, approved_at, profile_owner,
                 requirements_json, summary_json, source_snapshot_json, created_at, updated_at
          FROM meal_plans
-         WHERE id = ?`,
+         WHERE tenant_id = ? AND id = ?`,
       )
-      .bind(planId)
+      .bind(this.tenantId, planId)
       .first<{
         id: string;
         week_start: string;
@@ -89,10 +97,10 @@ export class MealsRepository {
                 serves, prep_minutes, total_minutes, leftovers_expected, instructions_snapshot_json,
                 notes_json, status, cooked_at, updated_at
          FROM meal_plan_entries
-         WHERE meal_plan_id = ?
+         WHERE tenant_id = ? AND meal_plan_id = ?
          ORDER BY COALESCE(date, '9999-12-31') ASC, meal_type ASC, id ASC`,
       )
-      .bind(planId)
+      .bind(this.tenantId, planId)
       .all<{
         id: string;
         date: string | null;
@@ -165,20 +173,20 @@ export class MealsRepository {
                     repeat_again, family_acceptance, notes, submitted_by, source_agent, source_skill,
                     session_id, confidence, source_type, created_at
              FROM meal_feedback
-             WHERE date = ? AND meal_plan_id = ?
+             WHERE tenant_id = ? AND date = ? AND meal_plan_id = ?
              ORDER BY created_at DESC`,
           )
-          .bind(date, mealPlanId)
+          .bind(this.tenantId, date, mealPlanId)
       : this.db
           .prepare(
             `SELECT id, meal_plan_id, meal_plan_entry_id, recipe_id, date, taste, difficulty, time_reality,
                     repeat_again, family_acceptance, notes, submitted_by, source_agent, source_skill,
                     session_id, confidence, source_type, created_at
              FROM meal_feedback
-             WHERE date = ?
+             WHERE tenant_id = ? AND date = ?
              ORDER BY created_at DESC`,
           )
-          .bind(date);
+          .bind(this.tenantId, date);
 
     const result = await statement.all<{
       id: string;
@@ -212,9 +220,9 @@ export class MealsRepository {
                 canonical_unit, canonical_confidence, quantity, unit, location, brand, cost_cad,
                 metadata_json
          FROM meal_inventory_items
-         WHERE normalized_name = ?`,
+         WHERE tenant_id = ? AND normalized_name = ?`,
       )
-      .bind(normalizedName)
+      .bind(this.tenantId, normalizedName)
       .first<{
         id: string;
         name: string;
@@ -248,27 +256,44 @@ export class MealsRepository {
                 meal_plan_id, metadata_json, source_agent, source_skill, session_id,
                 confidence, source_type, created_at, updated_at
          FROM grocery_intents
-         WHERE id = ?`,
+         WHERE tenant_id = ? AND id = ?`,
       )
-      .bind(id)
+      .bind(this.tenantId, id)
       .first<any>();
     return row ? mapGroceryIntentRow(row) : null;
   }
 
-  async getLatestOpenIntentByName(normalizedName: string): Promise<GroceryIntentRecord | null> {
-    const row = await this.db
-      .prepare(
-        `SELECT id, normalized_name, display_name, quantity, unit, notes, status, target_window,
-                meal_plan_id, metadata_json, source_agent, source_skill, session_id,
-                confidence, source_type, created_at, updated_at
-         FROM grocery_intents
-         WHERE normalized_name = ?
-           AND status NOT IN ('completed', 'deleted', 'archived')
-         ORDER BY updated_at DESC
-         LIMIT 1`,
-      )
-      .bind(normalizedName)
-      .first<any>();
+  async getLatestOpenIntentByName(normalizedName: string, mealPlanId?: string | null): Promise<GroceryIntentRecord | null> {
+    const statement = mealPlanId
+      ? this.db
+          .prepare(
+            `SELECT id, normalized_name, display_name, quantity, unit, notes, status, target_window,
+                    meal_plan_id, metadata_json, source_agent, source_skill, session_id,
+                    confidence, source_type, created_at, updated_at
+             FROM grocery_intents
+             WHERE tenant_id = ?
+               AND normalized_name = ?
+               AND meal_plan_id = ?
+               AND status NOT IN ('completed', 'deleted', 'archived')
+             ORDER BY updated_at DESC
+             LIMIT 1`,
+          )
+          .bind(this.tenantId, normalizedName, mealPlanId)
+      : this.db
+          .prepare(
+            `SELECT id, normalized_name, display_name, quantity, unit, notes, status, target_window,
+                    meal_plan_id, metadata_json, source_agent, source_skill, session_id,
+                    confidence, source_type, created_at, updated_at
+             FROM grocery_intents
+             WHERE tenant_id = ?
+               AND normalized_name = ?
+               AND meal_plan_id IS NULL
+               AND status NOT IN ('completed', 'deleted', 'archived')
+             ORDER BY updated_at DESC
+             LIMIT 1`,
+          )
+          .bind(this.tenantId, normalizedName);
+    const row = await statement.first<any>();
     return row ? mapGroceryIntentRow(row) : null;
   }
 
@@ -277,8 +302,10 @@ export class MealsRepository {
       .prepare(
         `SELECT item_family, brand
          FROM meal_brand_preferences
+         WHERE tenant_id = ?
          ORDER BY item_family ASC, evidence_count DESC, brand ASC`,
       )
+      .bind(this.tenantId)
       .all<{ item_family: string; brand: string }>();
 
     const preferences = new Map<string, string[]>();
@@ -331,8 +358,8 @@ export class MealsRepository {
 
   async getPlanGeneration(generationId: string): Promise<PersistedMealPlanGenerationRecord | null> {
     const row = await this.db
-      .prepare(`SELECT raw_json FROM meal_plan_generations WHERE id = ?`)
-      .bind(generationId)
+      .prepare(`SELECT raw_json FROM meal_plan_generations WHERE tenant_id = ? AND id = ?`)
+      .bind(this.tenantId, generationId)
       .first<{ raw_json: string | null }>();
 
     if (!row?.raw_json) return null;
@@ -344,7 +371,7 @@ export class MealsRepository {
       weekStart: asNonEmptyString(parsed.weekStart) ?? '',
       inputHash: asNonEmptyString(parsed.inputHash) ?? '',
       createdAt: asNonEmptyString(parsed.createdAt) ?? '',
-      overrides: normalizeGeneratePlanOverrides(asRecord(parsed.overrides) ?? null),
+      overrides: normalizeGeneratePlanOverrides(asRecord(parsed.overrides) ?? null, asNonEmptyString(parsed.weekStart) ?? ''),
       calendarContext: normalizeCalendarContext(
         asRecord(parsed.calendarContext ?? parsed.calendar_context),
         asNonEmptyString(parsed.weekStart) ?? '',
@@ -375,13 +402,15 @@ export class MealsRepository {
          FROM meal_plan_entries e
          INNER JOIN meal_plans p ON p.id = e.meal_plan_id
          WHERE e.recipe_id IS NOT NULL
+           AND p.tenant_id = ?
+           AND e.tenant_id = ?
            AND p.week_start <> ?
            AND p.week_start >= ?
            AND p.status IN ('active', 'approved', 'draft')
          GROUP BY e.recipe_id
          ORDER BY latest_week_start DESC, latest_updated_at DESC`,
       )
-      .bind(excludedWeekStart, earliestWeekStart)
+      .bind(this.tenantId, this.tenantId, excludedWeekStart, earliestWeekStart)
       .all<{ recipe_id: string }>();
 
     return (result.results ?? []).map((row) => row.recipe_id);

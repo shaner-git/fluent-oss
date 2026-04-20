@@ -28,6 +28,7 @@ async function main() {
     await carriesForwardRecentDurableCoverageAcrossWeeks();
     await composesCarryForwardWithPantrySufficiency();
     await excludesItemsAlreadyInRetailerCart();
+    await treatsPersistedInCartActionsAsAlreadyInRetailerCart();
     await blocksOrderingForPantryChecks();
     await resolvesPantryChecksWithHaveEnough();
     await resolvesPantryChecksWithDontHaveIt();
@@ -224,6 +225,42 @@ async function excludesItemsAlreadyInRetailerCart() {
     assert.equal(prepared.safeToOrder, true);
     assert.equal(prepared.remainingToBuy.some((item) => item.displayName === 'tortillas'), false);
     assert.equal(prepared.alreadyInRetailerCart.some((item) => item.displayName === 'tortillas'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function treatsPersistedInCartActionsAsAlreadyInRetailerCart() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const weekStart = '2026-06-03';
+    await createSingleRecipePlan(service, {
+      weekStart,
+      recipeId: 'order-preflight-in-cart-tortillas',
+      recipeName: 'Cart Taco Plan',
+      ingredient: { item: 'tortillas', quantity: 1, unit: 'count' },
+      mealType: 'dinner',
+    });
+
+    const generated = await service.generateGroceryPlan({ weekStart, provenance });
+    const tortillaLine = generated.raw.items.find((item) => item.normalizedName === 'tortillas');
+    assert.ok(tortillaLine);
+
+    await service.upsertGroceryPlanAction({
+      weekStart,
+      itemKey: tortillaLine!.itemKey,
+      actionStatus: 'in_cart',
+      notes: 'Already added to Voila cart.',
+      provenance,
+    });
+
+    const prepared = await service.prepareOrder({ weekStart, retailer: 'voila' });
+    assert.equal(prepared.safeToOrder, true);
+    assert.equal(prepared.remainingToBuy.some((item) => item.displayName === 'tortillas'), false);
+    assert.equal(prepared.alreadyInRetailerCart.some((item) => item.displayName === 'tortillas'), true);
+    assert.equal(prepared.alreadyInRetailerCart.find((item) => item.displayName === 'tortillas')?.matchedCartTitle, 'tortillas');
   } finally {
     runtime.sqliteDb.close();
   }

@@ -2,11 +2,12 @@ import type { MutationProvenance } from './auth';
 import type { CoreRuntimeBindings, FluentBackendMode, FluentDeploymentTrack } from './config';
 import { FLUENT_CONTRACT_VERSION, FLUENT_OPTIONAL_CAPABILITIES, FLUENT_TOOL_NAMES } from './contract';
 import { isStylePurchaseEvalReady, normalizeStyleProfile } from './domains/style/helpers';
+import { getFluentIdentityContext } from './fluent-identity';
 import type { FluentDatabase } from './storage';
 import { torontoTimeZone } from './time';
 
-export const FLUENT_PRIMARY_TENANT_ID = 'primary';
-export const FLUENT_OWNER_PROFILE_ID = 'owner';
+export { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from './fluent-identity';
+
 export interface FluentTenantRecord {
   backendMode: FluentBackendMode;
   deploymentTrack: FluentDeploymentTrack;
@@ -89,6 +90,14 @@ export interface FluentToolDirectory {
 export class FluentCoreService {
   constructor(private readonly db: FluentDatabase, private readonly runtime: CoreRuntimeBindings) {}
 
+  private get tenantId(): string {
+    return getFluentIdentityContext().tenantId;
+  }
+
+  private get profileId(): string {
+    return getFluentIdentityContext().profileId;
+  }
+
   async getCapabilities(): Promise<FluentCapabilities> {
     const [tenant, profile, domains] = await Promise.all([this.getTenant(), this.getProfile(), this.listDomains()]);
     const readyDomains = domains.filter((domain) => isDomainReady(domain)).map((domain) => domain.domainId);
@@ -134,7 +143,7 @@ export class FluentCoreService {
          FROM fluent_profile
          WHERE tenant_id = ? AND profile_id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID)
+      .bind(this.tenantId, this.profileId)
       .first<{
         tenant_id: string;
         profile_id: string;
@@ -144,7 +153,7 @@ export class FluentCoreService {
       }>();
 
     if (!row) {
-      throw new Error('Missing Fluent owner profile.');
+      throw new Error(`Missing Fluent profile for tenant ${this.tenantId} and profile ${this.profileId}.`);
     }
 
     return {
@@ -175,7 +184,7 @@ export class FluentCoreService {
          SET display_name = ?, timezone = ?, metadata_json = ?, updated_at = CURRENT_TIMESTAMP
          WHERE tenant_id = ? AND profile_id = ?`,
       )
-      .bind(displayName, timezone, stringifyJson(metadata), FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID)
+      .bind(displayName, timezone, stringifyJson(metadata), this.tenantId, this.profileId)
       .run();
 
     const after = await this.getProfile();
@@ -201,7 +210,7 @@ export class FluentCoreService {
          FROM fluent_domains
          WHERE tenant_id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID)
+      .bind(this.tenantId)
       .all<{
         tenant_id: string;
         domain_id: string;
@@ -296,7 +305,7 @@ export class FluentCoreService {
          FROM fluent_tenants
          WHERE id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID)
+      .bind(this.tenantId)
       .first<{
         id: string;
         slug: string;
@@ -332,7 +341,7 @@ export class FluentCoreService {
          FROM fluent_domains
          WHERE tenant_id = ? AND domain_id = ?`,
       )
-      .bind(FLUENT_PRIMARY_TENANT_ID, domainId)
+      .bind(this.tenantId, domainId)
       .first<{
         tenant_id: string;
         domain_id: string;
@@ -411,7 +420,7 @@ export class FluentCoreService {
   }
 
   private async isStyleReady(): Promise<boolean> {
-    const [profileRow, itemCountRow, primaryPhotoCountRow] = await Promise.all([
+    const [profileRow, itemCountRow, primaryPhotoCountRow, itemProfileCountRow] = await Promise.all([
       this.db
         .prepare(
           `SELECT raw_json
@@ -419,7 +428,7 @@ export class FluentCoreService {
            WHERE tenant_id = ?
            LIMIT 1`,
         )
-        .bind(FLUENT_PRIMARY_TENANT_ID)
+        .bind(this.tenantId)
         .first<{ raw_json: string | null }>(),
       this.db
         .prepare(
@@ -427,7 +436,7 @@ export class FluentCoreService {
            FROM style_items
            WHERE tenant_id = ?`,
         )
-        .bind(FLUENT_PRIMARY_TENANT_ID)
+        .bind(this.tenantId)
         .first<{ count: number | string | null }>(),
       this.db
         .prepare(
@@ -435,29 +444,84 @@ export class FluentCoreService {
            FROM style_item_photos
            WHERE tenant_id = ? AND is_primary = 1`,
         )
-        .bind(FLUENT_PRIMARY_TENANT_ID)
+        .bind(this.tenantId)
+        .first<{ count: number | string | null }>(),
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM style_item_profiles
+           WHERE tenant_id = ?`,
+        )
+        .bind(this.tenantId)
         .first<{ count: number | string | null }>(),
     ]);
 
     const profile = normalizeStyleProfile(profileRow?.raw_json ?? null);
     const itemCount = asCount(itemCountRow?.count);
     const primaryPhotoCount = asCount(primaryPhotoCountRow?.count);
+    const itemProfileCount = asCount(itemProfileCountRow?.count);
 
-    return isStylePurchaseEvalReady(profile, { itemCount, primaryPhotoCount });
+    if (isStylePurchaseEvalReady(profile, { itemCount, primaryPhotoCount })) {
+      return true;
+    }
+
+    // Preserve strict onboarding for fresh or sparse closets, but keep mature imported
+    // closets from being downgraded just because the legacy style_profile row is absent.
+    return !profileRow && itemCount >= 24 && primaryPhotoCount >= 12 && itemProfileCount >= 24;
   }
 
   private async isHealthReady(): Promise<boolean> {
-    const row = await this.db
-      .prepare(
-        `SELECT updated_at
-         FROM health_preferences
-         WHERE tenant_id = ? AND profile_id = ?
-         LIMIT 1`,
-      )
-      .bind(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID)
-      .first<{ updated_at: string | null }>();
+    const [preferencesRow, activeBlockCountRow, goalCountRow, workoutCountRow, metricCountRow] = await Promise.all([
+      this.db
+        .prepare(
+          `SELECT updated_at
+           FROM health_preferences
+           WHERE tenant_id = ? AND profile_id = ?
+           LIMIT 1`,
+        )
+        .bind(this.tenantId, this.profileId)
+        .first<{ updated_at: string | null }>(),
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM health_training_blocks
+           WHERE tenant_id = ? AND profile_id = ?`,
+        )
+        .bind(this.tenantId, this.profileId)
+        .first<{ count: number | string | null }>(),
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM health_goals
+           WHERE tenant_id = ? AND profile_id = ?`,
+        )
+        .bind(this.tenantId, this.profileId)
+        .first<{ count: number | string | null }>(),
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM health_workout_logs
+           WHERE tenant_id = ? AND profile_id = ?`,
+        )
+        .bind(this.tenantId, this.profileId)
+        .first<{ count: number | string | null }>(),
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM health_body_metrics
+           WHERE tenant_id = ? AND profile_id = ?`,
+        )
+        .bind(this.tenantId, this.profileId)
+        .first<{ count: number | string | null }>(),
+    ]);
 
-    return Boolean(row?.updated_at);
+    return (
+      Boolean(preferencesRow?.updated_at) ||
+      asCount(activeBlockCountRow?.count) > 0 ||
+      asCount(goalCountRow?.count) > 0 ||
+      asCount(workoutCountRow?.count) > 0 ||
+      asCount(metricCountRow?.count) > 0
+    );
   }
 
   private async updateDomain(
@@ -483,7 +547,7 @@ export class FluentCoreService {
          SET lifecycle_state = ?, onboarding_state = ?, onboarding_version = ?, updated_at = CURRENT_TIMESTAMP
          WHERE tenant_id = ? AND domain_id = ?`,
       )
-      .bind(lifecycleState, onboardingState, onboardingVersion, FLUENT_PRIMARY_TENANT_ID, domainId)
+      .bind(lifecycleState, onboardingState, onboardingVersion, this.tenantId, domainId)
       .run();
 
     const after = await this.getDomain(domainId);
@@ -681,9 +745,17 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         label: 'Meals Shopping',
         domainId: 'meals',
         toolPrefixes: ['meals_'],
-        starterReadTools: ['meals_get_grocery_plan', 'meals_prepare_order', 'meals_get_inventory_summary', 'meals_list_grocery_intents'],
+        starterReadTools: [
+          'meals_render_grocery_list_v2',
+          'meals_render_grocery_list',
+          'meals_get_grocery_plan',
+          'meals_prepare_order',
+          'meals_get_inventory_summary',
+          'meals_list_grocery_intents',
+        ],
         starterWriteTools: ['meals_upsert_grocery_plan_action', 'meals_update_inventory_batch', 'meals_upsert_grocery_intent'],
-        whenToUse: 'Shopping, pantry checks, substitutions, or receipt reconciliation.',
+        whenToUse:
+          'Shopping, pantry checks, substitutions, receipt reconciliation, or the primary grocery-list view for the week. In hosts that support Fluent MCP widgets, start from the render tools for the richer Fluent surface; in Claude-style hosts, start from canonical grocery data first.',
         domainReady: isReady('meals'),
       },
       {

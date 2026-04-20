@@ -2,7 +2,7 @@ export type StyleOnboardingPath = 'seeded' | 'fresh' | null;
 export type StyleClosetCoverage = 'current' | 'partial' | null;
 export type StylePhotoKind = 'product' | 'fit' | 'detail' | 'unknown';
 export type StylePhotoSource = 'imported' | 'user_upload' | 'generated_metadata' | 'legacy_reference';
-export type StyleItemStatus = 'active' | 'archived';
+export type StyleItemStatus = 'active' | 'archived' | 'retired';
 export type StyleOnboardingMode = 'seeded' | 'fresh';
 export type StyleComparatorKey =
   | 'unknown'

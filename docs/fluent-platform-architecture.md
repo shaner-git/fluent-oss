@@ -43,11 +43,19 @@ Cloud and default OSS remain the supported production tracks. `postgres-s3` is e
 Cloud owns:
 
 - Cloudflare Workers deployment
-- Cloudflare Access for SaaS OAuth
+- current Cloudflare Access beta auth path
+- Better Auth hosted login and session surface
 - D1 and R2 managed runtime state
 - the default packaged backend path
 
 Cloud is the paid managed offering.
+
+Public hosted direction:
+
+- Better Auth owns end-user login, sessions, and the hosted OAuth provider cutover
+- Cloudflare Email Service owns outbound magic-link delivery from the Worker runtime
+- Cloudflare Access is being reduced to an operator or beta-only compatibility path
+- Fluent still needs request-scoped tenant resolution before hosted multi-user is complete
 
 ## Fluent OSS
 
@@ -61,6 +69,20 @@ OSS owns:
 - optional experimental Postgres + S3 backend
 
 OSS is intentionally single-user in v1. It does not try to replicate the Cloud control plane.
+
+## Client Bundles
+
+Packaged client bundles currently target:
+
+- `Codex`
+- `Claude`
+- `OpenClaw`
+
+Client packaging stays platform-specific even though the MCP contract is shared:
+
+- Codex keeps the main bundle with local helper scripts for execution-heavy skills.
+- Claude keeps a parallel bundle tuned to Claude's plugin layout.
+- OpenClaw ships as a native plugin for the shared `skills/` tree, but its hosted or OSS MCP connection is applied through native `mcp.servers` profile config rather than package-loaded HTTP MCP state.
 
 ## Domain Model
 

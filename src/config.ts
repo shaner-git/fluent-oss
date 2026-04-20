@@ -1,4 +1,5 @@
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
+import type { HostedEmailBinding } from './hosted-email';
 import type { FluentBlobStore, FluentDatabase } from './storage';
 import { wrapCloudflareBlobStore, wrapCloudflareDatabase } from './storage';
 
@@ -21,8 +22,17 @@ export interface CloudRuntimeEnv {
   OAUTH_KV: KVNamespace;
   DB: D1Database;
   ARTIFACTS: R2Bucket;
+  EMAIL?: HostedEmailBinding;
+  PURCHASE_BROWSER: Fetcher;
+  PURCHASE_RUN_STATE: DurableObjectNamespace;
+  PURCHASE_WORKFLOW: Workflow<import('./cloud/purchase/types').PurchaseRunCreateInput>;
   IMAGE_DELIVERY_SECRET?: string;
   PUBLIC_BASE_URL?: string;
+  PURCHASE_RUNNER_INTERNAL_TOKEN?: string;
+  FLUENT_VOILA_USERNAME?: string;
+  FLUENT_VOILA_PASSWORD?: string;
+  FLUENT_VOILA_TOTP?: string;
+  FLUENT_VOILA_TOTP_SECRET?: string;
   ACCESS_CALLBACK_BASE_URL?: string;
   ALLOWED_EMAIL?: string;
   ALLOWED_EMAILS?: string;
@@ -31,7 +41,14 @@ export interface CloudRuntimeEnv {
   ACCESS_CLIENT_SECRET?: string;
   ACCESS_JWKS_URL?: string;
   ACCESS_TOKEN_URL?: string;
+  BETTER_AUTH_API_KEY?: string;
+  BETTER_AUTH_API_URL?: string;
+  BETTER_AUTH_KV_URL?: string;
+  BETTER_AUTH_MIGRATION_TOKEN?: string;
+  BETTER_AUTH_SECRET?: string;
   COOKIE_ENCRYPTION_KEY?: string;
+  HOSTED_EMAIL_FROM_ADDRESS?: string;
+  HOSTED_EMAIL_FROM_NAME?: string;
 }
 
 export type AppEnv = CoreRuntimeBindings;
@@ -41,6 +58,8 @@ export type OAuthAppEnv = CloudRuntimeEnv & {
 };
 
 export interface RuntimeConfig {
+  hasBetterAuthConfig: boolean;
+  hasBetterAuthEmail: boolean;
   deploymentTrack: FluentDeploymentTrack;
   hasStorage: boolean;
   hasAccessOAuthConfig: boolean;
@@ -54,6 +73,8 @@ export function readConfig(env: CloudRuntimeEnv): RuntimeConfig {
   const allowedEmails = parseAllowedEmails(env);
   return {
     deploymentTrack: 'cloud',
+    hasBetterAuthConfig: hasBetterAuthConfig(env),
+    hasBetterAuthEmail: hasBetterAuthEmail(env),
     hasStorage: Boolean(env.DB && env.ARTIFACTS && env.OAUTH_KV),
     hasAccessOAuthConfig: hasAccessOAuthConfig(env),
     publicBaseUrl: env.PUBLIC_BASE_URL?.trim() || null,
@@ -66,7 +87,7 @@ export function readConfig(env: CloudRuntimeEnv): RuntimeConfig {
 export function coreBindingsFromCloudEnv(env: CloudRuntimeEnv): CoreRuntimeBindings {
   return {
     artifacts: wrapCloudflareBlobStore(env.ARTIFACTS),
-    authModel: 'cloudflare-access-oauth',
+    authModel: hasBetterAuthConfig(env) ? 'better-auth-oauth-provider' : 'cloudflare-access-oauth',
     db: wrapCloudflareDatabase(env.DB),
     deploymentTrack: 'cloud',
     imageDeliverySecret: env.IMAGE_DELIVERY_SECRET ?? env.COOKIE_ENCRYPTION_KEY,
@@ -93,4 +114,20 @@ function hasAccessOAuthConfig(env: CloudRuntimeEnv): boolean {
       env.ACCESS_JWKS_URL?.trim() &&
       env.COOKIE_ENCRYPTION_KEY?.trim(),
   );
+}
+
+export function hasBetterAuthConfig(env: CloudRuntimeEnv): boolean {
+  const hasRuntimeSecret = Boolean((env.BETTER_AUTH_SECRET ?? env.COOKIE_ENCRYPTION_KEY)?.trim());
+  const hasExplicitBetterAuthSignal = Boolean(
+    env.BETTER_AUTH_SECRET?.trim() ||
+      env.BETTER_AUTH_API_KEY?.trim() ||
+      env.BETTER_AUTH_API_URL?.trim() ||
+      env.BETTER_AUTH_KV_URL?.trim() ||
+      env.BETTER_AUTH_MIGRATION_TOKEN?.trim(),
+  );
+  return hasRuntimeSecret && hasExplicitBetterAuthSignal;
+}
+
+function hasBetterAuthEmail(env: CloudRuntimeEnv): boolean {
+  return hasBetterAuthConfig(env) && Boolean(env.EMAIL);
 }

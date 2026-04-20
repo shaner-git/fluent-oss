@@ -37,6 +37,37 @@ CREATE TABLE IF NOT EXISTS fluent_domains (
   FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS fluent_user_identities (
+  id TEXT PRIMARY KEY,
+  auth_provider TEXT NOT NULL DEFAULT 'better-auth',
+  email TEXT,
+  email_normalized TEXT,
+  display_name TEXT,
+  metadata_json TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fluent_user_identities_email
+  ON fluent_user_identities(email_normalized)
+  WHERE email_normalized IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS fluent_user_memberships (
+  user_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'owner',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, tenant_id, profile_id),
+  FOREIGN KEY (user_id) REFERENCES fluent_user_identities(id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, profile_id) REFERENCES fluent_profile(tenant_id, profile_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_fluent_user_memberships_user_status
+  ON fluent_user_memberships(user_id, status, created_at);
+
 CREATE TABLE IF NOT EXISTS domain_events (
   id TEXT PRIMARY KEY,
   domain TEXT NOT NULL,
@@ -82,6 +113,8 @@ CREATE TABLE IF NOT EXISTS meal_recipes (
 
 CREATE TABLE IF NOT EXISTS meal_plans (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
   week_start TEXT NOT NULL,
   week_end TEXT,
   status TEXT NOT NULL,
@@ -92,11 +125,13 @@ CREATE TABLE IF NOT EXISTS meal_plans (
   summary_json TEXT,
   source_snapshot_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id, profile_id) REFERENCES fluent_profile(tenant_id, profile_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS meal_plan_entries (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
   meal_plan_id TEXT NOT NULL,
   date TEXT,
   day_label TEXT,
@@ -113,12 +148,14 @@ CREATE TABLE IF NOT EXISTS meal_plan_entries (
   status TEXT DEFAULT 'planned',
   cooked_at TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE,
   FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id) ON DELETE CASCADE,
   FOREIGN KEY (recipe_id) REFERENCES meal_recipes(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS meal_inventory_items (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
   name TEXT NOT NULL,
   normalized_name TEXT,
   status TEXT NOT NULL DEFAULT 'present',
@@ -139,33 +176,40 @@ CREATE TABLE IF NOT EXISTS meal_inventory_items (
   cost_cad DOUBLE PRECISION,
   metadata_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS meal_memory (
   id TEXT PRIMARY KEY,
-  recipe_id TEXT NOT NULL UNIQUE,
+  tenant_id TEXT NOT NULL,
+  recipe_id TEXT NOT NULL,
   status TEXT NOT NULL,
   last_feedback_json TEXT,
   notes_json TEXT,
   last_used_at TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE,
   FOREIGN KEY (recipe_id) REFERENCES meal_recipes(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS meal_brand_preferences (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
   item_family TEXT NOT NULL,
   brand TEXT NOT NULL,
   preference_strength TEXT,
   evidence_source TEXT,
   evidence_count INTEGER DEFAULT 0,
   last_seen_at TEXT,
-  metadata_json TEXT
+  metadata_json TEXT,
+  FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS meal_feedback (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
   meal_plan_id TEXT,
   meal_plan_entry_id TEXT,
   recipe_id TEXT NOT NULL,
@@ -183,6 +227,7 @@ CREATE TABLE IF NOT EXISTS meal_feedback (
   confidence DOUBLE PRECISION,
   source_type TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id, profile_id) REFERENCES fluent_profile(tenant_id, profile_id) ON DELETE CASCADE,
   FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id) ON DELETE SET NULL,
   FOREIGN KEY (meal_plan_entry_id) REFERENCES meal_plan_entries(id) ON DELETE SET NULL,
   FOREIGN KEY (recipe_id) REFERENCES meal_recipes(id) ON DELETE CASCADE
@@ -190,6 +235,8 @@ CREATE TABLE IF NOT EXISTS meal_feedback (
 
 CREATE TABLE IF NOT EXISTS meal_plan_reviews (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
   meal_plan_id TEXT,
   week_start TEXT NOT NULL,
   summary TEXT,
@@ -202,11 +249,14 @@ CREATE TABLE IF NOT EXISTS meal_plan_reviews (
   confidence DOUBLE PRECISION,
   source_type TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id, profile_id) REFERENCES fluent_profile(tenant_id, profile_id) ON DELETE CASCADE,
   FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS meal_grocery_runs (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
   meal_plan_id TEXT,
   store TEXT NOT NULL,
   export_artifact_id TEXT,
@@ -223,6 +273,7 @@ CREATE TABLE IF NOT EXISTS meal_grocery_runs (
   source_type TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   completed_at TEXT,
+  FOREIGN KEY (tenant_id, profile_id) REFERENCES fluent_profile(tenant_id, profile_id) ON DELETE CASCADE,
   FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id) ON DELETE SET NULL
 );
 
@@ -240,6 +291,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 
 CREATE TABLE IF NOT EXISTS grocery_intents (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
   normalized_name TEXT NOT NULL,
   display_name TEXT NOT NULL,
   quantity DOUBLE PRECISION,
@@ -256,6 +308,7 @@ CREATE TABLE IF NOT EXISTS grocery_intents (
   source_type TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE,
   FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id) ON DELETE SET NULL
 );
 
@@ -272,18 +325,23 @@ CREATE TABLE IF NOT EXISTS meal_preferences (
 
 CREATE TABLE IF NOT EXISTS meal_grocery_plans (
   id TEXT PRIMARY KEY,
-  week_start TEXT NOT NULL UNIQUE,
+  tenant_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  week_start TEXT NOT NULL,
   meal_plan_id TEXT,
   raw_json TEXT NOT NULL,
   source_snapshot_json TEXT,
   generated_at TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id, profile_id) REFERENCES fluent_profile(tenant_id, profile_id) ON DELETE CASCADE,
   FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS meal_plan_generations (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
   week_start TEXT NOT NULL,
   input_hash TEXT NOT NULL,
   raw_json TEXT NOT NULL,
@@ -292,11 +350,13 @@ CREATE TABLE IF NOT EXISTS meal_plan_generations (
   accepted_plan_id TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id, profile_id) REFERENCES fluent_profile(tenant_id, profile_id) ON DELETE CASCADE,
   FOREIGN KEY (accepted_plan_id) REFERENCES meal_plans(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS meal_grocery_plan_actions (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
   week_start TEXT NOT NULL,
   meal_plan_id TEXT,
   item_key TEXT NOT NULL,
@@ -312,11 +372,13 @@ CREATE TABLE IF NOT EXISTS meal_grocery_plan_actions (
   source_type TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE,
   FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS meal_confirmed_order_syncs (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
   retailer TEXT NOT NULL,
   retailer_order_id TEXT NOT NULL,
   week_start TEXT NOT NULL,
@@ -330,7 +392,8 @@ CREATE TABLE IF NOT EXISTS meal_confirmed_order_syncs (
   unresolved_count INTEGER NOT NULL DEFAULT 0,
   payload_summary_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS style_profile (
@@ -634,24 +697,25 @@ CREATE TABLE IF NOT EXISTS health_block_reviews (
   FOREIGN KEY (tenant_id, profile_id) REFERENCES fluent_profile(tenant_id, profile_id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_meal_plans_week_start ON meal_plans(week_start);
-CREATE INDEX IF NOT EXISTS idx_meal_plans_status ON meal_plans(status);
-CREATE INDEX IF NOT EXISTS idx_meal_plan_entries_plan_id ON meal_plan_entries(meal_plan_id);
-CREATE INDEX IF NOT EXISTS idx_meal_plan_entries_date ON meal_plan_entries(date);
-CREATE INDEX IF NOT EXISTS idx_meal_inventory_name ON meal_inventory_items(normalized_name);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_inventory_name_unique ON meal_inventory_items(normalized_name);
+CREATE INDEX IF NOT EXISTS idx_meal_plans_week_start ON meal_plans(tenant_id, week_start);
+CREATE INDEX IF NOT EXISTS idx_meal_plans_status ON meal_plans(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_meal_plan_entries_plan_id ON meal_plan_entries(tenant_id, meal_plan_id);
+CREATE INDEX IF NOT EXISTS idx_meal_plan_entries_date ON meal_plan_entries(tenant_id, date);
+CREATE INDEX IF NOT EXISTS idx_meal_inventory_name ON meal_inventory_items(tenant_id, normalized_name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_inventory_name_unique ON meal_inventory_items(tenant_id, normalized_name);
 CREATE INDEX IF NOT EXISTS idx_meal_inventory_canonical_item_key ON meal_inventory_items(canonical_item_key);
-CREATE INDEX IF NOT EXISTS idx_meal_feedback_recipe_date ON meal_feedback(recipe_id, date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_memory_recipe_id ON meal_memory(tenant_id, recipe_id);
+CREATE INDEX IF NOT EXISTS idx_meal_feedback_recipe_date ON meal_feedback(tenant_id, recipe_id, date);
 CREATE INDEX IF NOT EXISTS idx_meal_feedback_entry ON meal_feedback(meal_plan_entry_id);
-CREATE INDEX IF NOT EXISTS idx_meal_plan_reviews_week_start ON meal_plan_reviews(week_start);
-CREATE INDEX IF NOT EXISTS idx_grocery_intents_status ON grocery_intents(status, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_grocery_intents_name ON grocery_intents(normalized_name, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_meal_grocery_plans_week_start ON meal_grocery_plans(week_start);
-CREATE INDEX IF NOT EXISTS idx_meal_plan_generations_week_start ON meal_plan_generations(week_start);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_grocery_plan_actions_unique ON meal_grocery_plan_actions(week_start, item_key);
-CREATE INDEX IF NOT EXISTS idx_meal_grocery_plan_actions_week ON meal_grocery_plan_actions(week_start, action_status);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_confirmed_order_syncs_unique ON meal_confirmed_order_syncs(retailer, retailer_order_id);
-CREATE INDEX IF NOT EXISTS idx_meal_confirmed_order_syncs_week ON meal_confirmed_order_syncs(week_start, synced_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meal_plan_reviews_week_start ON meal_plan_reviews(tenant_id, week_start);
+CREATE INDEX IF NOT EXISTS idx_grocery_intents_status ON grocery_intents(tenant_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_grocery_intents_name ON grocery_intents(tenant_id, normalized_name, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meal_grocery_plans_week_start ON meal_grocery_plans(tenant_id, week_start);
+CREATE INDEX IF NOT EXISTS idx_meal_plan_generations_week_start ON meal_plan_generations(tenant_id, week_start);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_grocery_plan_actions_unique ON meal_grocery_plan_actions(tenant_id, week_start, item_key);
+CREATE INDEX IF NOT EXISTS idx_meal_grocery_plan_actions_week ON meal_grocery_plan_actions(tenant_id, week_start, action_status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_confirmed_order_syncs_unique ON meal_confirmed_order_syncs(tenant_id, retailer, retailer_order_id);
+CREATE INDEX IF NOT EXISTS idx_meal_confirmed_order_syncs_week ON meal_confirmed_order_syncs(tenant_id, week_start, synced_at DESC);
 CREATE INDEX IF NOT EXISTS idx_style_items_tenant_category ON style_items(tenant_id, category, subcategory);
 CREATE INDEX IF NOT EXISTS idx_style_items_tenant_color ON style_items(tenant_id, color_family);
 CREATE INDEX IF NOT EXISTS idx_style_items_tenant_comparator ON style_items(tenant_id, category, comparator_key);

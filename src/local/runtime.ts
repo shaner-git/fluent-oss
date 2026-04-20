@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { homedir } from 'node:os';
-import { fluentContractSnapshot } from '../contract';
+import { FLUENT_CONTRACT_VERSION, fluentContractSnapshot } from '../contract';
 import type { CoreRuntimeBindings } from '../config';
 import type { FluentStorageBackend } from '../config';
 import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../fluent-core';
@@ -106,7 +106,7 @@ export function localProbe(origin: string) {
     deploymentTrack: 'oss',
     display_name: 'Fluent OSS',
     icon_url: `${origin}/icon.svg`,
-    marker: 'fluent-oss-probe-2026-04-05-v1',
+    marker: `fluent-oss-probe-${FLUENT_CONTRACT_VERSION}`,
     legacy_auth_envs: [LOCAL_TOKEN_ENV],
     open_paths: ['/health', '/codex-probe'],
     recommended_auth_env: OSS_TOKEN_ENV,

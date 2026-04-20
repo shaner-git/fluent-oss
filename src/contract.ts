@@ -1,4 +1,4 @@
-export const FLUENT_CONTRACT_VERSION = '2026-04-05.fluent-core-v1.31';
+export const FLUENT_CONTRACT_VERSION = '2026-04-17.fluent-core-v1.35';
 
 export const FLUENT_RESOURCE_URIS = [
   'fluent://core/capabilities',
@@ -58,6 +58,9 @@ export const FLUENT_TOOL_NAMES = [
   'meals_get_day_plan',
   'meals_get_today_context',
   'meals_get_recipe',
+  'meals_render_recipe_card',
+  'meals_render_grocery_list_v2',
+  'meals_render_grocery_list',
   'meals_create_recipe',
   'meals_list_recipes',
   'meals_get_preferences',
@@ -123,6 +126,9 @@ export const FLUENT_OPTIONAL_CAPABILITIES = [
   'tool_discovery_hints',
   'tool_list_fallback',
   'ingredient_form_groups',
+  'recipe_card_widget',
+  'grocery_list_widget',
+  'grocery_list_widget_v2',
   'style_profile',
   'style_context',
   'style_purchase_analysis',
@@ -149,7 +155,7 @@ export const FLUENT_OPTIONAL_CAPABILITIES = [
 
 export const FLUENT_CONTRACT_FREEZE = {
   backwardCompatibility:
-    'Phase 20 keeps the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis, while Health now replaces its pre-production weekly-plan contract with a block-first coaching surface.',
+    'Phase 20 keeps the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; preserves the Meals recipe-card and grocery-list render surfaces for hosts that support MCP output templates; and keeps Health on the block-first coaching surface instead of the pre-production weekly-plan contract.',
   frozenAt: 'workstream-5',
   requiredFields: [
     'contractVersion',

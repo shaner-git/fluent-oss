@@ -23,6 +23,8 @@ async function main() {
     await verifiesHostedPlannerBrainFlows();
     await reschedulesFutureMealWhenCookedEarly();
     await doesNotBindFutureMealWhenLoggingFeedbackEarly();
+    await honorsPinnedMealAssignmentsDuringGeneration();
+    await deprioritizesRecipesWithRecentShoppingSubstitutionFriction();
     await rejectsPlanningWithoutRequiredCalendarContext();
     await rejectsInvalidCalendarContextPayloads();
     await appliesCalendarAwareSlotConstraints();
@@ -258,6 +260,231 @@ async function doesNotBindFutureMealWhenLoggingFeedbackEarly() {
     assert.equal(feedback.date, '2026-04-09');
     assert.equal(feedback.mealPlanId, null);
     assert.equal(feedback.mealPlanEntryId, null);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function honorsPinnedMealAssignmentsDuringGeneration() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const provenance = {
+    actorEmail: 'shane@securebyte.ca',
+    actorName: 'Shane Rodness',
+    confidence: 1,
+    scopes: ['meals:write'],
+    sessionId: 'planner-brain-pinned-meals-test',
+    sourceAgent: 'codex-test',
+    sourceSkill: 'fluent-meals',
+    sourceType: 'test',
+  };
+
+  try {
+    const recipes = [
+      {
+        id: 'planner-brain-pinned-monday',
+        name: 'Planner Brain Monday Dinner',
+        ingredient: 'chicken thighs',
+      },
+      {
+        id: 'planner-brain-pinned-wednesday',
+        name: 'Planner Brain Wednesday Dinner',
+        ingredient: 'salmon fillet',
+      },
+      {
+        id: 'planner-brain-pinned-friday',
+        name: 'Planner Brain Friday Dinner',
+        ingredient: 'lean ground beef',
+      },
+    ];
+
+    for (const recipe of recipes) {
+      await service.createRecipe({
+        recipe: {
+          id: recipe.id,
+          name: recipe.name,
+          meal_type: 'dinner',
+          servings: 2,
+          total_time: 25,
+          active_time: 15,
+          macros: {
+            calories: 600,
+            fiber_g: 5,
+            protein_g: 32,
+            sodium_mg: 420,
+          },
+          cost_per_serving_cad: 6.5,
+          ingredients: [{ item: recipe.ingredient, quantity: 500, unit: 'g', ordering_policy: 'flexible_match' }],
+          instructions: [{ step_number: 1, detail: `Cook ${recipe.name}.` }],
+        },
+        provenance,
+      });
+    }
+
+    const generation = await service.generatePlan({
+      weekStart: '2026-05-18',
+      overrides: {
+        breakfastCount: 0,
+        lunchCount: 0,
+        dinnerCount: 3,
+        snackCount: 0,
+        includeRecipeIds: recipes.map((recipe) => recipe.id),
+        pinnedMeals: [
+          {
+            date: '2026-05-22',
+            mealType: 'dinner',
+            recipeId: 'planner-brain-pinned-friday',
+          },
+        ],
+      },
+      provenance,
+    });
+
+    const candidate = generation.candidates[0];
+    assert.ok(candidate);
+    const fridayDinner = candidate.entries.find((entry) => entry.date === '2026-05-22' && entry.mealType === 'dinner');
+    assert.equal(fridayDinner?.recipeId, 'planner-brain-pinned-friday');
+    assert.equal(
+      candidate.entries.some(
+        (entry) => entry.date !== '2026-05-22' && entry.mealType === 'dinner' && entry.recipeId === 'planner-brain-pinned-friday',
+      ),
+      false,
+    );
+    assert.equal(candidate.rationale.some((entry) => entry.includes('Pinned 1 meal slot')), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function deprioritizesRecipesWithRecentShoppingSubstitutionFriction() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const provenance = {
+    actorEmail: 'shane@securebyte.ca',
+    actorName: 'Shane Rodness',
+    confidence: 1,
+    scopes: ['meals:write'],
+    sessionId: 'planner-brain-shopping-friction-test',
+    sourceAgent: 'codex-test',
+    sourceSkill: 'fluent-meals',
+    sourceType: 'test',
+  };
+
+  try {
+    await service.createRecipe({
+      recipe: {
+        id: 'planner-brain-homemade-chickpea-snack',
+        name: 'Planner Brain Homemade Chickpea Snack',
+        meal_type: 'snack',
+        servings: 1,
+        total_time: 20,
+        active_time: 10,
+        macros: {
+          calories: 220,
+          fiber_g: 6,
+          protein_g: 10,
+          sodium_mg: 180,
+        },
+        cost_per_serving_cad: 2.2,
+        ingredients: [{ item: 'canned chickpeas', quantity: 2, unit: 'count', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Roast the chickpeas.' }],
+      },
+      provenance,
+    });
+
+    await service.createRecipe({
+      recipe: {
+        id: 'planner-brain-premade-chickpea-snack',
+        name: 'Planner Brain Premade Chickpea Snack',
+        meal_type: 'snack',
+        servings: 1,
+        total_time: 2,
+        active_time: 1,
+        macros: {
+          calories: 210,
+          fiber_g: 5,
+          protein_g: 9,
+          sodium_mg: 190,
+        },
+        cost_per_serving_cad: 4.5,
+        ingredients: [
+          {
+            item: 'roasted chickpea snack bag',
+            quantity: 1,
+            unit: 'count',
+            ordering_policy: 'direct_match',
+          },
+        ],
+        instructions: [{ step_number: 1, detail: 'Open the snack bag.' }],
+      },
+      provenance,
+    });
+
+    await service.logFeedback({
+      date: '2026-05-07',
+      recipeId: 'planner-brain-homemade-chickpea-snack',
+      repeatAgain: 'good',
+      taste: 'good',
+      provenance,
+    });
+
+    await service.upsertPlan({
+      plan: {
+        week_start: '2026-05-11',
+        week_end: '2026-05-11',
+        status: 'approved',
+        meals: [
+          {
+            id: 'plan:2026-05-11:snack',
+            date: '2026-05-11',
+            day: 'Monday',
+            meal_type: 'snack',
+            recipe_id: 'planner-brain-homemade-chickpea-snack',
+            recipe_name: 'Planner Brain Homemade Chickpea Snack',
+            selection_status: 'proven',
+            serves: 1,
+            prep_minutes: 10,
+            total_minutes: 20,
+            leftovers_expected: false,
+            instructions: ['Roast the chickpeas.'],
+          },
+        ],
+      },
+      provenance,
+    });
+
+    const groceryPlan = await service.generateGroceryPlan({
+      weekStart: '2026-05-11',
+      provenance,
+    });
+    const cannedChickpeas = groceryPlan.raw.items.find((item) => item.normalizedName === 'canned chickpeas');
+    assert.ok(cannedChickpeas);
+
+    await service.upsertGroceryPlanAction({
+      weekStart: '2026-05-11',
+      itemKey: cannedChickpeas!.itemKey,
+      actionStatus: 'substituted',
+      substituteDisplayName: 'Three Farmers Roasted Chickpeas',
+      provenance,
+    });
+
+    const nextWeek = await service.generatePlan({
+      weekStart: '2026-05-18',
+      overrides: {
+        breakfastCount: 0,
+        lunchCount: 0,
+        dinnerCount: 0,
+        snackCount: 1,
+        includeRecipeIds: [
+          'planner-brain-homemade-chickpea-snack',
+          'planner-brain-premade-chickpea-snack',
+        ],
+      },
+      provenance,
+    });
+
+    const chosenSnack = nextWeek.candidates[0]?.entries.find((entry) => entry.mealType === 'snack');
+    assert.equal(chosenSnack?.recipeId, 'planner-brain-premade-chickpea-snack');
   } finally {
     runtime.sqliteDb.close();
   }

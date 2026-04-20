@@ -189,12 +189,61 @@ function scoreRecipeForPlanning(
   const complexityScore = scoreRecipeSimplicity(raw);
   const proteinScore = scoreRecipeProteinSupport(raw, recipe);
   const repeatableScore = scoreRecipeRepeatability(raw);
+  const shoppingSubstitutionPenalty = scoreShoppingSubstitutionFriction(memory, input.date);
 
   score += complexityScore * trainingBias.recipeComplexityBias;
   score += proteinScore * trainingBias.proteinSupportBoost;
   score += repeatableScore * trainingBias.repeatableMealBoost;
+  score += shoppingSubstitutionPenalty;
 
   return score;
+}
+
+function scoreShoppingSubstitutionFriction(memory: MealMemoryRecord | null, plannedDate: string): number {
+  const signal = extractShoppingSubstitutionSignal(memory);
+  if (!signal) {
+    return 0;
+  }
+
+  const daysSinceObserved = diffIsoDays(signal.lastObservedAt, plannedDate);
+  let penalty = 0;
+  if (daysSinceObserved <= 21) penalty -= 20;
+  else if (daysSinceObserved <= 56) penalty -= 12;
+  else penalty -= 6;
+
+  penalty -= Math.min(4, Math.max(0, signal.count - 1) * 2);
+  return penalty;
+}
+
+function extractShoppingSubstitutionSignal(memory: MealMemoryRecord | null): {
+  count: number;
+  lastObservedAt: string;
+} | null {
+  const lastFeedback = asRecord(memory?.lastFeedback);
+  if (!lastFeedback) {
+    return null;
+  }
+
+  const plannerSignals = asRecord(lastFeedback.planner_signals ?? lastFeedback.plannerSignals);
+  const friction = asRecord(plannerSignals?.shopping_substitution_friction);
+  const lastObservedAt = asNonEmptyString(friction?.lastObservedAt ?? friction?.last_observed_at);
+  if (!lastObservedAt) {
+    return null;
+  }
+
+  return {
+    count: asNonNegativeNumber(friction?.count) ?? 1,
+    lastObservedAt,
+  };
+}
+
+function diffIsoDays(left: string, right: string): number {
+  const leftDate = Date.parse(`${left.slice(0, 10)}T00:00:00.000Z`);
+  const rightDate = Date.parse(`${right.slice(0, 10)}T00:00:00.000Z`);
+  if (!Number.isFinite(leftDate) || !Number.isFinite(rightDate)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.max(0, Math.round((rightDate - leftDate) / 86_400_000));
 }
 
 export function resolvePlanningCounts(overrides: GenerateMealPlanOverrides | null) {
@@ -210,9 +259,12 @@ export function resolvePlanningCounts(overrides: GenerateMealPlanOverrides | nul
 
 export function normalizeGeneratePlanOverrides(
   input: GenerateMealPlanOverrides | Record<string, unknown> | null | undefined,
+  weekStart?: string,
 ): GenerateMealPlanOverrides | null {
   const record = asRecord(input);
   if (!record) return null;
+
+  const pinnedMeals = normalizePinnedMealOverrides(record.pinnedMeals ?? record.pinned_meals, weekStart);
 
   return compactObject({
     breakfastCount: asNonNegativeNumber(record.breakfastCount),
@@ -224,7 +276,57 @@ export function normalizeGeneratePlanOverrides(
     includeRecipeIds: asStringArray(record.includeRecipeIds),
     excludeRecipeIds: asStringArray(record.excludeRecipeIds),
     prioritizeInventory: typeof record.prioritizeInventory === 'boolean' ? record.prioritizeInventory : undefined,
+    pinnedMeals,
   }) as GenerateMealPlanOverrides;
+}
+
+function normalizePinnedMealOverrides(
+  input: unknown,
+  weekStart?: string,
+): NonNullable<GenerateMealPlanOverrides['pinnedMeals']> | undefined {
+  if (input == null) {
+    return undefined;
+  }
+  if (!Array.isArray(input)) {
+    throw new Error('overrides.pinnedMeals must be an array when provided.');
+  }
+
+  const validDates = weekStart
+    ? new Set(Array.from({ length: 7 }, (_, index) => shiftDateString(weekStart, index)))
+    : null;
+  const seenSlots = new Set<string>();
+  const pinnedMeals = input.map((entry, index) => {
+    const record = asRecord(entry);
+    if (!record) {
+      throw new Error(`overrides.pinnedMeals[${index}] must be an object.`);
+    }
+
+    const date = asNonEmptyString(record.date);
+    const mealType = asNonEmptyString(record.mealType ?? record.meal_type);
+    const recipeId = asNonEmptyString(record.recipeId ?? record.recipe_id);
+    if (!date) {
+      throw new Error(`overrides.pinnedMeals[${index}].date is required.`);
+    }
+    if (!mealType || !isCalendarMealType(mealType)) {
+      throw new Error(`overrides.pinnedMeals[${index}].mealType must be a valid meal type.`);
+    }
+    if (!recipeId) {
+      throw new Error(`overrides.pinnedMeals[${index}].recipeId is required.`);
+    }
+    if (validDates && !validDates.has(date)) {
+      throw new Error(`overrides.pinnedMeals[${index}].date must be within the requested planning week.`);
+    }
+
+    const slotKey = `${date}:${mealType}`;
+    if (seenSlots.has(slotKey)) {
+      throw new Error(`overrides.pinnedMeals contains duplicate slot assignments for ${date} ${mealType}.`);
+    }
+    seenSlots.add(slotKey);
+
+    return { date, mealType, recipeId };
+  });
+
+  return pinnedMeals.length > 0 ? pinnedMeals : undefined;
 }
 
 export function normalizeCalendarContext(
@@ -683,42 +785,70 @@ export function buildPrimaryPlanCandidate(input: {
   }
   const rationale = new Set<string>();
   const repeatedRecipeByMealType = new Map<string, MealRecipeRecord>();
-  const selectedDinnerRecipeIds = new Set<string>();
+  const selectedDinnerRecipeIds = new Set(
+    (input.overrides?.pinnedMeals ?? [])
+      .filter((entry) => entry.mealType === 'dinner')
+      .map((entry) => entry.recipeId),
+  );
+  const pinnedMealsBySlotKey = new Map<string, NonNullable<GenerateMealPlanOverrides['pinnedMeals']>[number]>(
+    (input.overrides?.pinnedMeals ?? []).map((entry) => [`${entry.date}:${entry.mealType}`, entry]),
+  );
   const entries: Array<Record<string, unknown>> = [];
   let familyDinnerSlotsAssigned = 0;
 
   for (const slot of slots) {
+    const pinnedMeal = pinnedMealsBySlotKey.get(`${slot.date}:${slot.mealType}`) ?? null;
     const familyDinner =
       slot.mealType === 'dinner' &&
       slot.familyEligible &&
       familyDinnerSlotsAssigned < familyDinnerCount;
     const reuseAllowed = slot.mealType !== 'dinner';
     const reused = reuseAllowed ? repeatedRecipeByMealType.get(slot.mealType) ?? null : null;
+    const pinnedChoice = pinnedMeal
+      ? findPinnedRecipeForPlanning({
+          mealType: slot.mealType,
+          recipeId: pinnedMeal.recipeId,
+          recipes: input.snapshot.recipes,
+        })
+      : null;
     const chosen =
+      pinnedChoice ??
       reused ??
-      chooseRecipeForPlanning({
-        date: slot.date,
-        excludeRecipeIds: new Set(asStringArray(input.overrides?.excludeRecipeIds)),
-        familyDinner,
-        hardAvoids,
-        includeRecipeIds: new Set(asStringArray(input.overrides?.includeRecipeIds)),
-        inventory: input.snapshot.inventory,
-        mealMemoryByRecipeId: input.snapshot.mealMemoryByRecipeId,
-        mealType: slot.mealType,
-        porkNeverForFamily: dinnerRules?.pork_never_for_family === true,
-        recentRecipeIds: input.snapshot.recentRecipeIds,
-        remainingTrialMeals,
-        recipes: input.snapshot.recipes,
-        selectedDinnerRecipeIds,
-        trainingContext: input.snapshot.trainingContext,
-      });
+          chooseRecipeForPlanning({
+            date: slot.date,
+            excludeRecipeIds: new Set(asStringArray(input.overrides?.excludeRecipeIds)),
+            familyDinner,
+            hardAvoids,
+            includeRecipeIds: new Set(asStringArray(input.overrides?.includeRecipeIds)),
+            inventory: input.snapshot.inventory,
+            mealMemoryByRecipeId: input.snapshot.mealMemoryByRecipeId,
+            mealType: slot.mealType,
+            porkNeverForFamily: dinnerRules?.pork_never_for_family === true,
+            recentRecipeIds: input.snapshot.recentRecipeIds,
+            remainingTrialMeals,
+            recipes: input.snapshot.recipes,
+            selectedDinnerRecipeIds,
+            trainingContext: input.snapshot.trainingContext,
+          });
 
     if (!chosen) {
+      if (pinnedMeal && !pinnedChoice) {
+        warnings.add(
+          `Pinned ${slot.mealType} recipe ${pinnedMeal.recipeId} could not be used for ${slot.dayLabel}; planner filled the slot normally.`,
+        );
+      }
       warnings.add(`No ${slot.mealType} recipe matched the current Fluent planner inputs for ${slot.dayLabel}.`);
       continue;
     }
+    if (pinnedMeal && !pinnedChoice) {
+      warnings.add(
+        `Pinned ${slot.mealType} recipe ${pinnedMeal.recipeId} could not be used for ${slot.dayLabel}; planner filled the slot normally.`,
+      );
+    }
 
-    if (reuseAllowed && !repeatedRecipeByMealType.has(slot.mealType)) repeatedRecipeByMealType.set(slot.mealType, chosen);
+    if (reuseAllowed && !pinnedMeal && !repeatedRecipeByMealType.has(slot.mealType)) {
+      repeatedRecipeByMealType.set(slot.mealType, chosen);
+    }
     if (slot.mealType === 'dinner') selectedDinnerRecipeIds.add(chosen.id);
     if (familyDinner) familyDinnerSlotsAssigned += 1;
 
@@ -752,6 +882,9 @@ export function buildPrimaryPlanCandidate(input: {
 
   if (remainingTrialMeals < planningCounts.maxTrialMeals) {
     rationale.add(`Capped trial meals at ${planningCounts.maxTrialMeals} for this generated week.`);
+  }
+  if ((input.overrides?.pinnedMeals?.length ?? 0) > 0) {
+    rationale.add(`Pinned ${(input.overrides?.pinnedMeals ?? []).length} meal slot(s) to requested weekdays.`);
   }
 
   const nearExpiryNames = input.snapshot.inventory
@@ -820,6 +953,21 @@ export function buildPrimaryPlanCandidate(input: {
       summary: candidatePlan.summary,
     } as MealPlanCandidateSummaryRecord,
   };
+}
+
+function findPinnedRecipeForPlanning(input: {
+  mealType: string;
+  recipeId: string;
+  recipes: MealRecipeRecord[];
+}): MealRecipeRecord | null {
+  const recipe = input.recipes.find((entry) => entry.id === input.recipeId) ?? null;
+  if (!recipe) {
+    return null;
+  }
+  if (recipe.status !== 'active') {
+    return null;
+  }
+  return recipe.mealType === input.mealType ? recipe : null;
 }
 
 export function buildCandidatePlanDocument(input: {

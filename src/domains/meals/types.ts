@@ -234,6 +234,7 @@ export type GroceryPlanSufficiencyStatus = 'have_enough' | 'have_some_need_to_bu
 
 export type GroceryPlanActionStatus =
   | 'purchased'
+  | 'in_cart'
   | 'skipped'
   | 'substituted'
   | 'confirmed'

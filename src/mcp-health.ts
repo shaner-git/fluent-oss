@@ -77,7 +77,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
     'health-today',
     'fluent://health/today',
     {
-      description: 'Today’s Health context including the planned session and logged workouts.',
+      description: 'Today’s Health context including the planned session and any lightweight completion signals already recorded.',
       icons: iconFor(origin),
       mimeType: 'application/json',
       title: 'Health Today Context',
@@ -137,7 +137,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
     'health-review-context',
     'fluent://health/review-context',
     {
-      description: 'This week’s Health review context including planned sessions, logged workouts, and any saved weekly review.',
+      description: 'This week’s Health review context including planned sessions, lightweight adherence signals, and any saved weekly review.',
       icons: iconFor(origin),
       mimeType: 'application/json',
       title: 'Health Review Context',
@@ -240,7 +240,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
     'health_get_today_context',
     {
       annotations: { idempotentHint: true, readOnlyHint: true },
-      description: 'Fetch today’s planned Health session and logged workouts.',
+      description: 'Fetch today’s planned Health session and any lightweight completion signals already recorded.',
       inputSchema: {
         date: z.string().optional(),
         view: readViewSchema,
@@ -262,7 +262,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
     'health_get_review_context',
     {
       annotations: { idempotentHint: true, readOnlyHint: true },
-      description: 'Fetch a weekly Health review context with planned sessions, logged workouts, and any saved review.',
+      description: 'Fetch a weekly Health review context with planned sessions, lightweight adherence signals, and any saved review.',
       inputSchema: {
         week_start: z.string().optional(),
         view: readViewSchema,

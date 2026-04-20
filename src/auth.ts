@@ -22,7 +22,10 @@ export interface FluentAuthProps {
   name?: string;
   oauthClientId?: string;
   oauthClientName?: string;
+  profileId?: string;
   scope?: string[];
+  tenantId?: string;
+  userId?: string;
 }
 
 const authContextStorage = new AsyncLocalStorage<FluentAuthProps>();

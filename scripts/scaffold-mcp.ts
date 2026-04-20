@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { LOCAL_TOKEN_ENV, OSS_TOKEN_ENV, readLocalTokenState } from '../src/local/auth';
 
-export type McpClient = 'claude' | 'codex';
+export type McpClient = 'claude' | 'codex' | 'openclaw';
 export type McpTrack = 'cloud' | 'oss';
 
 export interface ScaffoldOptions {
@@ -24,16 +24,26 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
 export function generateMcpConfig(options: ScaffoldOptions): Record<string, unknown> {
   const url = normalizeMcpUrl(options.baseUrl, options.track);
-  const server: Record<string, unknown> = {
-    type: 'http',
-    url,
-  };
+  const server: Record<string, unknown> =
+    options.client === 'openclaw'
+      ? {
+          transport: 'streamable-http',
+          url,
+        }
+      : {
+          type: 'http',
+          url,
+        };
 
   if (options.track === 'oss') {
     const token = resolveOssToken(options);
     server.headers = {
       Authorization: `Bearer ${token}`,
     };
+  }
+
+  if (options.client === 'openclaw') {
+    return server;
   }
 
   return {
@@ -48,7 +58,7 @@ function main(): void {
   const client = normalizeClient(args.client);
   const track = normalizeTrack(args.track);
   if (!client) {
-    throw new Error('Missing --client. Expected codex or claude.');
+    throw new Error('Missing --client. Expected codex, claude, or openclaw.');
   }
   if (!track) {
     throw new Error('Missing --track. Expected cloud or oss.');
@@ -79,7 +89,7 @@ function main(): void {
 }
 
 function normalizeClient(value: string | undefined): McpClient | null {
-  return value === 'codex' || value === 'claude' ? value : null;
+  return value === 'codex' || value === 'claude' || value === 'openclaw' ? value : null;
 }
 
 function normalizeTrack(value: string | undefined): McpTrack | null {
@@ -87,10 +97,13 @@ function normalizeTrack(value: string | undefined): McpTrack | null {
 }
 
 function normalizeMcpUrl(baseUrl: string | undefined, track: McpTrack): string {
-  const rawBase =
-    track === 'cloud'
-      ? baseUrl?.trim() || 'https://hosted-fluent.example.com'
-      : baseUrl?.trim() || DEFAULT_OSS_BASE_URL;
+  const explicitBaseUrl = baseUrl?.trim();
+  if (track === 'cloud' && !explicitBaseUrl) {
+    throw new Error(
+      'Missing --base-url for --track cloud. Fluent Cloud is not GA in the public OSS export, so pass the hosted base URL explicitly.',
+    );
+  }
+  const rawBase = explicitBaseUrl || DEFAULT_OSS_BASE_URL;
   const raw = rawBase.replace(/\/$/, '');
   return raw.endsWith('/mcp') ? raw : `${raw}/mcp`;
 }

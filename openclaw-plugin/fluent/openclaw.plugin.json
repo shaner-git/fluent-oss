@@ -1,0 +1,12 @@
+{
+  "id": "fluent",
+  "name": "Fluent",
+  "description": "Fluent skills for meals, health, style, and MCP setup guidance.",
+  "skills": [
+    "skills"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createFluentMcpServer } from '../mcp';
 import { runWithFluentAuthProps } from '../auth';
+import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../fluent-identity';
 import { localHealth, localProbe, createLocalRuntime, LOCAL_DEFAULT_HOST, LOCAL_DEFAULT_PORT } from './runtime';
 import { authorizeLocalBearer, defaultLocalScopes, LOCAL_AUTH_MODEL } from './auth';
 import { maybeHandleStyleImageRequest } from '../style-image-handler';
@@ -83,7 +84,9 @@ const server = createServer(async (req, res) => {
           oauthClientId: 'fluent-oss',
           oauthClientName: 'Fluent OSS',
           accessToken: tokenState.token,
+          profileId: FLUENT_OWNER_PROFILE_ID,
           scope: tokenState.scopes,
+          tenantId: FLUENT_PRIMARY_TENANT_ID,
         },
         async () => {
           await transport.handleRequest(req, res);

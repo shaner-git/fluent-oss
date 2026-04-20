@@ -303,35 +303,60 @@ export class StyleService {
     const payload = normalizeStyleItemInput(input.item);
     const itemId = asNullableString(payload.id) ?? `style-item:${crypto.randomUUID()}`;
     const before = await this.getItem(itemId);
+    const beforeProvenance = await this.getItemProvenance(itemId);
+    const hasField = (primaryKey: string, aliasKey?: string) => primaryKey in payload || (aliasKey ? aliasKey in payload : false);
+    const mergedString = (primaryKey: string, aliasKey: string | undefined, fallback: string | null) =>
+      hasField(primaryKey, aliasKey) ? asNullableString(payload[primaryKey] ?? (aliasKey ? payload[aliasKey] : undefined)) : fallback;
+    const mergedNumber = (primaryKey: string, aliasKey: string | undefined, fallback: number | null) =>
+      hasField(primaryKey, aliasKey)
+        ? asNullableNumber(payload[primaryKey] ?? (aliasKey ? payload[aliasKey] : undefined))
+        : fallback;
     const comparatorKey = inferStyleComparatorKey({
-      category: payload.category,
+      category: mergedString('category', undefined, before?.category ?? null),
       comparatorKey: payload.comparator_key ?? payload.comparatorKey,
-      name: payload.name,
+      name: mergedString('name', undefined, before?.name ?? null),
       profile: before?.profile?.raw ?? null,
-      subcategory: payload.subcategory,
+      subcategory: mergedString('subcategory', undefined, before?.subcategory ?? null),
       tags: before?.profile?.raw.tags ?? [],
     });
 
     await this.repository.upsertItem({
-      brand: asNullableString(payload.brand),
-      category: asNullableString(payload.category),
+      brand: mergedString('brand', undefined, before?.brand ?? null),
+      category: mergedString('category', undefined, before?.category ?? null),
       comparatorKey: comparatorKey === 'unknown' ? before?.comparatorKey ?? 'unknown' : comparatorKey,
-      colorFamily: asNullableString(payload.color_family ?? payload.colorFamily),
-      colorHex: asNullableString(payload.color_hex ?? payload.colorHex),
-      colorName: asNullableString(payload.color_name ?? payload.colorName),
-      formality: asNullableNumber(payload.formality),
+      colorFamily: mergedString('color_family', 'colorFamily', before?.colorFamily ?? null),
+      colorHex: mergedString('color_hex', 'colorHex', before?.colorHex ?? null),
+      colorName: mergedString('color_name', 'colorName', before?.colorName ?? null),
+      formality: mergedNumber('formality', undefined, before?.formality ?? null),
       id: itemId,
-      legacyItemId: asNullableNumber(payload.legacy_item_id ?? payload.legacyItemId),
-      name: asNullableString(payload.name),
-      size: asNullableString(payload.size),
+      legacyItemId: mergedNumber('legacy_item_id', 'legacyItemId', before?.legacyItemId ?? null),
+      name: mergedString('name', undefined, before?.name ?? null),
+      size: mergedString('size', undefined, before?.size ?? null),
       status: normalizeStyleItemStatus(payload.status, before?.status ?? 'active'),
-      subcategory: asNullableString(payload.subcategory),
+        subcategory: mergedString('subcategory', undefined, before?.subcategory ?? null),
     });
 
-    const fieldEvidenceJson = stringifyJson(parseJsonLike(payload.field_evidence ?? payload.fieldEvidence));
-    const technicalMetadataJson = stringifyJson(parseJsonLike(payload.technical_metadata ?? payload.technicalMetadata));
-    const sourceSnapshotJson = stringifyJson(input.sourceSnapshot ?? null);
-    if (fieldEvidenceJson !== null || technicalMetadataJson !== null || sourceSnapshotJson !== null) {
+    const hasFieldEvidenceInput = hasField('field_evidence', 'fieldEvidence');
+    const hasTechnicalMetadataInput = hasField('technical_metadata', 'technicalMetadata');
+    const hasSourceSnapshotInput = Object.prototype.hasOwnProperty.call(input, 'sourceSnapshot');
+    const nextFieldEvidence = hasFieldEvidenceInput
+      ? parseJsonLike(payload.field_evidence ?? payload.fieldEvidence)
+      : beforeProvenance?.fieldEvidence;
+    const nextTechnicalMetadata = hasTechnicalMetadataInput
+      ? parseJsonLike(payload.technical_metadata ?? payload.technicalMetadata)
+      : beforeProvenance?.technicalMetadata;
+    const nextSourceSnapshot = hasSourceSnapshotInput ? input.sourceSnapshot : beforeProvenance?.sourceSnapshot;
+    const fieldEvidenceJson = stringifyJson(nextFieldEvidence);
+    const technicalMetadataJson = stringifyJson(nextTechnicalMetadata);
+    const sourceSnapshotJson = stringifyJson(nextSourceSnapshot);
+    if (
+      hasFieldEvidenceInput ||
+      hasTechnicalMetadataInput ||
+      hasSourceSnapshotInput ||
+      fieldEvidenceJson !== null ||
+      technicalMetadataJson !== null ||
+      sourceSnapshotJson !== null
+    ) {
       await this.repository.upsertProvenance({
         fieldEvidenceJson,
         itemId,
@@ -346,12 +371,12 @@ export class StyleService {
         legacyProfileId: null,
         method: 'heuristic_bootstrap',
         rawJson: JSON.stringify(
-          deriveBaselineStyleItemProfile({
-            category: payload.category,
+            deriveBaselineStyleItemProfile({
+            category: mergedString('category', undefined, before?.category ?? null),
             comparatorKey: comparatorKey === 'unknown' ? before?.comparatorKey ?? 'unknown' : comparatorKey,
-            formality: payload.formality,
-            name: payload.name,
-            subcategory: payload.subcategory,
+            formality: mergedNumber('formality', undefined, before?.formality ?? null),
+            name: mergedString('name', undefined, before?.name ?? null),
+            subcategory: mergedString('subcategory', undefined, before?.subcategory ?? null),
           }),
         ),
         source: 'style_auto_bootstrap',
@@ -890,6 +915,12 @@ export class StyleService {
         return null;
       })
       .filter((entry): entry is { item: StyleItemRecord; reasons: string[] } => Boolean(entry))
+      .sort(
+        (left, right) =>
+          Number(right.item.status === 'active') - Number(left.item.status === 'active') ||
+          left.item.name?.localeCompare(right.item.name ?? '') ||
+          0,
+      )
       .slice(0, 4)
       .map(({ item, reasons }) => {
         registerAnalysisItem(item);
@@ -914,6 +945,12 @@ export class StyleService {
         return null;
       })
       .filter((entry): entry is { item: StyleItemRecord; reasons: string[] } => Boolean(entry))
+      .sort(
+        (left, right) =>
+          Number(right.item.status === 'active') - Number(left.item.status === 'active') ||
+          left.item.name?.localeCompare(right.item.name ?? '') ||
+          0,
+      )
       .slice(0, 4)
       .map(({ item, reasons }) => {
         registerAnalysisItem(item);

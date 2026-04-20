@@ -118,6 +118,7 @@ export interface UpsertGroceryPlanActionInput {
   itemKey: string;
   actionStatus:
     | 'purchased'
+    | 'in_cart'
     | 'skipped'
     | 'substituted'
     | 'confirmed'
@@ -208,6 +209,11 @@ export interface GenerateMealPlanOverrides {
   includeRecipeIds?: string[] | null;
   excludeRecipeIds?: string[] | null;
   prioritizeInventory?: boolean | null;
+  pinnedMeals?: Array<{
+    date: string;
+    mealType: CalendarMealType;
+    recipeId: string;
+  }> | null;
 }
 
 export type CalendarAvailability = 'available' | 'unavailable' | 'unchecked';

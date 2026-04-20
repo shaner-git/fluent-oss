@@ -22,6 +22,7 @@ export const iconFor = (origin: string) => [
 export function toolResult(
   data: unknown,
   options?: {
+    meta?: Record<string, unknown>;
     structuredContent?: unknown;
     textData?: unknown;
   },
@@ -34,6 +35,7 @@ export function toolResult(
   const textData = options?.textData ?? summarizeForToolText(data);
 
   return {
+    ...(options?.meta ? { _meta: options.meta } : {}),
     content: [
       {
         type: 'text' as const,

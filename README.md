@@ -8,10 +8,18 @@ Fluent OSS is a self-hosted MCP server for:
 
 It is the open-source self-hosted track of Fluent. If you want Fluent without running infrastructure yourself, Hosted Fluent is the managed commercial option. Both tracks share the same MCP contract.
 
+## Public Release
+
+- GitHub release: [Fluent OSS v0.1.0](https://github.com/shaner-git/fluent-oss/releases/tag/v0.1.0)
+- release-pinned quickstart: [docs/fluent-oss.md at `v0.1.0`](https://github.com/shaner-git/fluent-oss/blob/v0.1.0/docs/fluent-oss.md)
+- release-pinned docs bucket: [docs/oss at `v0.1.0`](https://github.com/shaner-git/fluent-oss/tree/v0.1.0/docs/oss)
+- supported direct runtime: Node.js `22.x`
+- supported minimum contract version: `2026-04-13.fluent-core-v1.34`
+
 ## Who This Is For
 
 - people who want Fluent running on their own machine, NAS, VPS, or homelab
-- Codex and Claude users who want an MCP server they control
+- Codex, Claude, and OpenClaw users who want an MCP server they control
 - power users who are comfortable with a local token, local storage, and a small amount of setup
 
 If you want the easiest path, Hosted Fluent will be the simpler choice. If you want control, local data, and self-hosting flexibility, start here.
@@ -20,7 +28,7 @@ If you want the easiest path, Hosted Fluent will be the simpler choice. If you w
 
 - a supported single-user OSS runtime
 - Docker and direct Node.js runtime options
-- MCP config generation for Codex and Claude
+- MCP config generation for Codex, Claude, and OpenClaw
 - snapshot backup and restore tooling
 - shared contract and architecture docs
 - an experimental Postgres + S3 backend for advanced self-hosting
@@ -31,6 +39,7 @@ If you want the easiest path, Hosted Fluent will be the simpler choice. If you w
 - bearer-token auth instead of OAuth
 - Postgres + S3 is experimental
 - this repo focuses on self-hosting, not Hosted billing or onboarding
+- `npm run scaffold:mcp -- --track cloud` requires an explicit `--base-url` in this public repo until Fluent Cloud is GA
 
 ## Hosted Vs OSS
 
@@ -41,9 +50,9 @@ If you want the easiest path, Hosted Fluent will be the simpler choice. If you w
 
 ## Prerequisites
 
-- Node.js 20+ if you want to run Fluent OSS directly
+- Node.js 22.x if you want to run Fluent OSS directly
 - Docker Desktop or Docker Engine if you prefer the container path
-- an MCP client such as Codex or Claude Desktop
+- an MCP client such as Codex, Claude Desktop, or OpenClaw
 
 By default, Fluent OSS:
 
@@ -97,6 +106,14 @@ For Claude:
 ```bash
 npm run scaffold:mcp -- --client claude --track oss --base-url http://127.0.0.1:8788
 ```
+
+For OpenClaw:
+
+```bash
+npm run scaffold:mcp -- --client openclaw --track oss --base-url http://127.0.0.1:8788
+```
+
+For OpenClaw, the scaffold output is the native `mcp.servers.fluent` JSON block you should register with `openclaw mcp set fluent ...`.
 
 The scaffold command automatically uses your local OSS token unless you override it with `--token` or `--root`.
 
@@ -156,8 +173,14 @@ Then see the operator guide:
 
 ## Docs
 
+- changelog: [CHANGELOG.md](./CHANGELOG.md)
 - OSS operator docs: [docs/oss/README.md](./docs/oss/README.md)
 - OSS operator guide: [docs/fluent-oss.md](./docs/fluent-oss.md)
+- known limitations: [docs/oss/fluent-oss-known-limitations.md](./docs/oss/fluent-oss-known-limitations.md)
+- setup matrix: [docs/oss/fluent-oss-setup-matrix.md](./docs/oss/fluent-oss-setup-matrix.md)
+- upgrade notes: [docs/oss/fluent-oss-upgrade-notes.md](./docs/oss/fluent-oss-upgrade-notes.md)
+- Docker notes: [docs/oss/fluent-oss-docker-notes.md](./docs/oss/fluent-oss-docker-notes.md)
+- GitHub release checklist: [docs/oss/fluent-oss-github-release-checklist.md](./docs/oss/fluent-oss-github-release-checklist.md)
 - shared contract and architecture docs: [docs/shared/README.md](./docs/shared/README.md)
 - release gate: [docs/fluent-release-gate.md](./docs/fluent-release-gate.md)
 

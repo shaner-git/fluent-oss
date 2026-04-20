@@ -26,11 +26,17 @@ async function main() {
   await preservesProfileMerges();
   await preservesRichStyleProfilePreferences();
   await storesProvenanceOutsideCanonicalItemReads();
+  await preservesPartialItemUpdatesWithoutDroppingExistingFields();
   await summarizesOnboardingReadyState();
   await tracksEvidenceGapCoverage();
   await treatsLegacyProfilesAsUsableEvidence();
   await filtersActionableEvidenceGaps();
   await prioritizesDescriptorBacklogByImpactAndPhotoSupport();
+  await preservesPartialItemUpdatesWithoutFieldLoss();
+  await preservesStatusTransitionsAcrossExistingItems();
+  await preservesRetiredItemsOutsideActiveWardrobeAnalysis();
+  await preservesArchivedItemsOutsideActiveWardrobeAnalysis();
+  await surfacesInactiveItemsAcrossContextEvidenceAndProvenanceReads();
   await analyzesWardrobeFromDerivedSignals();
   await subclustersRedundancyByRoleIntent();
   await bootstrapsProfilesForNewItems();
@@ -44,6 +50,14 @@ async function main() {
   await backfillsLegacyRelativePhotoPathsFromMountedRoot();
   await deliversOwnedStyleImagesFromLocalRuntime();
   await prefersDeliverablePhotosInVisualBundles();
+  await respectsVisualBundleComparatorToggleAndRequestedItemUnion();
+  await prioritizesRequestedItemsBeforeComparatorAssetsWhenBundlesAreCapped();
+  await keepsDescriptorBacklogPriorityOrderingStableAcrossSignals();
+  await keepsDescriptorBacklogFocusBucketsSeparated();
+  await keepsWardrobeFocusOutputsStableAcrossViews();
+  await dedupesBuyNextCandidatesAcrossGapAndBridgeSignals();
+  await suppressesSignedFallbacksInAuthenticatedOnlyVisualBundles();
+  await dedupesVisualBundleWarningsAcrossMissingCandidateAndMissingItems();
   await authenticatesHostedStyleImages();
 }
 
@@ -446,6 +460,373 @@ async function tracksEvidenceGapCoverage() {
     assert.equal(context.stylistDescriptorCoverage, 1);
     assert.equal(context.usableProfileCoverage, 1);
     assert.equal(context.evidenceGapCount, 0);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function preservesPartialItemUpdatesWithoutDroppingExistingFields() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:partial-update-boot',
+        brand: 'Red Wing',
+        category: 'SHOE',
+        color_family: 'brown',
+        formality: 3,
+        name: 'Iron Ranger',
+        size: '9.5',
+        subcategory: 'Boot',
+      },
+      provenance,
+    });
+
+    const updated = await service.upsertItem({
+      item: {
+        id: 'style-item:partial-update-boot',
+        status: 'retired',
+      },
+      provenance,
+    });
+
+    assert.equal(updated.status, 'retired');
+    assert.equal(updated.name, 'Iron Ranger');
+    assert.equal(updated.brand, 'Red Wing');
+    assert.equal(updated.category, 'SHOE');
+    assert.equal(updated.subcategory, 'Boot');
+    assert.equal(updated.size, '9.5');
+    assert.equal(updated.formality, 3);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function preservesPartialItemUpdatesWithoutFieldLoss() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:partial-update-shoe',
+        brand: 'Paraboot',
+        category: 'SHOE',
+        name: 'Michael',
+        subcategory: 'Derby',
+        color_family: 'brown',
+        formality: 3,
+        size: '9',
+      },
+      provenance,
+    });
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:partial-update-shoe',
+        status: 'retired',
+      },
+      provenance,
+    });
+
+    let item = await service.getItem('style-item:partial-update-shoe');
+    assert(item);
+    assert.equal(item.brand, 'Paraboot');
+    assert.equal(item.category, 'SHOE');
+    assert.equal(item.name, 'Michael');
+    assert.equal(item.subcategory, 'Derby');
+    assert.equal(item.colorFamily, 'brown');
+    assert.equal(item.formality, 3);
+    assert.equal(item.size, '9');
+    assert.equal(item.status, 'retired');
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:partial-update-shoe',
+        color_family: 'black',
+      },
+      provenance,
+    });
+
+    item = await service.getItem('style-item:partial-update-shoe');
+    assert(item);
+    assert.equal(item.brand, 'Paraboot');
+    assert.equal(item.category, 'SHOE');
+    assert.equal(item.name, 'Michael');
+    assert.equal(item.subcategory, 'Derby');
+    assert.equal(item.colorFamily, 'black');
+    assert.equal(item.formality, 3);
+    assert.equal(item.size, '9');
+    assert.equal(item.status, 'retired');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function preservesStatusTransitionsAcrossExistingItems() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:status-transition-boot',
+        brand: 'Red Wing',
+        category: 'SHOE',
+        name: 'Status Transition Boot',
+        subcategory: 'Boot',
+        color_family: 'brown',
+        formality: 3,
+      },
+      provenance,
+    });
+
+    await service.upsertItem({
+      item: { id: 'style-item:status-transition-boot', status: 'archived' },
+      provenance,
+    });
+    assert.equal((await service.getItem('style-item:status-transition-boot'))?.status, 'archived');
+
+    await service.upsertItem({
+      item: { id: 'style-item:status-transition-boot', status: 'active' },
+      provenance,
+    });
+    assert.equal((await service.getItem('style-item:status-transition-boot'))?.status, 'active');
+
+    await service.upsertItem({
+      item: { id: 'style-item:status-transition-boot', status: 'retired' },
+      provenance,
+    });
+    const item = await service.getItem('style-item:status-transition-boot');
+    assert(item);
+    assert.equal(item.status, 'retired');
+    assert.equal(item.name, 'Status Transition Boot');
+    assert.equal(item.category, 'SHOE');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function preservesRetiredItemsOutsideActiveWardrobeAnalysis() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:retired-trouser',
+        brand: 'Test',
+        category: 'BOTTOM',
+        name: 'Navy Trouser',
+        subcategory: 'Trouser',
+        color_family: 'navy',
+        formality: 3,
+      },
+      provenance,
+    });
+    await service.upsertItem({
+      item: {
+        id: 'style-item:retired-oxford',
+        brand: 'Test',
+        category: 'TOP',
+        name: 'White Oxford',
+        subcategory: 'OCBD',
+        color_family: 'white',
+        formality: 3,
+      },
+      provenance,
+    });
+    await service.upsertItem({
+      item: {
+        id: 'style-item:retired-boot',
+        brand: 'Red Wing',
+        category: 'SHOE',
+        name: 'Iron Ranger',
+        subcategory: 'Boot',
+        color_family: 'brown',
+        formality: 3,
+        status: 'retired',
+      },
+      provenance,
+    });
+    await service.upsertItem({
+      item: {
+        id: 'style-item:archived-loafer',
+        brand: 'Test',
+        category: 'SHOE',
+        name: 'Brown Loafer',
+        subcategory: 'Loafer',
+        color_family: 'brown',
+        formality: 3,
+      },
+      provenance,
+    });
+    await service.upsertItem({
+      item: {
+        id: 'style-item:archived-loafer',
+        status: 'archived',
+      },
+      provenance,
+    });
+
+    const retiredBoot = await service.getItem('style-item:retired-boot');
+    assert(retiredBoot);
+    assert.equal(retiredBoot.status, 'retired');
+    const archivedLoafer = await service.getItem('style-item:archived-loafer');
+    assert(archivedLoafer);
+    assert.equal(archivedLoafer.status, 'archived');
+
+    const analysis = await service.analyzeWardrobe({ focus: 'all' });
+    assert.equal(analysis.itemsById['style-item:retired-boot']?.status, undefined);
+    assert.equal(analysis.itemsById['style-item:archived-loafer']?.status, undefined);
+    assert.equal(analysis.gapLanes.some((entry) => entry.lane === 'loafer'), true);
+
+    const smartCasualCoverage = analysis.occasionCoverage.find((entry) => entry.occasion === 'smart_casual');
+    assert.equal(smartCasualCoverage?.coverage, 'partial');
+    assert.deepEqual(smartCasualCoverage?.itemIds, ['style-item:retired-trouser', 'style-item:retired-oxford']);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function preservesArchivedItemsOutsideActiveWardrobeAnalysis() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:archived-trouser',
+        brand: 'Test',
+        category: 'BOTTOM',
+        name: 'Archived Trouser',
+        subcategory: 'Trouser',
+        color_family: 'navy',
+        formality: 3,
+      },
+      provenance,
+    });
+    await service.upsertItem({
+      item: {
+        id: 'style-item:archived-oxford',
+        brand: 'Test',
+        category: 'TOP',
+        name: 'Archived Oxford',
+        subcategory: 'OCBD',
+        color_family: 'white',
+        formality: 3,
+      },
+      provenance,
+    });
+    await service.upsertItem({
+      item: {
+        id: 'style-item:archived-loafer',
+        brand: 'Alden',
+        category: 'SHOE',
+        name: 'Archived Loafer',
+        subcategory: 'Loafer',
+        color_family: 'brown',
+        formality: 3,
+        status: 'archived',
+      },
+      provenance,
+    });
+
+    const archivedLoafer = await service.getItem('style-item:archived-loafer');
+    assert(archivedLoafer);
+    assert.equal(archivedLoafer.status, 'archived');
+
+    const analysis = await service.analyzeWardrobe({ focus: 'all' });
+    assert.equal(analysis.itemsById['style-item:archived-loafer']?.status, undefined);
+    assert.equal(analysis.gapLanes.some((entry) => entry.lane === 'loafer'), true);
+
+    const smartCasualCoverage = analysis.occasionCoverage.find((entry) => entry.occasion === 'smart_casual');
+    assert.equal(smartCasualCoverage?.coverage, 'partial');
+    assert.deepEqual(smartCasualCoverage?.itemIds, ['style-item:archived-trouser', 'style-item:archived-oxford']);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function surfacesInactiveItemsAcrossContextEvidenceAndProvenanceReads() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:inactive-surface-trouser',
+        brand: 'Test',
+        category: 'BOTTOM',
+        name: 'Inactive Surface Trouser',
+        subcategory: 'Trouser',
+        color_family: 'navy',
+        formality: 3,
+      },
+      provenance,
+    });
+    await service.upsertItem({
+      item: {
+        id: 'style-item:inactive-surface-boot',
+        brand: 'Red Wing',
+        category: 'SHOE',
+        name: 'Inactive Surface Boot',
+        subcategory: 'Boot',
+        color_family: 'brown',
+        formality: 3,
+        status: 'retired',
+        technical_metadata: { season: 'fall' },
+      },
+      provenance,
+      sourceSnapshot: { imported_from: 'closet-test', status_note: 'retired' },
+    });
+    await service.upsertItem({
+      item: {
+        id: 'style-item:inactive-surface-loafer',
+        brand: 'Alden',
+        category: 'SHOE',
+        name: 'Inactive Surface Loafer',
+        subcategory: 'Loafer',
+        color_family: 'brown',
+        formality: 4,
+        status: 'archived',
+        field_evidence: { status: { source: 'user', value: 'archived' } },
+      },
+      provenance,
+      sourceSnapshot: { imported_from: 'closet-test', status_note: 'archived' },
+    });
+
+    const listedItems = await service.listItems();
+    assert.equal(listedItems.find((item) => item.id === 'style-item:inactive-surface-trouser')?.status, 'active');
+    assert.equal(listedItems.find((item) => item.id === 'style-item:inactive-surface-boot')?.status, 'retired');
+    assert.equal(listedItems.find((item) => item.id === 'style-item:inactive-surface-loafer')?.status, 'archived');
+
+    const context = await service.getContext();
+    assert.equal(context.itemCount, 3);
+    assert.equal(context.categoryBreakdown.find((entry) => entry.category === 'SHOE')?.count, 2);
+    assert.equal(context.categoryBreakdown.find((entry) => entry.category === 'BOTTOM')?.count, 1);
+    assert.equal(context.colorBreakdown.find((entry) => entry.colorFamily === 'brown')?.count, 2);
+
+    const gaps = await service.listEvidenceGaps({ priorityFilter: 'all' });
+    assert.equal(gaps.items.some((entry) => entry.itemId === 'style-item:inactive-surface-trouser'), true);
+    assert.equal(gaps.items.some((entry) => entry.itemId === 'style-item:inactive-surface-boot'), true);
+    assert.equal(gaps.items.some((entry) => entry.itemId === 'style-item:inactive-surface-loafer'), true);
+
+    const retiredProvenance = await service.getItemProvenance('style-item:inactive-surface-boot');
+    assert.deepEqual(retiredProvenance?.technicalMetadata, { season: 'fall' });
+    assert.deepEqual(retiredProvenance?.sourceSnapshot, { imported_from: 'closet-test', status_note: 'retired' });
+
+    const archivedProvenance = await service.getItemProvenance('style-item:inactive-surface-loafer');
+    assert.deepEqual(archivedProvenance?.fieldEvidence, { status: { source: 'user', value: 'archived' } });
+    assert.deepEqual(archivedProvenance?.sourceSnapshot, { imported_from: 'closet-test', status_note: 'archived' });
   } finally {
     runtime.sqliteDb.close();
   }
@@ -1594,7 +1975,7 @@ async function backfillsLegacyRelativePhotoPathsFromMountedRoot() {
 async function authenticatesHostedStyleImages() {
   const runtime = createTempRuntime();
   try {
-    const hostedEnv = createHostedStyleEnv(runtime, 'https://hosted-fluent.example.com');
+    const hostedEnv = createHostedStyleEnv(runtime, 'https://cloud.example.test');
     const service = new StyleService(hostedEnv.DB, {
       artifacts: hostedEnv.ARTIFACTS,
       imageDeliverySecret: hostedEnv.IMAGE_DELIVERY_SECRET,
@@ -1760,6 +2141,599 @@ async function prefersDeliverablePhotosInVisualBundles() {
     assert.equal(bundle.assets[0]?.authenticatedOriginalUrl?.includes('/images/style/style-photo%3Atest-bundle-photo-choice-fit/original'), true);
     assert.equal(bundle.assets[0]?.fallbackSignedOriginalUrl?.includes('sig='), true);
     assert.equal(bundle.evidenceWarnings.includes('Bundle Photo Choice Sneaker does not have an owned Fluent image delivery route yet.'), false);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function respectsVisualBundleComparatorToggleAndRequestedItemUnion() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:bundle-requested-loafer',
+        brand: 'Alden',
+        category: 'SHOE',
+        name: 'Requested Loafer',
+        subcategory: 'Loafer',
+        color_family: 'brown',
+        formality: 4,
+      },
+      provenance,
+    });
+    await service.upsertItemPhotos({
+      itemId: 'style-item:bundle-requested-loafer',
+      photos: [
+        {
+          data_url:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+          id: 'style-photo:bundle-requested-loafer-1',
+          is_primary: true,
+          view: 'front',
+        },
+      ],
+      provenance,
+    });
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:bundle-comparator-loafer',
+        brand: 'Carmina',
+        category: 'SHOE',
+        name: 'Comparator Loafer',
+        subcategory: 'Loafer',
+        color_family: 'brown',
+        formality: 4,
+      },
+      provenance,
+    });
+    await service.upsertItemPhotos({
+      itemId: 'style-item:bundle-comparator-loafer',
+      photos: [
+        {
+          data_url:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+          id: 'style-photo:bundle-comparator-loafer-1',
+          is_primary: true,
+          view: 'front',
+        },
+      ],
+      provenance,
+    });
+
+    const noComparators = await service.getVisualBundle({
+      candidate: {
+        category: 'SHOE',
+        colorFamily: 'brown',
+        comparatorKey: 'loafer',
+        formality: 4,
+        imageUrl: 'https://example.com/requested-only-loafer.jpg',
+        name: 'Requested Only Loafer',
+        subcategory: 'Loafer',
+      },
+      includeComparators: false,
+      itemIds: ['style-item:bundle-requested-loafer'],
+      maxImages: 4,
+    });
+    assert.equal(noComparators.assets.length, 2);
+    assert.deepEqual(
+      noComparators.assets.map((asset) => asset.role),
+      ['candidate', 'requested_item'],
+    );
+
+    const withComparators = await service.getVisualBundle({
+      candidate: {
+        category: 'SHOE',
+        colorFamily: 'brown',
+        comparatorKey: 'loafer',
+        formality: 4,
+        imageUrl: 'https://example.com/requested-only-loafer.jpg',
+        name: 'Requested Only Loafer',
+        subcategory: 'Loafer',
+      },
+      includeComparators: true,
+      itemIds: ['style-item:bundle-requested-loafer'],
+      maxImages: 4,
+    });
+    assert.equal(withComparators.assets.length, 3);
+    assert.deepEqual(
+      withComparators.assets.map((asset) => asset.role),
+      ['candidate', 'requested_item', 'exact_comparator'],
+    );
+    assert.equal(
+      withComparators.assets.filter((asset) => asset.itemId === 'style-item:bundle-requested-loafer').length,
+      1,
+    );
+    assert.equal(
+      withComparators.assets.some((asset) => asset.itemId === 'style-item:bundle-comparator-loafer'),
+      true,
+    );
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function suppressesSignedFallbacksInAuthenticatedOnlyVisualBundles() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:auth-only-bundle-boot',
+        brand: 'Red Wing',
+        category: 'SHOE',
+        name: 'Auth Only Bundle Boot',
+        subcategory: 'Boot',
+        color_family: 'brown',
+        formality: 3,
+      },
+      provenance,
+    });
+    await service.upsertItemPhotos({
+      itemId: 'style-item:auth-only-bundle-boot',
+      photos: [
+        {
+          data_url:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+          id: 'style-photo:auth-only-bundle-boot-1',
+          is_primary: true,
+          view: 'front',
+        },
+      ],
+      provenance,
+    });
+
+    const bundle = await service.getVisualBundle({
+      deliveryMode: 'authenticated_only',
+      itemIds: ['style-item:auth-only-bundle-boot'],
+      maxImages: 2,
+    });
+    assert.equal(bundle.deliveryMode, 'authenticated_only');
+    assert.equal(bundle.assets.length, 1);
+    assert.equal(bundle.assets[0]?.role, 'requested_item');
+    assert.equal(typeof bundle.assets[0]?.authenticatedOriginalUrl, 'string');
+    assert.equal(bundle.assets[0]?.authenticatedOriginalUrl?.includes('/images/style/'), true);
+    assert.equal(bundle.assets[0]?.fallbackSignedOriginalUrl, null);
+    assert.equal(bundle.assets[0]?.fallbackExpiresAt, null);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function prioritizesRequestedItemsBeforeComparatorAssetsWhenBundlesAreCapped() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:capped-requested-loafer',
+        brand: 'Alden',
+        category: 'SHOE',
+        name: 'Capped Requested Loafer',
+        subcategory: 'Loafer',
+        color_family: 'brown',
+        formality: 4,
+      },
+      provenance,
+    });
+    await service.upsertItemPhotos({
+      itemId: 'style-item:capped-requested-loafer',
+      photos: [
+        {
+          data_url:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+          id: 'style-photo:capped-requested-loafer-1',
+          is_primary: true,
+          view: 'front',
+        },
+      ],
+      provenance,
+    });
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:capped-comparator-loafer',
+        brand: 'Carmina',
+        category: 'SHOE',
+        name: 'Capped Comparator Loafer',
+        subcategory: 'Loafer',
+        color_family: 'brown',
+        formality: 4,
+      },
+      provenance,
+    });
+    await service.upsertItemPhotos({
+      itemId: 'style-item:capped-comparator-loafer',
+      photos: [
+        {
+          data_url:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+          id: 'style-photo:capped-comparator-loafer-1',
+          is_primary: true,
+          view: 'front',
+        },
+      ],
+      provenance,
+    });
+
+    const capped = await service.getVisualBundle({
+      candidate: {
+        category: 'SHOE',
+        colorFamily: 'brown',
+        comparatorKey: 'loafer',
+        formality: 4,
+        imageUrl: 'https://example.com/capped-loafer.jpg',
+        name: 'Capped Candidate Loafer',
+        subcategory: 'Loafer',
+      },
+      includeComparators: true,
+      itemIds: ['style-item:capped-requested-loafer'],
+      maxImages: 2,
+    });
+    assert.deepEqual(
+      capped.assets.map((asset) => asset.role),
+      ['candidate', 'requested_item'],
+    );
+    assert.equal(capped.assets.some((asset) => asset.itemId === 'style-item:capped-comparator-loafer'), false);
+
+    const expanded = await service.getVisualBundle({
+      candidate: {
+        category: 'SHOE',
+        colorFamily: 'brown',
+        comparatorKey: 'loafer',
+        formality: 4,
+        imageUrl: 'https://example.com/capped-loafer.jpg',
+        name: 'Capped Candidate Loafer',
+        subcategory: 'Loafer',
+      },
+      includeComparators: true,
+      itemIds: ['style-item:capped-requested-loafer'],
+      maxImages: 3,
+    });
+    assert.deepEqual(
+      expanded.assets.map((asset) => asset.role),
+      ['candidate', 'requested_item', 'exact_comparator'],
+    );
+    assert.equal(expanded.assets[2]?.itemId, 'style-item:capped-comparator-loafer');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function dedupesVisualBundleWarningsAcrossMissingCandidateAndMissingItems() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:no-photo-loafer',
+        brand: 'Test',
+        category: 'SHOE',
+        name: 'No Photo Loafer',
+        subcategory: 'Loafer',
+        color_family: 'brown',
+        formality: 4,
+      },
+      provenance,
+    });
+
+    const bundle = await service.getVisualBundle({
+      candidate: {
+        category: 'SHOE',
+        colorFamily: 'brown',
+        comparatorKey: 'loafer',
+        formality: 4,
+        name: 'No Image Candidate',
+        subcategory: 'Loafer',
+      },
+      includeComparators: true,
+      itemIds: ['style-item:missing-bundle-item', 'style-item:missing-bundle-item'],
+      maxImages: 4,
+    });
+
+    assert.equal(bundle.assets.length, 0);
+    assert.equal(
+      bundle.evidenceWarnings.includes('Candidate did not include an image, so the visual bundle cannot inspect it directly.'),
+      true,
+    );
+    assert.equal(
+      bundle.evidenceWarnings.includes('Item style-item:missing-bundle-item is not present in the current closet state.'),
+      true,
+    );
+    assert.equal(bundle.evidenceWarnings.includes('No Photo Loafer has no saved Style photo.'), true);
+    assert.equal(
+      bundle.evidenceWarnings.filter((warning) => warning === 'Item style-item:missing-bundle-item is not present in the current closet state.').length,
+      1,
+    );
+    assert.equal(
+      bundle.evidenceWarnings.filter((warning) => warning === 'No Photo Loafer has no saved Style photo.').length,
+      1,
+    );
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function keepsDescriptorBacklogPriorityOrderingStableAcrossSignals() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    for (const [id, name] of [
+      ['style-item:rank-tee-1', 'Rank Tee 1'],
+      ['style-item:rank-tee-2', 'Rank Tee 2'],
+      ['style-item:rank-tee-3', 'Rank Tee 3'],
+      ['style-item:rank-tee-4', 'Rank Tee 4'],
+    ] as const) {
+      await service.upsertItem({
+        item: {
+          id,
+          brand: 'Test',
+          category: 'TOP',
+          name,
+          subcategory: 'T-Shirt',
+          color_family: 'black',
+          formality: 1,
+        },
+        provenance,
+      });
+      await service.upsertItemPhotos({
+        itemId: id,
+        photos: [
+          {
+            data_url:
+              'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+            id: `style-photo:${id}-fit`,
+            is_fit: true,
+            is_primary: true,
+            view: 'fit_front',
+          },
+        ],
+        provenance,
+      });
+      await service.upsertItemProfile({
+        itemId: id,
+        profile: {
+          bestOccasions: ['casual'],
+          dressCode: { min: 1, max: 2 },
+          itemType: 'tee',
+          styleRole: 'workhorse',
+          tags: ['tee'],
+        },
+        provenance,
+        source: 'test',
+      });
+    }
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:rank-trouser',
+        brand: 'Test',
+        category: 'BOTTOM',
+        name: 'Rank Trouser',
+        subcategory: 'Trouser',
+        color_family: 'navy',
+        formality: 3,
+      },
+      provenance,
+    });
+    await service.upsertItemPhotos({
+      itemId: 'style-item:rank-trouser',
+      photos: [
+        {
+          data_url:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+          id: 'style-photo:rank-trouser-fit',
+          is_fit: true,
+          is_primary: true,
+          view: 'fit_front',
+        },
+      ],
+      provenance,
+    });
+    await service.upsertItemProfile({
+      itemId: 'style-item:rank-trouser',
+      profile: {
+        dressCode: { min: 2, max: 4 },
+        itemType: 'trouser',
+        tags: ['trouser'],
+      },
+      provenance,
+      source: 'test',
+    });
+
+    const backlog = await service.listDescriptorBacklog({ focus: 'priority', maxItems: 10 });
+    assert.equal(backlog.entries.length > 0, true);
+    assert.equal(backlog.entries[0]?.itemId.startsWith('style-item:rank-tee-'), true);
+    assert.equal(backlog.entries[0]?.priority, 'high');
+    const trouserEntry = backlog.entries.find((entry) => entry.itemId === 'style-item:rank-trouser');
+    assert.equal(Boolean(trouserEntry), true);
+    assert.equal((trouserEntry?.sourceSignals.includes('bridge_anchor') ?? false), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function keepsDescriptorBacklogFocusBucketsSeparated() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:focus-blocked-trouser',
+        brand: 'Test',
+        category: 'BOTTOM',
+        name: 'Focus Blocked Trouser',
+        subcategory: 'Trouser',
+        color_family: 'navy',
+        formality: 3,
+      },
+      provenance,
+    });
+    await service.upsertItemProfile({
+      itemId: 'style-item:focus-blocked-trouser',
+      profile: {
+        dressCode: { min: 2, max: 4 },
+        itemType: 'trouser',
+        tags: ['trouser'],
+      },
+      provenance,
+      source: 'test',
+    });
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:focus-priority-tee',
+        brand: 'Test',
+        category: 'TOP',
+        name: 'Focus Priority Tee',
+        subcategory: 'T-Shirt',
+        color_family: 'white',
+        formality: 1,
+      },
+      provenance,
+    });
+    await service.upsertItemPhotos({
+      itemId: 'style-item:focus-priority-tee',
+      photos: [
+        {
+          data_url:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+          id: 'style-photo:focus-priority-tee-fit',
+          is_fit: true,
+          is_primary: true,
+          view: 'fit_front',
+        },
+      ],
+      provenance,
+    });
+    await service.upsertItemProfile({
+      itemId: 'style-item:focus-priority-tee',
+      profile: {
+        bestOccasions: ['casual'],
+        dressCode: { min: 1, max: 2 },
+        itemType: 'tee',
+        tags: ['tee'],
+      },
+      provenance,
+      source: 'test',
+    });
+
+    const priority = await service.listDescriptorBacklog({ focus: 'priority', maxItems: 10 });
+    assert.equal(priority.entries.some((entry) => entry.blockedByPhoto), false);
+    assert.equal(priority.entries.some((entry) => entry.itemId === 'style-item:focus-priority-tee'), true);
+    assert.equal(priority.entries.some((entry) => entry.itemId === 'style-item:focus-blocked-trouser'), false);
+
+    const blocked = await service.listDescriptorBacklog({ focus: 'blocked', maxItems: 10 });
+    assert.equal(blocked.entries.every((entry) => entry.blockedByPhoto), true);
+    assert.equal(blocked.entries.some((entry) => entry.itemId === 'style-item:focus-blocked-trouser'), true);
+    assert.equal(blocked.entries.some((entry) => entry.itemId === 'style-item:focus-priority-tee'), false);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function keepsWardrobeFocusOutputsStableAcrossViews() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    for (const item of [
+      { id: 'style-item:focus-tee-1', category: 'TOP', name: 'Focus Tee 1', subcategory: 'T-Shirt', color_family: 'white', formality: 1 },
+      { id: 'style-item:focus-tee-2', category: 'TOP', name: 'Focus Tee 2', subcategory: 'T-Shirt', color_family: 'white', formality: 1 },
+      { id: 'style-item:focus-tee-3', category: 'TOP', name: 'Focus Tee 3', subcategory: 'T-Shirt', color_family: 'white', formality: 1 },
+      { id: 'style-item:focus-trouser', category: 'BOTTOM', name: 'Focus Trouser', subcategory: 'Trouser', color_family: 'navy', formality: 3 },
+      { id: 'style-item:focus-oxford', category: 'TOP', name: 'Focus Oxford', subcategory: 'OCBD', color_family: 'white', formality: 3 },
+    ] as const) {
+      await service.upsertItem({ item: { brand: 'Test', ...item }, provenance });
+      await service.upsertItemProfile({
+        itemId: item.id,
+        profile: {
+          descriptorConfidence: 0.8,
+          itemType: item.subcategory === 'Trouser' ? 'trouser' : item.subcategory === 'OCBD' ? 'oxford shirt' : 'tee',
+          polishLevel: item.formality >= 3 ? 'smart casual' : 'casual',
+          qualityTier: 'core',
+          structureLevel: item.formality >= 3 ? 'structured' : 'soft',
+          tags: item.subcategory === 'Trouser' ? ['trouser'] : item.subcategory === 'OCBD' ? ['workhorse'] : ['tee'],
+          texture: item.formality >= 3 ? 'smooth' : 'jersey',
+          visualWeight: item.formality >= 3 ? 'mid' : 'light',
+        },
+        provenance,
+        source: 'test',
+      });
+    }
+
+    const gaps = await service.analyzeWardrobe({ focus: 'gaps' });
+    assert.equal(gaps.gapLanes.length > 0, true);
+    assert.equal(gaps.buyNextCandidates.length > 0, true);
+    assert.equal(gaps.redundancyClusters.length, 0);
+    assert.deepEqual(
+      gaps.weakSpots.map((entry) => entry.lane),
+      gaps.gapLanes.slice(0, gaps.weakSpots.length).map((entry) => entry.lane),
+    );
+
+    const redundancy = await service.analyzeWardrobe({ focus: 'redundancy' });
+    assert.equal(redundancy.redundancyClusters.length > 0, true);
+    assert.equal(redundancy.gapLanes.length, 0);
+    assert.equal(redundancy.buyNextCandidates.length, 0);
+    assert.equal(redundancy.weakSpots.every((entry) => entry.itemIds.length >= 3), true);
+
+    const occasion = await service.analyzeWardrobe({ focus: 'occasion' });
+    assert.equal(occasion.occasionCoverage.length > 0, true);
+    assert.equal(occasion.weakSpots.length, 0);
+    assert.equal(occasion.gapLanes.length, 0);
+    assert.equal(occasion.redundancyClusters.length, 0);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function dedupesBuyNextCandidatesAcrossGapAndBridgeSignals() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:dedupe-trouser',
+        brand: 'Test',
+        category: 'BOTTOM',
+        name: 'Dedupe Trouser',
+        subcategory: 'Trouser',
+        color_family: 'navy',
+        formality: 3,
+      },
+      provenance,
+    });
+    await service.upsertItemProfile({
+      itemId: 'style-item:dedupe-trouser',
+      profile: {
+        dressCode: { min: 2, max: 4 },
+        itemType: 'trouser',
+        tags: ['trouser'],
+      },
+      provenance,
+      source: 'test',
+    });
+
+    const analysis = await service.analyzeWardrobe({ focus: 'all' });
+    const loaferCandidates = analysis.buyNextCandidates.filter((entry) => entry.lane === 'loafer');
+    assert.equal(loaferCandidates.length, 1);
+    assert.equal(loaferCandidates[0]?.notes.includes('treat this as a buy-next lane, not a hardcoded recommendation verdict'), true);
   } finally {
     runtime.sqliteDb.close();
   }

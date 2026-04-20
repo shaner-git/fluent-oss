@@ -488,7 +488,10 @@ export function normalizePhotoInput(value: unknown): Record<string, unknown>[] {
 }
 
 export function normalizeStyleItemStatus(value: unknown, fallback: StyleItemStatus = 'active'): StyleItemStatus {
-  return value === 'archived' ? 'archived' : fallback;
+  if (value === 'archived' || value === 'retired' || value === 'active') {
+    return value;
+  }
+  return fallback;
 }
 
 export function normalizeStyleComparatorKey(value: unknown): StyleComparatorKey {

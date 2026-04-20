@@ -1,5 +1,6 @@
 import type { FluentAuthProps } from './auth';
-import type { AppEnv, OAuthAppEnv } from './config';
+import { authenticateBetterAuthBearerRequest } from './better-auth';
+import { hasBetterAuthConfig, type AppEnv, type OAuthAppEnv } from './config';
 
 export interface BearerAuthSuccess {
   mode: 'local' | 'oauth';
@@ -22,6 +23,31 @@ export async function authenticateBearerRequest(
   const presentedToken = parseBearerToken(options.request.headers.get('authorization'));
   if (!presentedToken) {
     return null;
+  }
+
+  if ('DB' in env && hasBetterAuthConfig(env)) {
+    const betterAuthProps = await authenticateBetterAuthBearerRequest(env, options.request, new URL(options.request.url).origin);
+    if (betterAuthProps instanceof Response) {
+      return betterAuthProps;
+    }
+
+    if (betterAuthProps) {
+      if (options.requiredScopes?.length && !hasAnyScope(betterAuthProps.scope, options.requiredScopes)) {
+        return createBearerAuthErrorResponse({
+          code: 'insufficient_scope',
+          description: `This route requires one of: ${options.requiredScopes.join(', ')}`,
+          realm: options.realm,
+          requiredScopes: options.requiredScopes,
+          resourceMetadataUrl: options.resourceMetadataUrl,
+          status: 403,
+        });
+      }
+
+      return {
+        mode: 'oauth',
+        props: betterAuthProps,
+      };
+    }
   }
 
   if (hasOAuthProvider(env)) {
@@ -199,7 +225,10 @@ function normalizeAuthProps(input: {
     name: typeof props.name === 'string' ? props.name : undefined,
     oauthClientId: typeof props.oauthClientId === 'string' ? props.oauthClientId : undefined,
     oauthClientName: typeof props.oauthClientName === 'string' ? props.oauthClientName : undefined,
+    profileId: typeof props.profileId === 'string' ? props.profileId : undefined,
     scope: scopes,
+    tenantId: typeof props.tenantId === 'string' ? props.tenantId : undefined,
+    userId: typeof props.userId === 'string' ? props.userId : undefined,
   };
 }
 

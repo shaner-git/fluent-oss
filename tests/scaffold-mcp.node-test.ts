@@ -8,7 +8,10 @@ import { generateMcpConfig } from '../scripts/scaffold-mcp';
 const tempRoots: string[] = [];
 
 try {
+  rejectsCloudConfigWithoutBaseUrl();
   generatesCloudConfigFromExplicitBaseUrl();
+  generatesCloudConfigForOpenClaw();
+  generatesOssConfigForOpenClaw();
   generatesOssConfigFromExplicitToken();
   generatesOssConfigFromPreferredEnvToken();
   generatesOssConfigFromBootstrappedToken();
@@ -21,15 +24,50 @@ try {
   }
 }
 
+function rejectsCloudConfigWithoutBaseUrl() {
+  assert.throws(
+    () =>
+      generateMcpConfig({
+        client: 'codex',
+        track: 'cloud',
+      }),
+    /Missing --base-url for --track cloud/,
+  );
+}
+
 function generatesCloudConfigFromExplicitBaseUrl() {
   const config = generateMcpConfig({
-    baseUrl: 'https://hosted-fluent.example.com',
+    baseUrl: 'https://cloud.example.test',
     client: 'codex',
     track: 'cloud',
   }) as { mcpServers: { fluent: { type: string; url: string } } };
 
   assert.equal(config.mcpServers.fluent.type, 'http');
-  assert.equal(config.mcpServers.fluent.url, 'https://hosted-fluent.example.com/mcp');
+  assert.equal(config.mcpServers.fluent.url, 'https://cloud.example.test/mcp');
+}
+
+function generatesCloudConfigForOpenClaw() {
+  const config = generateMcpConfig({
+    baseUrl: 'https://cloud.example.test',
+    client: 'openclaw',
+    track: 'cloud',
+  }) as { transport: string; url: string };
+
+  assert.equal(config.transport, 'streamable-http');
+  assert.equal(config.url, 'https://cloud.example.test/mcp');
+}
+
+function generatesOssConfigForOpenClaw() {
+  const config = generateMcpConfig({
+    baseUrl: 'http://192.168.2.20:8788',
+    client: 'openclaw',
+    token: 'test-oss-token',
+    track: 'oss',
+  }) as { headers?: { Authorization?: string }; transport: string; url: string };
+
+  assert.equal(config.transport, 'streamable-http');
+  assert.equal(config.url, 'http://192.168.2.20:8788/mcp');
+  assert.equal(config.headers?.Authorization, 'Bearer test-oss-token');
 }
 
 function generatesOssConfigFromExplicitToken() {

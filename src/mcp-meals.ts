@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -16,9 +17,52 @@ import {
   summarizeMealPreferences,
   summarizePreparedOrder,
 } from './domains/meals/service';
+import type { GroceryIntentRecord, GroceryPlanRecord, PreparedOrderRecord } from './domains/meals/service';
+import {
+  buildRecipeCardMetadata,
+  buildRecipeCardStructuredContent,
+  buildRecipeCardViewModel,
+  getRecipeCardWidgetHtml,
+  MEALS_RECIPE_CARD_TEMPLATE_URI,
+} from './domains/meals/recipe-card';
+import {
+  buildEmptyGroceryListViewModel,
+  buildGroceryListMetadata,
+  buildGroceryListStructuredContent,
+  getGrocerySmokeWidgetHtml,
+  getGroceryListWidgetHtml,
+  MEALS_GROCERY_LIST_TEMPLATE_URI,
+  MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+  type GroceryListActionViewModel,
+  type GroceryListItemViewModel,
+  type GroceryListViewModel,
+} from './domains/meals/grocery-list';
 import { firstTemplateValue, iconFor, jsonResource, provenanceInputSchema, readViewSchema, toolResult, writeResponseModeSchema } from './mcp-shared';
 
 const calendarMealTypeSchema = z.enum(['breakfast', 'lunch', 'dinner', 'snack']);
+function buildClaudeWidgetDomain(origin: string) {
+  return `${createHash('sha256').update(origin).digest('hex').slice(0, 32)}.claudemcpcontent.com`;
+}
+
+function buildWidgetMeta(description: string, origin: string) {
+  return {
+    'openai/widgetCSP': {
+      connect_domains: [],
+      resource_domains: [],
+    },
+    'openai/widgetDescription': description,
+    'openai/widgetDomain': origin,
+    'openai/widgetPrefersBorder': true,
+    ui: {
+      csp: {
+        connectDomains: [],
+        resourceDomains: [],
+      },
+      domain: buildClaudeWidgetDomain(origin),
+      prefersBorder: true,
+    },
+  } as const;
+}
 const calendarContextDaySchema = z.object({
   date: z.string(),
   blockedMeals: z.array(calendarMealTypeSchema).optional(),
@@ -57,6 +101,86 @@ function normalizeMealsTrainingContextInput(
 }
 
 export function registerMealsMcpSurface(server: McpServer, meals: MealsService, fluentCore: FluentCoreService, origin: string) {
+  const recipeCardWidgetMeta = buildWidgetMeta(
+    'Fluent recipe card for a saved meal recipe, with ingredients, steps, and cook mode.',
+    origin,
+  );
+  const groceryListWidgetMeta = buildWidgetMeta(
+    'Fluent grocery checklist for the current week, with To buy, Verify quantity, Check pantry, and quick sync actions.',
+    origin,
+  );
+
+  server.registerResource(
+    'fluent-meals-recipe-card-widget',
+    MEALS_RECIPE_CARD_TEMPLATE_URI,
+    {
+      title: 'Recipe Card Widget',
+      description: 'Rich recipe card for a saved Fluent meal recipe.',
+      mimeType: 'text/html;profile=mcp-app',
+      icons: iconFor(origin),
+      _meta: recipeCardWidgetMeta,
+    },
+    async () => ({
+      contents: [
+        {
+          uri: MEALS_RECIPE_CARD_TEMPLATE_URI,
+          mimeType: 'text/html;profile=mcp-app',
+          text: getRecipeCardWidgetHtml(),
+          _meta: recipeCardWidgetMeta,
+        },
+      ],
+    }),
+  );
+
+  server.registerResource(
+    'fluent-meals-grocery-list-widget-v2',
+    MEALS_GROCERY_LIST_TEMPLATE_URI,
+    {
+      title: 'Grocery List Widget',
+      description: 'Rich grocery checklist for a Fluent meal-planning week.',
+      mimeType: 'text/html;profile=mcp-app',
+      icons: iconFor(origin),
+      _meta: groceryListWidgetMeta,
+    },
+    async () => ({
+      contents: [
+        {
+          uri: MEALS_GROCERY_LIST_TEMPLATE_URI,
+          mimeType: 'text/html;profile=mcp-app',
+          text: getGroceryListWidgetHtml(),
+          _meta: groceryListWidgetMeta,
+        },
+      ],
+    }),
+  );
+
+  const grocerySmokeWidgetMeta = buildWidgetMeta(
+    'Static Fluent grocery smoke widget for ChatGPT host verification.',
+    origin,
+  );
+
+  server.registerResource(
+    'fluent-meals-grocery-smoke-widget',
+    MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+    {
+      title: 'Grocery Smoke Widget',
+      description: 'Static grocery smoke widget for ChatGPT host verification.',
+      mimeType: 'text/html;profile=mcp-app',
+      icons: iconFor(origin),
+      _meta: grocerySmokeWidgetMeta,
+    },
+    async () => ({
+      contents: [
+        {
+          uri: MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+          mimeType: 'text/html;profile=mcp-app',
+          text: getGrocerySmokeWidgetHtml(),
+          _meta: grocerySmokeWidgetMeta,
+        },
+      ],
+    }),
+  );
+
   server.registerResource(
     'meals-current-plan',
     'fluent://meals/current-plan',
@@ -282,7 +406,8 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
     'meals_get_today_context',
     {
       title: 'Get Today Context',
-      description: 'Fetch today’s meals, linked recipe details, and whether feedback is still missing.',
+      description:
+        'Fetch today’s meals, linked recipe details, and whether feedback is still missing. Use this only for today-plan questions (e.g., what am I eating today). Do not use this to answer “which recipe is X” or other recipe-disambiguation prompts.',
       inputSchema: {
         date: z.string().optional(),
       },
@@ -317,30 +442,259 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
   server.registerTool(
     'meals_get_recipe',
     {
-      title: 'Get Recipe',
-      description: 'Fetch a recipe by recipe ID.',
+      title: 'Get Recipe Data',
+      description:
+        'Fetch canonical recipe data by recipe ID. Use this for raw recipe details, ingredient extraction, editing, patching, or hosts that render first-party recipe visuals themselves. In ChatGPT app surfaces and other hosts that support Fluent MCP widgets, if the user wants to show, view, open, or pull up the recipe, prefer meals_render_recipe_card instead of this raw data tool.',
       inputSchema: {
-        recipe_id: z.string(),
+        recipe_id: z.string().optional(),
+        id: z.string().optional(),
+        slug: z.string().optional(),
+        view: readViewSchema,
       },
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
       },
     },
-    async ({ recipe_id }) => {
+    async ({ id, recipe_id, slug, view }) => {
       requireScope(FLUENT_MEALS_READ_SCOPE);
-      const recipe = await meals.getRecipe(recipe_id);
-      return toolResult(recipe, {
-        textData: recipe
-          ? {
-              id: recipe.id,
-              mealType: recipe.mealType,
-              name: recipe.name,
-              slug: recipe.slug,
-              status: recipe.status,
-            }
-          : null,
+      const resolvedRecipeId = await resolveMealRecipeLookupKey(meals, {
+        id,
+        recipe_id,
+        slug,
       });
+      const recipe = resolvedRecipeId ? await meals.getRecipe(resolvedRecipeId) : null;
+      const summary = recipe
+        ? {
+            id: recipe.id,
+            mealType: recipe.mealType,
+            name: recipe.name,
+            slug: recipe.slug,
+            status: recipe.status,
+          }
+        : null;
+      if (view === 'summary') {
+        return toolResult(recipe, {
+          textData: summary,
+          structuredContent: summary,
+        });
+      }
+
+      const viewModel = buildRecipeCardViewModel(recipe);
+      return toolResult(recipe, {
+        meta: viewModel ? buildRecipeCardMetadata(viewModel) : undefined,
+        textData: recipe,
+      });
+    },
+  );
+
+  const renderRecipeCardHandler = async ({
+    id,
+    recipe_id,
+    recipeId,
+    slug,
+  }: {
+    id?: string;
+    recipe_id?: string;
+    recipeId?: string;
+    slug?: string;
+  }) => {
+      requireScope(FLUENT_MEALS_READ_SCOPE);
+      const resolvedRecipeId = await resolveMealRecipeLookupKey(meals, {
+        id,
+        recipe_id,
+        recipeId,
+        slug,
+      });
+      const recipe = resolvedRecipeId ? await meals.getRecipe(resolvedRecipeId) : null;
+      const viewModel = buildRecipeCardViewModel(recipe);
+
+      if (!viewModel) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Recipe not found for id ${resolvedRecipeId ?? recipe_id ?? recipeId ?? id ?? slug ?? 'unknown'}.`,
+            },
+          ],
+          isError: true,
+          structuredContent: {
+            code: 'recipe_not_found',
+            recipeId: resolvedRecipeId ?? recipe_id ?? recipeId ?? id ?? slug ?? null,
+          },
+        };
+      }
+
+      const structuredContent = buildRecipeCardStructuredContent(viewModel);
+      return {
+        _meta: buildRecipeCardMetadata(viewModel),
+        content: [
+          {
+            type: 'text' as const,
+            text: `Showing the recipe card for ${viewModel.title}.`,
+          },
+        ],
+        structuredContent,
+      };
+    };
+
+  const registerRenderRecipeCardTool = (
+    toolName: 'meals_render_recipe_card' | 'meals_show_recipe',
+    options?: { preferredAlias?: boolean },
+  ) =>
+    server.registerTool(
+      toolName,
+      {
+        title: options?.preferredAlias
+          ? 'Show Recipe (ChatGPT/App SDK Widget)'
+          : 'Show Recipe Card (ChatGPT/App SDK Widget)',
+        description: options?.preferredAlias
+          ? 'Show a saved Fluent recipe as a rich Fluent widget only in hosts that support MCP output templates, such as ChatGPT app surfaces. Prefer this for ordinary prompts like "show me the recipe for X", "open this recipe", or "pull up that recipe" in ChatGPT. Do not use this in Claude.ai, Claude Code, or other first-party visual hosts; there, prefer meals_get_recipe and let the host render its own recipe visual or recipe_display_v0.'
+          : 'Show a saved Fluent recipe as a rich Fluent widget only in hosts that support MCP output templates, such as ChatGPT app surfaces. Prefer this when the user says show, open, view, or pull up a recipe in those hosts, including prompts like "show me the recipe for X." Do not use this in Claude.ai, Claude Code, or other first-party visual hosts; there, prefer meals_get_recipe and let the host render its own recipe visual or recipe_display_v0.',
+        inputSchema: {
+          recipe_id: z.string().optional(),
+          recipeId: z.string().optional(),
+          id: z.string().optional(),
+          slug: z.string().optional(),
+        },
+        annotations: {
+          readOnlyHint: true,
+          idempotentHint: true,
+        },
+        _meta: {
+          ui: {
+            resourceUri: MEALS_RECIPE_CARD_TEMPLATE_URI,
+          },
+          'openai/outputTemplate': MEALS_RECIPE_CARD_TEMPLATE_URI,
+          'openai/toolInvocation/invoked': 'Recipe card ready.',
+          'openai/toolInvocation/invoking': options?.preferredAlias ? 'Opening recipe…' : 'Opening recipe card…',
+        },
+      },
+      renderRecipeCardHandler,
+    );
+
+  registerRenderRecipeCardTool('meals_render_recipe_card');
+  registerRenderRecipeCardTool('meals_show_recipe', { preferredAlias: true });
+
+  const registerRenderGroceryListTool = (toolName: 'meals_render_grocery_list' | 'meals_render_grocery_list_v2', options?: { deprecatedAlias?: boolean }) =>
+    server.registerTool(
+      toolName,
+      {
+        title: options?.deprecatedAlias
+          ? 'Show Grocery Checklist (Legacy ChatGPT/App SDK Alias)'
+          : 'Show Grocery Checklist (ChatGPT/App SDK Widget)',
+        description: options?.deprecatedAlias
+          ? 'Legacy alias for showing the user\'s real Fluent grocery checklist only in hosts that support MCP output templates, such as ChatGPT app surfaces. Do not use this in Claude.ai, Claude Code, or other first-party visual hosts; there, prefer meals_get_grocery_plan and let the host render with its own visualizer. Do not use this for standalone smoke tests, host verification, widget debugging, or standalone widget prompts.'
+          : 'Show the user\'s real Fluent grocery checklist for the active week only in hosts that support Fluent MCP output templates, such as ChatGPT app surfaces. Use this for ordinary grocery-list asks when the user wants a rich checklist with To buy, Verify quantity, and Check pantry sections in those hosts. Do not use this in Claude.ai, Claude Code, or other first-party visual hosts; there, prefer canonical grocery data from meals_get_grocery_plan and let the host render with its own visualizer. Do not use this for standalone smoke tests, host verification, widget debugging, or standalone widget prompts.',
+        inputSchema: {
+          week_start: z.string().optional(),
+          weekStart: z.string().optional(),
+        },
+        annotations: {
+          readOnlyHint: true,
+          idempotentHint: true,
+        },
+        _meta: {
+          ui: {
+            resourceUri: MEALS_GROCERY_LIST_TEMPLATE_URI,
+          },
+          'openai/outputTemplate': MEALS_GROCERY_LIST_TEMPLATE_URI,
+          'openai/toolInvocation/invoked': 'Grocery checklist ready.',
+          'openai/toolInvocation/invoking': 'Opening grocery checklist…',
+          'openai/widgetAccessible': true,
+        },
+      },
+      async ({ week_start, weekStart }) => {
+        requireScope(FLUENT_MEALS_READ_SCOPE);
+        const resolvedWeekStart = await resolveMealsGroceryWeekStart(meals, week_start ?? weekStart);
+        const groceryPlan = await meals.getGroceryPlan(resolvedWeekStart);
+        const intents = await meals.listGroceryIntents();
+        const prepared = groceryPlan
+          ? await meals.prepareOrder({
+              weekStart: resolvedWeekStart,
+            })
+          : null;
+        const viewModel = buildGroceryListViewModel({
+          groceryPlan,
+          intents,
+          prepared,
+          weekStart: resolvedWeekStart,
+        });
+
+        if (!viewModel) {
+          const emptyViewModel = buildEmptyGroceryListViewModel(resolvedWeekStart);
+          return {
+            _meta: buildGroceryListMetadata(emptyViewModel),
+            content: [
+              {
+                type: 'text' as const,
+                text: `Your grocery list is empty for the week of ${resolvedWeekStart}.`,
+              },
+            ],
+            structuredContent: {
+              ...buildGroceryListStructuredContent(emptyViewModel),
+              hasData: false,
+            },
+          };
+        }
+
+        const structuredContent = buildGroceryListStructuredContent(viewModel);
+        return {
+          _meta: buildGroceryListMetadata(viewModel),
+          content: [
+            {
+              type: 'text' as const,
+              text: `Showing the grocery list for the week of ${viewModel.weekStart}.`,
+            },
+          ],
+          structuredContent,
+        };
+      },
+    );
+
+  registerRenderGroceryListTool('meals_render_grocery_list_v2');
+
+  registerRenderGroceryListTool('meals_render_grocery_list', { deprecatedAlias: true });
+
+  server.registerTool(
+    'meals_render_grocery_widget_smoke',
+    {
+      title: 'Render Standalone Grocery Widget',
+      description:
+        'Render a standalone static grocery widget for ChatGPT host verification. Prefer this for prompts about a standalone grocery widget, grocery widget smoke test, host verification, or widget debugging. Use this instead of the real grocery list whenever the user asks for a standalone or verification widget.',
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+        _meta: {
+          ui: {
+            resourceUri: MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+          },
+          'openai/outputTemplate': MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+          'openai/toolInvocation/invoked': 'Standalone grocery smoke widget ready.',
+          'openai/toolInvocation/invoking': 'Building standalone grocery smoke widget…',
+        },
+      },
+    async () => {
+      requireScope(FLUENT_MEALS_READ_SCOPE);
+      return {
+        _meta: {
+          experience: 'grocery_widget_smoke_tool',
+          version: 'v1',
+        },
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Showing the standalone grocery smoke widget.',
+          },
+        ],
+        structuredContent: {
+          experience: 'grocery_widget_smoke_tool',
+          title: 'Standalone grocery smoke widget',
+          version: 'v1',
+        },
+      };
     },
   );
 
@@ -377,7 +731,8 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
     'meals_list_recipes',
     {
       title: 'List Recipes',
-      description: 'List recipes, optionally filtered by meal type.',
+      description:
+        'List recipe candidates for discovery, optionally filtered by meal type. Use this for recipe disambiguation (e.g., “which one is X”) and to find recipe IDs and names, then call meals_get_recipe for the actual recipe details.',
       inputSchema: {
         meal_type: z.string().optional(),
         status: z.string().optional(),
@@ -390,19 +745,21 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
     async ({ meal_type, status }) => {
       requireScope(FLUENT_MEALS_READ_SCOPE);
       const recipes = await meals.listRecipes(meal_type, status ?? 'active');
+      const summary = {
+        mealType: meal_type ?? null,
+        recipeCount: recipes.length,
+        status: status ?? 'active',
+        preview: recipes.slice(0, 12).map((recipe) => ({
+          id: recipe.id,
+          mealType: recipe.mealType,
+          name: recipe.name,
+          slug: recipe.slug,
+          status: recipe.status,
+        })),
+      };
       return toolResult(recipes, {
-        textData: {
-          mealType: meal_type ?? null,
-          recipeCount: recipes.length,
-          status: status ?? 'active',
-          preview: recipes.slice(0, 12).map((recipe) => ({
-            id: recipe.id,
-            mealType: recipe.mealType,
-            name: recipe.name,
-            slug: recipe.slug,
-            status: recipe.status,
-          })),
-        },
+        textData: summary,
+        structuredContent: summary,
       });
     },
   );
@@ -517,6 +874,15 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
             includeRecipeIds: z.array(z.string()).optional(),
             excludeRecipeIds: z.array(z.string()).optional(),
             prioritizeInventory: z.boolean().optional(),
+            pinnedMeals: z
+              .array(
+                z.object({
+                  date: z.string(),
+                  mealType: z.enum(['breakfast', 'lunch', 'dinner', 'snack']),
+                  recipeId: z.string(),
+                }),
+              )
+              .optional(),
           })
           .optional(),
         ...provenanceInputSchema,
@@ -1066,7 +1432,7 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
     {
       title: 'Get Grocery Plan',
       description:
-        'Fetch a persisted retailer-agnostic grocery shopping plan for a meal-plan week, including buy-list items, pantry checks, substitutions, and resolved grocery actions.',
+        'Fetch the underlying grocery-plan document for a meal-plan week, including buy-list items, pantry checks, substitutions, and resolved grocery actions. Prefer this for audit/debugging, when the user explicitly wants the raw plan data, and as the canonical grocery source for Claude.ai, Claude Code, and other hosts that can render first-party checklist visuals. In hosts that explicitly support Fluent MCP widgets, ordinary grocery-list asks can instead use meals_render_grocery_list_v2.',
       inputSchema: {
         week_start: z.string(),
         view: readViewSchema,
@@ -1170,12 +1536,13 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
     {
       title: 'Upsert Grocery Plan Action',
       description:
-        'Persist a grocery item resolution for a grocery-plan line, including mark purchased, skip item, confirm pantry stock, record a pantry sufficiency confirmation, mark need to buy, or substitute, swap, or replace one ingredient with another.',
+        'Persist a grocery item resolution for a grocery-plan line, including mark purchased, track already in cart, skip item, confirm pantry stock, record a pantry sufficiency confirmation, mark need to buy, or substitute, swap, or replace one ingredient with another.',
       inputSchema: {
         week_start: z.string(),
         item_key: z.string(),
         action_status: z.enum([
           'purchased',
+          'in_cart',
           'skipped',
           'substituted',
           'confirmed',
@@ -1196,6 +1563,9 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
         metadata: z.any().optional(),
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
+      },
+      _meta: {
+        'openai/widgetAccessible': true,
       },
     },
     async (args) => {
@@ -1243,11 +1613,14 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
     {
       title: 'Delete Grocery Plan Action',
       description:
-        'Delete a persisted grocery-plan item action for a specific week and item key so a purchased, skipped, pantry-confirmed, pantry-sufficiency, or substituted grocery line returns to the active plan.',
+        'Delete a persisted grocery-plan item action for a specific week and item key so a purchased, in-cart, skipped, pantry-confirmed, pantry-sufficiency, or substituted grocery line returns to the active plan.',
       inputSchema: {
         week_start: z.string(),
         item_key: z.string(),
         ...provenanceInputSchema,
+      },
+      _meta: {
+        'openai/widgetAccessible': true,
       },
     },
     async (args) => {
@@ -1279,6 +1652,9 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
         meal_plan_id: z.string().optional(),
         metadata: z.any().optional(),
         ...provenanceInputSchema,
+      },
+      _meta: {
+        'openai/widgetAccessible': true,
       },
     },
     async (args) => {
@@ -1321,6 +1697,603 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
       );
     },
   );
+}
+
+async function resolveMealRecipeLookupKey(
+  meals: MealsService,
+  input: {
+    id?: string;
+    recipe_id?: string;
+    recipeId?: string;
+    slug?: string;
+  },
+): Promise<string | null> {
+  if (input.recipe_id?.trim()) {
+    return input.recipe_id.trim();
+  }
+
+  if (input.recipeId?.trim()) {
+    return input.recipeId.trim();
+  }
+
+  if (input.id?.trim()) {
+    return input.id.trim();
+  }
+
+  if (!input.slug?.trim()) {
+    return null;
+  }
+
+  const slug = input.slug.trim();
+  const recipes = await meals.listRecipes(undefined, 'active');
+  const normalizedSlug = slug.toLowerCase();
+  const exactMatch = recipes.find((recipe) => {
+    const recipeSlug = recipe.slug?.toLowerCase?.() ?? '';
+    const recipeId = recipe.id?.toLowerCase?.() ?? '';
+    return recipeSlug === normalizedSlug || recipeId === normalizedSlug;
+  });
+  if (exactMatch) {
+    return exactMatch.id;
+  }
+
+  const suffixMatches = recipes.filter((recipe) => {
+    const recipeSlug = recipe.slug?.toLowerCase?.() ?? '';
+    const recipeId = recipe.id?.toLowerCase?.() ?? '';
+    return recipeSlug.endsWith(`-${normalizedSlug}`) || recipeId.endsWith(`-${normalizedSlug}`);
+  });
+  const match = suffixMatches.length === 1 ? suffixMatches[0] : null;
+  return match?.id ?? slug;
+}
+
+async function resolveMealsGroceryWeekStart(meals: MealsService, explicitWeekStart?: string): Promise<string> {
+  if (explicitWeekStart?.trim()) {
+    return explicitWeekStart.trim();
+  }
+
+  const currentPlan = await meals.getCurrentPlan();
+  if (currentPlan?.weekStart) {
+    return currentPlan.weekStart;
+  }
+
+  return startOfWeekIso(new Date());
+}
+
+function startOfWeekIso(date: Date): string {
+  const clone = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = clone.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  clone.setUTCDate(clone.getUTCDate() + diff);
+  return clone.toISOString().slice(0, 10);
+}
+
+function buildGroceryListViewModel(input: {
+  groceryPlan: GroceryPlanRecord | null;
+  intents: GroceryIntentRecord[];
+  prepared: PreparedOrderRecord | null;
+  weekStart: string;
+}): GroceryListViewModel | null {
+  const currentPlanId = input.groceryPlan?.mealPlanId ?? null;
+  const itemsByKey = new Map<string, GroceryListItemAccumulator>();
+
+  const preparedNeedNames = new Set((input.prepared?.remainingToBuy ?? []).map((entry) => normalizeGroceryListText(entry.displayName)));
+  const preparedVerifyNames = new Set((input.prepared?.unresolvedItems ?? []).map((entry) => normalizeGroceryListText(entry.displayName)));
+  const preparedCoveredNames = new Set((input.prepared?.alreadyCoveredByInventory ?? []).map((entry) => normalizeGroceryListText(entry.displayName)));
+
+  const registerPlanItem = (
+    item: GroceryPlanRecord['raw']['items'][number] | GroceryPlanRecord['raw']['resolvedItems'][number],
+    initialBucket: GroceryListItemViewModel['bucket'],
+  ) => {
+    const mergeKey = buildGroceryMergeKey(item.canonicalItemKey ?? null, item.name);
+    const existing = itemsByKey.get(mergeKey) ?? createEmptyAccumulator(mergeKey, item.name);
+    const bucket = resolvePlanBucket(item, initialBucket, preparedNeedNames, preparedVerifyNames, preparedCoveredNames);
+    const actions = buildPlanItemActions(input.weekStart, item, bucket);
+
+    existing.displayName = choosePreferredName(existing.displayName, item.name);
+    mergeMeasurement(existing.measurements, item.canonicalQuantity ?? item.quantity ?? null, item.canonicalUnit ?? item.unit ?? null);
+    existing.bucket = mergeBucket(existing.bucket, bucket);
+    existing.brandHint = chooseBrandHint(existing.brandHint, item.preferredBrands);
+    existing.note = mergeSentence(existing.note, item.note ?? null);
+    existing.reason = mergeSentence(existing.reason, synthesizePlanReason(item, bucket));
+    existing.provenanceLabel = null;
+    existing.isManual = false;
+    existing.manualIntentId = null;
+    existing.actions = actions;
+    mergeRecipeSources(existing, item.sourceRecipeIds, item.sourceRecipeNames);
+
+    itemsByKey.set(mergeKey, existing);
+  };
+
+  for (const item of input.groceryPlan?.raw.items ?? []) {
+    registerPlanItem(item, 'need_to_buy');
+  }
+
+  for (const item of input.groceryPlan?.raw.resolvedItems ?? []) {
+    registerPlanItem(item, 'covered');
+  }
+
+  for (const intent of input.intents) {
+    if (!shouldIncludeIntent(intent, input.weekStart, currentPlanId)) {
+      continue;
+    }
+
+    const mergeKey = buildGroceryMergeKey(null, intent.displayName);
+    const existing = itemsByKey.get(mergeKey) ?? createEmptyAccumulator(mergeKey, intent.displayName);
+    const bucket = resolveIntentBucket(intent);
+
+    existing.displayName = choosePreferredName(existing.displayName, intent.displayName);
+    mergeMeasurement(existing.measurements, intent.quantity, intent.unit ?? null);
+    existing.bucket = mergeBucket(existing.bucket, bucket);
+    existing.note = mergeSentence(existing.note, intent.notes);
+    existing.reason = existing.reason ?? null;
+    existing.provenanceLabel = existing.recipes.length > 0 ? null : 'Manual list item';
+    existing.isManual = true;
+    existing.manualIntentId = intent.id;
+
+    if (existing.recipes.length === 0) {
+      existing.actions = buildManualIntentActions(intent, bucket);
+    }
+
+    itemsByKey.set(mergeKey, existing);
+  }
+
+  const items = Array.from(itemsByKey.values())
+    .map(finalizeAccumulator)
+    .filter((item) => item.bucket !== null);
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  const buckets: GroceryListViewModel['buckets'] = [
+    {
+      id: 'need_to_buy',
+      label: 'Need to buy',
+      count: items.filter((item) => item.bucket === 'need_to_buy').length,
+      items: items.filter((item) => item.bucket === 'need_to_buy'),
+    },
+    {
+      id: 'verify_pantry',
+      label: 'Verify pantry',
+      count: items.filter((item) => item.bucket === 'verify_pantry').length,
+      items: items.filter((item) => item.bucket === 'verify_pantry'),
+    },
+    {
+      id: 'covered',
+      label: 'Covered',
+      count: items.filter((item) => item.bucket === 'covered').length,
+      items: items.filter((item) => item.bucket === 'covered'),
+    },
+  ];
+
+  return {
+    bucketOrder: ['need_to_buy', 'verify_pantry', 'covered'],
+    buckets,
+    subtitle: `Week of ${input.weekStart} with pantry checks, merged grocery intents, and linked recipe context.`,
+    summary: {
+      coveredCount: buckets[2].count,
+      headline: `${buckets[0].count} item${buckets[0].count === 1 ? '' : 's'} left to buy`,
+      needToBuyCount: buckets[0].count,
+      verifyCount: buckets[1].count,
+    },
+    title: 'Grocery List',
+    weekStart: input.weekStart,
+  };
+}
+
+type GroceryListItemAccumulator = {
+  actions: GroceryListActionViewModel[];
+  bucket: GroceryListItemViewModel['bucket'] | null;
+  brandHint: string | null;
+  displayName: string;
+  isManual: boolean;
+  itemKey: string;
+  manualIntentId: string | null;
+  measurements: GroceryListMeasurement[];
+  note: string | null;
+  provenanceLabel: string | null;
+  reason: string | null;
+  recipes: GroceryListItemViewModel['recipes'];
+};
+
+type GroceryListMeasurement = {
+  quantity: number | null;
+  unit: string | null;
+};
+
+function createEmptyAccumulator(itemKey: string, displayName: string): GroceryListItemAccumulator {
+  return {
+    actions: [],
+    bucket: null,
+    brandHint: null,
+    displayName,
+    isManual: false,
+    itemKey,
+    manualIntentId: null,
+    measurements: [],
+    note: null,
+    provenanceLabel: null,
+    reason: null,
+    recipes: [],
+  };
+}
+
+function finalizeAccumulator(item: GroceryListItemAccumulator): GroceryListItemViewModel {
+  const mergedMeasurement = collapseMeasurements(item.measurements);
+  return {
+    actions: item.actions,
+    brandHint: item.brandHint,
+    bucket: item.bucket ?? 'need_to_buy',
+    displayName: item.displayName,
+    isManual: item.isManual,
+    itemKey: item.itemKey,
+    manualIntentId: item.manualIntentId,
+    note: item.note,
+    provenanceLabel: item.provenanceLabel,
+    quantity: mergedMeasurement.quantity,
+    quantityDisplay: formatMeasurementDisplay(item.measurements),
+    reason: item.reason,
+    recipes: item.recipes,
+    unit: mergedMeasurement.unit,
+  };
+}
+
+function resolvePlanBucket(
+  item: GroceryPlanRecord['raw']['items'][number] | GroceryPlanRecord['raw']['resolvedItems'][number],
+  fallbackBucket: GroceryListItemViewModel['bucket'],
+  preparedNeedNames: Set<string>,
+  preparedVerifyNames: Set<string>,
+  preparedCoveredNames: Set<string>,
+): GroceryListItemViewModel['bucket'] {
+  const normalizedName = normalizeGroceryListText(item.name);
+
+  if (preparedNeedNames.has(normalizedName)) {
+    return 'need_to_buy';
+  }
+
+  if (preparedVerifyNames.has(normalizedName)) {
+    return 'verify_pantry';
+  }
+
+  if (preparedCoveredNames.has(normalizedName)) {
+    return 'covered';
+  }
+
+  if (item.actionStatus === 'have_enough' || item.actionStatus === 'confirmed' || item.actionStatus === 'purchased' || item.actionStatus === 'skipped' || item.actionStatus === 'substituted' || item.actionStatus === 'in_cart') {
+    return 'covered';
+  }
+
+  if (item.actionStatus === 'dont_have_it' || item.actionStatus === 'have_some_need_to_buy' || item.actionStatus === 'needs_purchase') {
+    return 'need_to_buy';
+  }
+
+  if (item.inventoryStatus === 'check_pantry' || item.uncertainty) {
+    return 'verify_pantry';
+  }
+
+  if (item.inventoryStatus === 'sufficient' || item.inventoryStatus === 'pantry_default') {
+    return 'covered';
+  }
+
+  if (
+    item.inventoryStatus === 'missing' ||
+    item.inventoryStatus === 'partial' ||
+    item.inventoryStatus === 'present_without_quantity' ||
+    item.inventoryStatus === 'intent'
+  ) {
+    return 'need_to_buy';
+  }
+
+  return fallbackBucket;
+}
+
+function buildPlanItemActions(
+  weekStart: string,
+  item: GroceryPlanRecord['raw']['items'][number] | GroceryPlanRecord['raw']['resolvedItems'][number],
+  bucket: GroceryListItemViewModel['bucket'],
+): GroceryListActionViewModel[] {
+  const sufficiencyEligible = item.inventoryStatus === 'check_pantry' || item.orderingPolicy === 'pantry_item' || item.orderingPolicy === 'household_staple';
+  if (bucket === 'covered') {
+    return [
+      {
+        id: 'undo',
+        label: 'Undo',
+        toolName: 'meals_delete_grocery_plan_action',
+        args: {
+          item_key: item.itemKey,
+          week_start: weekStart,
+        },
+      },
+    ];
+  }
+
+  if (bucket === 'verify_pantry') {
+    return [
+      {
+        id: 'have_it',
+        label: 'Have it',
+        toolName: 'meals_upsert_grocery_plan_action',
+        args: {
+          action_status: sufficiencyEligible ? 'have_enough' : 'confirmed',
+          item_key: item.itemKey,
+          week_start: weekStart,
+        },
+      },
+      {
+        id: 'need_to_buy',
+        label: 'Need to buy',
+        toolName: 'meals_upsert_grocery_plan_action',
+        args: {
+          action_status: sufficiencyEligible ? 'dont_have_it' : 'needs_purchase',
+          item_key: item.itemKey,
+          week_start: weekStart,
+        },
+      },
+    ];
+  }
+
+  return [
+    {
+      id: 'have_it',
+      label: 'Have it',
+      toolName: 'meals_upsert_grocery_plan_action',
+      args: {
+        action_status: sufficiencyEligible ? 'have_enough' : 'confirmed',
+        item_key: item.itemKey,
+        week_start: weekStart,
+      },
+    },
+  ];
+}
+
+function shouldIncludeIntent(intent: GroceryIntentRecord, weekStart: string, currentPlanId: string | null): boolean {
+  if (intent.status === 'deleted' || intent.status === 'archived') {
+    return false;
+  }
+
+  if (intent.mealPlanId && currentPlanId && intent.mealPlanId !== currentPlanId) {
+    return false;
+  }
+
+  if (!intent.targetWindow) {
+    return true;
+  }
+
+  const normalizedTarget = normalizeGroceryListText(intent.targetWindow);
+  return normalizedTarget.includes(normalizeGroceryListText(weekStart));
+}
+
+function resolveIntentBucket(intent: GroceryIntentRecord): GroceryListItemViewModel['bucket'] {
+  return intent.status === 'completed' ? 'covered' : 'need_to_buy';
+}
+
+function buildManualIntentActions(intent: GroceryIntentRecord, bucket: GroceryListItemViewModel['bucket']): GroceryListActionViewModel[] {
+  if (bucket === 'covered') {
+    return [
+      {
+        id: 'undo',
+        label: 'Undo',
+        toolName: 'meals_upsert_grocery_intent',
+        args: {
+          display_name: intent.displayName,
+          id: intent.id,
+          meal_plan_id: intent.mealPlanId ?? undefined,
+          metadata: intent.metadata,
+          notes: intent.notes ?? undefined,
+          quantity: intent.quantity ?? undefined,
+          status: 'pending',
+          target_window: intent.targetWindow ?? undefined,
+          unit: intent.unit ?? undefined,
+        },
+      },
+    ];
+  }
+
+  return [
+    {
+      id: 'have_it',
+      label: 'Have it',
+      toolName: 'meals_upsert_grocery_intent',
+      args: {
+        display_name: intent.displayName,
+        id: intent.id,
+        meal_plan_id: intent.mealPlanId ?? undefined,
+        metadata: intent.metadata,
+        notes: intent.notes ?? undefined,
+        quantity: intent.quantity ?? undefined,
+        status: 'completed',
+        target_window: intent.targetWindow ?? undefined,
+        unit: intent.unit ?? undefined,
+      },
+    },
+  ];
+}
+
+function synthesizePlanReason(
+  item: GroceryPlanRecord['raw']['items'][number] | GroceryPlanRecord['raw']['resolvedItems'][number],
+  bucket: GroceryListItemViewModel['bucket'],
+): string | null {
+  if (bucket === 'verify_pantry') {
+    if (item.uncertainty) {
+      return item.uncertainty;
+    }
+    if (item.inventoryStatus === 'check_pantry') {
+      return 'Pantry quantity still needs confirmation.';
+    }
+    return 'Inventory may already cover this item.';
+  }
+
+  if (bucket === 'covered' && item.actionStatus === 'confirmed') {
+    return 'Marked as already covered.';
+  }
+
+  if (bucket === 'covered' && item.actionStatus === 'have_enough') {
+    return 'Confirmed as enough on hand.';
+  }
+
+  return null;
+}
+
+function buildGroceryMergeKey(canonicalItemKey: string | null, name: string): string {
+  if (canonicalItemKey?.trim()) {
+    return canonicalizeGroceryMergeName(canonicalItemKey.replace(/_/g, ' '));
+  }
+  return canonicalizeGroceryMergeName(name);
+}
+
+function normalizeGroceryListText(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function choosePreferredName(current: string, incoming: string): string {
+  if (!current) {
+    return incoming;
+  }
+  return current.length >= incoming.length ? current : incoming;
+}
+
+function chooseBrandHint(current: string | null, incoming: string[] | null | undefined): string | null {
+  if (current?.trim()) {
+    return current.trim();
+  }
+
+  const brands = (incoming ?? []).map((brand) => brand.trim()).filter(Boolean);
+  if (brands.length === 0) {
+    return null;
+  }
+
+  const uniqueBrands = Array.from(new Set(brands));
+  return uniqueBrands.slice(0, 2).join(' or ');
+}
+
+function canonicalizeGroceryMergeName(name: string): string {
+  const normalized = normalizeGroceryListText(name);
+  if (!normalized) {
+    return normalized;
+  }
+
+  const tokens = normalized.split(' ').filter(Boolean);
+  const singularTokens = tokens.map(singularizeGroceryToken);
+
+  if (singularTokens.includes('cucumber')) {
+    return 'cucumber';
+  }
+
+  return singularTokens.join(' ');
+}
+
+function singularizeGroceryToken(token: string): string {
+  if (token.endsWith('ies') && token.length > 3) {
+    return `${token.slice(0, -3)}y`;
+  }
+  if ((token.endsWith('oes') || token.endsWith('ses')) && token.length > 3) {
+    return token.slice(0, -2);
+  }
+  if (token.endsWith('s') && !token.endsWith('ss') && token.length > 3) {
+    return token.slice(0, -1);
+  }
+  return token;
+}
+
+function mergeMeasurement(measurements: GroceryListMeasurement[], quantity: number | null, unit: string | null): void {
+  const normalizedUnit = normalizeGroceryListText(unit ?? '');
+  const nextQuantity = typeof quantity === 'number' && Number.isFinite(quantity) ? quantity : null;
+
+  if (nextQuantity == null && !normalizedUnit) {
+    return;
+  }
+
+  const existing = measurements.find((entry) => normalizeGroceryListText(entry.unit ?? '') === normalizedUnit);
+  if (!existing) {
+    measurements.push({ quantity: nextQuantity, unit });
+    return;
+  }
+
+  if (existing.quantity == null) {
+    existing.quantity = nextQuantity;
+  } else if (nextQuantity != null) {
+    existing.quantity += nextQuantity;
+  }
+  existing.unit = existing.unit ?? unit ?? null;
+}
+
+function collapseMeasurements(measurements: GroceryListMeasurement[]): GroceryListMeasurement {
+  if (measurements.length === 1) {
+    return measurements[0]!;
+  }
+  return {
+    quantity: null,
+    unit: null,
+  };
+}
+
+function formatMeasurementDisplay(measurements: GroceryListMeasurement[]): string | null {
+  const parts = measurements
+    .map((entry) => formatSingleMeasurement(entry.quantity, entry.unit))
+    .filter((value): value is string => typeof value === 'string' && value.length > 0);
+  if (parts.length === 0) {
+    return null;
+  }
+  if (parts.length === 1) {
+    return parts[0]!;
+  }
+  return parts.join(' + ');
+}
+
+function formatSingleMeasurement(quantity: number | null, unit: string | null): string | null {
+  const parts: string[] = [];
+  if (typeof quantity === 'number' && Number.isFinite(quantity)) {
+    const rounded = Math.round(quantity * 100) / 100;
+    parts.push(Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, ''));
+  }
+  if (unit) {
+    parts.push(unit);
+  }
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+function mergeBucket(
+  current: GroceryListItemViewModel['bucket'] | null,
+  incoming: GroceryListItemViewModel['bucket'],
+): GroceryListItemViewModel['bucket'] {
+  if (!current) {
+    return incoming;
+  }
+
+  const priority: Record<GroceryListItemViewModel['bucket'], number> = {
+    covered: 0,
+    verify_pantry: 1,
+    need_to_buy: 2,
+  };
+
+  return priority[incoming] > priority[current] ? incoming : current;
+}
+
+function mergeSentence(current: string | null, incoming: string | null): string | null {
+  if (!current) {
+    return incoming;
+  }
+  if (!incoming || current === incoming) {
+    return current;
+  }
+  return `${current} ${incoming}`;
+}
+
+function mergeRecipeSources(
+  item: GroceryListItemAccumulator,
+  recipeIds: string[],
+  recipeNames: string[],
+): void {
+  for (let index = 0; index < Math.max(recipeIds.length, recipeNames.length); index += 1) {
+    const recipeId = recipeIds[index];
+    const recipeName = recipeNames[index];
+    if (!recipeId || !recipeName) {
+      continue;
+    }
+    if (item.recipes.some((entry) => entry.recipeId === recipeId)) {
+      continue;
+    }
+    item.recipes.push({ recipeId, recipeName });
+  }
 }
 
 

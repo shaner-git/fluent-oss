@@ -35,6 +35,7 @@ main()
 async function main() {
   await persistsBlockFirstHealthLoop();
   await resolvesMissedSessionDriftFromBlockState();
+  await marksReviewContextAsNeedingCheckInWhenNoAdherenceSignalsExist();
   await usesSavedPreferencesToAutogenerateBlockSessions();
   await completesHealthOnboardingAndDiscoveryWithBlockTools();
 }
@@ -152,6 +153,9 @@ async function persistsBlockFirstHealthLoop() {
     assert.equal(reviewContext.blockProjection?.sessions.length, 3);
     assert.equal(reviewContext.blockReview?.id, review.id);
     assert.equal(reviewContext.adherenceSummary.completedSessions, 1);
+    assert.equal(reviewContext.adherenceSummary.completionSignalCount, 1);
+    assert.equal(reviewContext.adherenceSummary.evidenceLevel, 'medium');
+    assert.equal(reviewContext.adherenceSummary.needsUserCheckIn, false);
     assert.equal(reviewContext.trainingSupportSummary.daysPerWeek, 3);
 
     const events = await service.listDomainEvents(20);
@@ -201,6 +205,39 @@ async function resolvesMissedSessionDriftFromBlockState() {
     const afterSkip = await service.getTodayContext('2026-04-08');
     assert.equal(afterSkip.blockState?.nextSessionIndex, 1);
     assert.equal(afterSkip.resolvedSession?.title, 'Full Body B');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function marksReviewContextAsNeedingCheckInWhenNoAdherenceSignalsExist() {
+  const runtime = createTempRuntime();
+  try {
+    const service = new HealthService(runtime.sqliteDb as unknown as D1Database);
+
+    await service.updatePreferences({
+      preferences: {
+        days_per_week: 3,
+        session_length_minutes: 45,
+        training_split: 'Full Body A/B/C',
+        units: { distance: 'km', height: 'in', weight: 'lb' },
+      },
+      provenance,
+    });
+
+    await service.upsertBlock({
+      durationWeeks: 6,
+      name: 'No Adherence Yet Block',
+      provenance,
+      startDate: '2026-04-06',
+    });
+
+    const reviewContext = await service.getReviewContext('2026-04-06');
+    assert.equal(reviewContext.adherenceSummary.plannedSessions, 3);
+    assert.equal(reviewContext.adherenceSummary.loggedWorkouts, 0);
+    assert.equal(reviewContext.adherenceSummary.completionSignalCount, 0);
+    assert.equal(reviewContext.adherenceSummary.evidenceLevel, 'low');
+    assert.equal(reviewContext.adherenceSummary.needsUserCheckIn, true);
   } finally {
     runtime.sqliteDb.close();
   }

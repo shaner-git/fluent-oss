@@ -19,6 +19,7 @@ npm run oss:start -- --host 127.0.0.1 --port 8788
 npm run verify:oss-parity -- --base-url "http://127.0.0.1:8788"
 npm run scaffold:mcp -- --client codex --track oss --base-url "http://127.0.0.1:8788"
 npm run scaffold:mcp -- --client claude --track oss --base-url "http://127.0.0.1:8788"
+npm run scaffold:mcp -- --client openclaw --track oss --base-url "http://127.0.0.1:8788"
 npm run oss:export:snapshot -- --out "./tmp/fluent-oss-snapshot.json"
 npm run oss:import:snapshot -- --root "./tmp/fluent-restore" --file "./tmp/fluent-oss-snapshot.json"
 ```
@@ -29,6 +30,7 @@ OSS expectations:
 - `/mcp` remains bearer-token protected
 - localhost remains the default bind
 - the runtime can intentionally bind outside localhost when requested
+- Codex and Claude bundles scaffold against the same OSS endpoint shape, and OpenClaw scaffolds the same Fluent server as a native `mcp.servers.fluent` entry
 - Docker image and container smoke checks remain green
 - OSS snapshot backup and restore stay format-compatible across supported OSS backends
 

@@ -4,6 +4,9 @@
   "description": "Fluent OSS self-hosted runtime and shared MCP contract for meals, health, style, and groceries.",
   "license": "Apache-2.0",
   "private": false,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "docker:oss": "docker compose --env-file .env.oss.example up --build",
     "oss:check:postgres-s3": "tsx scripts/check-oss-postgres-s3.ts",
@@ -16,6 +19,7 @@
     "oss:token:print": "tsx scripts/local-token.ts print",
     "oss:token:rotate": "tsx scripts/local-token.ts rotate",
     "scaffold:mcp": "tsx scripts/scaffold-mcp.ts",
+    "test:contract-doc": "tsx tests/contract-doc.node-test.ts",
     "test:experimental:postgres-s3": "tsx tests/postgres-s3-experimental.node-test.ts",
     "test:health": "tsx tests/health-phase1.node-test.ts",
     "test:grocery-actions": "tsx tests/meals-grocery-actions.node-test.ts",
@@ -34,14 +38,17 @@
     "verify:local-parity": "tsx scripts/verify-local-parity.ts",
     "verify:oss-parity": "tsx scripts/verify-local-parity.ts",
     "check": "npm run typecheck && npm run test",
-    "test": "npm run test:local-auth && npm run test:local-import && npm run test:oss-snapshot && npm run test:scaffold-mcp && npm run test:oss-bind && npm run test:oss-container && npm run test:style-import && npm run test:style && npm run test:health && npm run test:planner-brain && npm run test:grocery-canonical && npm run test:grocery-actions && npm run test:order-preflight && npm run test:inventory-batch",
+    "test": "npm run test:contract-doc && npm run test:local-auth && npm run test:local-import && npm run test:oss-snapshot && npm run test:scaffold-mcp && npm run test:oss-bind && npm run test:oss-container && npm run test:style-import && npm run test:style && npm run test:health && npm run test:planner-brain && npm run test:grocery-canonical && npm run test:grocery-actions && npm run test:order-preflight && npm run test:inventory-batch",
     "test:scaffold-mcp": "tsx tests/scaffold-mcp.node-test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.917.0",
+    "@better-auth/infra": "^0.2.3",
+    "@better-auth/oauth-provider": "^1.6.5",
     "@cloudflare/workers-oauth-provider": "^0.3.0",
     "@modelcontextprotocol/sdk": "1.26.0",
     "agents": "^0.7.5",
+    "better-auth": "^1.6.5",
     "pg": "^8.16.3",
     "zod": "^4.3.6"
   },
