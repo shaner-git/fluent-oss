@@ -64,7 +64,7 @@ function relabelsImportedProfileMetadataAsLocal() {
         {
           tenant_id: 'primary',
           profile_id: 'owner',
-          display_name: 'Shane Rodness',
+          display_name: 'Riley Example',
           timezone: 'America/Toronto',
           metadata_json: JSON.stringify({ backend_mode: 'hosted', product: 'Fluent' }),
           created_at: '2026-03-27 00:00:00',

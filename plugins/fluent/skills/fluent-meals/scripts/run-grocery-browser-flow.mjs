@@ -45,7 +45,7 @@ export async function runGroceryBrowserFlow(options = {}) {
   if (store !== 'voila') {
     throw new Error(`Fluent-owned browser execution is only implemented for voila in this phase. Received: ${store}`);
   }
-  const baseUrl = String(options.baseUrl || process.env.FLUENT_BASE_URL || 'https://fluent-mcp.accounts-ca9.workers.dev').replace(/\/$/, '');
+  const baseUrl = String(options.baseUrl || process.env.FLUENT_BASE_URL || 'http://127.0.0.1:8788').replace(/\/$/, '');
   const accessToken = String(options.accessToken || process.env.FLUENT_ACCESS_TOKEN || '').trim();
   const weekStart = String(options.weekStart || exportData?.planMetadata?.weekStart || '').trim() || null;
 

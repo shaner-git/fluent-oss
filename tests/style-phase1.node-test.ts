@@ -2810,8 +2810,8 @@ function createHostedStyleEnv(runtime: ReturnType<typeof createTempRuntime>, ori
 
 function testProvenance() {
   return {
-    actorEmail: 'tester@example.com',
-    actorName: 'Shane Rodness',
+    actorEmail: 'jordan@example.invalid',
+    actorName: 'Alex Example',
     confidence: 1,
     scopes: ['style:write'],
     sessionId: 'style-phase2-test',

@@ -7,8 +7,8 @@ import { createLocalRuntime } from '../src/local/runtime';
 
 const tempRoots: string[] = [];
 const provenance = {
-  actorEmail: 'tester@example.com',
-  actorName: 'Shane Rodness',
+  actorEmail: 'jordan@example.invalid',
+  actorName: 'Alex Example',
   confidence: 1,
   scopes: ['meals:write'],
   sessionId: 'grocery-canonical-node-test',

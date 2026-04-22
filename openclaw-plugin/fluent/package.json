@@ -1,12 +1,16 @@
 {
-  "name": "fluent",
+  "name": "fluent-openclaw",
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Native OpenClaw plugin packaging for Fluent skills and MCP setup guidance.",
+  "description": "Native OpenClaw plugin packaging for Fluent skills, managed auth, and MCP setup.",
   "author": {
-    "name": "Fluent"
+    "name": "Fluent",
+    "email": "alex@example.invalid",
+    "url": "https://mcp.meetfluent.app"
   },
+  "homepage": "https://mcp.meetfluent.app",
+  "repository": "https://github.com/shaner-git/fluent-oss",
   "license": "MIT",
   "keywords": [
     "fluent",
@@ -20,35 +24,37 @@
   "engines": {
     "node": ">=22"
   },
+  "files": [
+    "assets",
+    "skills",
+    "src",
+    ".mcp.hosted.json",
+    ".mcp.json",
+    ".mcp.local.json",
+    ".mcp.oss.json",
+    "index.js",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
   "openclaw": {
-    "extensions": [
-      "./index.js"
-    ]
+    "extensions": ["./index.js"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24-beta.2",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
   },
   "x-fluent": {
-    "backendModesStatus": "legacy-bridge",
-    "backendModes": [
-      "hosted",
-      "local"
-    ],
-    "legacyBackendModes": [
-      "hosted",
-      "local"
-    ],
-    "deploymentTracks": [
-      "cloud",
-      "oss"
-    ],
-    "defaultDeploymentTrack": "oss",
-    "minimumContractVersion": "2026-04-17.fluent-core-v1.35",
-    "requiredHostedScopes": [
-      "meals:read",
-      "meals:write",
-      "health:read",
-      "health:write",
-      "style:read",
-      "style:write",
-      "offline_access"
-    ]
+    "backendModesStatus": "plugin-managed-auth-beta",
+    "backendModes": ["hosted", "local"],
+    "legacyBackendModes": ["hosted", "local"],
+    "deploymentTracks": ["cloud", "oss"],
+    "defaultDeploymentTrack": "cloud",
+    "minimumContractVersion": "2026-04-20.fluent-core-v1.37",
+    "requiredHostedScopes": ["meals:read", "meals:write", "health:read", "health:write", "style:read", "style:write", "offline_access"],
+    "pluginManagedAuth": true
   }
 }

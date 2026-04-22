@@ -1,6 +1,6 @@
-# Fluent OSS Release Gate
+# Fluent Release Gate
 
-This is the public OSS release stack.
+This public repo publishes Fluent OSS artifacts. Hosted Cloud and operator-only release gates stay outside this export boundary.
 
 ## Required Checks
 
@@ -9,9 +9,19 @@ Run these first:
 ```bash
 npm install
 npm run check
+npm run export:oss:check
+npm run check:public-scrub
 ```
 
-## Required OSS Checks
+## Public Artifact Boundary
+
+The public scrub gate scans only the exported public surface defined in
+[`../ops/public-oss-overlay/public-artifact-boundary.json`](../ops/public-oss-overlay/public-artifact-boundary.json).
+Keep internal-only docs, operator playbooks, and hosted-only runbooks outside that boundary until they are intentionally exported.
+
+## Fluent OSS Gate
+
+Required OSS checks:
 
 ```bash
 npm run oss:token:bootstrap
@@ -26,11 +36,11 @@ npm run oss:import:snapshot -- --root "./tmp/fluent-restore" --file "./tmp/fluen
 
 OSS expectations:
 
-- OSS exposes the shared MCP contract
+- OSS exposes the same MCP contract as the supported public contract artifact
 - `/mcp` remains bearer-token protected
 - localhost remains the default bind
 - the runtime can intentionally bind outside localhost when requested
-- Codex and Claude bundles scaffold against the same OSS endpoint shape, and OpenClaw scaffolds the same Fluent server as a native `mcp.servers.fluent` entry
+- Codex and Claude bundles point at the same supported OSS endpoint shape, and OpenClaw scaffolds the same Fluent server as a native `mcp.servers.fluent` entry
 - Docker image and container smoke checks remain green
 - OSS snapshot backup and restore stay format-compatible across supported OSS backends
 
@@ -51,4 +61,13 @@ Experimental expectations:
 - the Postgres schema bootstraps from the checked-in current-state bootstrap file
 - the runtime exposes additive `storageBackend: "postgres-s3"` metadata
 - probe, health, and `/mcp` auth behavior stay contract-compatible
-- snapshot shape remains the same table-oriented JSON envelope used by default OSS
+- snapshot shape remains the same table-oriented JSON envelope used by Cloud and SQLite OSS
+
+## Scrub Response
+
+If the scrub gate finds real personal fixture data:
+
+- replace it with documentation-safe synthetic fixtures before export
+- treat exposed personal examples as a privacy issue even when they are not credentials
+- use a normal scrub commit when the exposed values are non-secret examples only
+- rotate the value and consider public history cleanup when anything secret-like or account-bearing was exposed

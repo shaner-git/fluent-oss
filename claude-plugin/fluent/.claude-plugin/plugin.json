@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "description": "Fluent helps you plan meals, stay ahead of groceries, log workouts, and make better closet decisions.",
   "author": {
-    "name": "Fluent"
+    "name": "Fluent",
+    "email": "alex@example.invalid",
+    "url": "https://mcp.meetfluent.app"
   },
+  "homepage": "https://mcp.meetfluent.app",
+  "repository": "https://github.com/shaner-git/fluent-oss",
   "license": "MIT",
   "keywords": [
     "fluent",
@@ -13,32 +17,16 @@
     "style",
     "personal-mcp"
   ],
+  "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "x-fluent": {
     "backendModesStatus": "legacy-bridge",
-    "backendModes": [
-      "hosted",
-      "local"
-    ],
-    "legacyBackendModes": [
-      "hosted",
-      "local"
-    ],
-    "deploymentTracks": [
-      "cloud",
-      "oss"
-    ],
-    "defaultDeploymentTrack": "oss",
-    "minimumContractVersion": "2026-04-17.fluent-core-v1.35",
-    "requiredHostedScopes": [
-      "meals:read",
-      "meals:write",
-      "health:read",
-      "health:write",
-      "style:read",
-      "style:write",
-      "offline_access"
-    ]
+    "backendModes": ["hosted", "local"],
+    "legacyBackendModes": ["hosted", "local"],
+    "deploymentTracks": ["cloud", "oss"],
+    "defaultDeploymentTrack": "cloud",
+    "minimumContractVersion": "2026-04-20.fluent-core-v1.37",
+    "requiredHostedScopes": ["meals:read", "meals:write", "health:read", "health:write", "style:read", "style:write", "offline_access"]
   },
   "interface": {
     "displayName": "Fluent",
@@ -50,10 +38,16 @@
       "Interactive",
       "Write"
     ],
+    "websiteURL": "https://mcp.meetfluent.app",
+    "privacyPolicyURL": "https://mcp.meetfluent.app",
+    "termsOfServiceURL": "https://mcp.meetfluent.app",
     "defaultPrompt": [
+      "What can Fluent already help me with right now, and what should we set up first?",
       "Plan next week around my schedule and turn it into a grocery list I can actually shop from.",
+      "Show me tonight's recipe as a clean card I can cook from.",
       "Plan my workouts for this week and keep them realistic.",
-      "Tell me if this clothing purchase is actually right for my wardrobe or just attractive in isolation."
+      "Tell me if this clothing purchase is actually right for my wardrobe or just attractive in isolation.",
+      "Audit my closet weak spots and tell me what would sharpen my style fastest."
     ],
     "brandColor": "#121212",
     "composerIcon": "./assets/fluent-small.svg",

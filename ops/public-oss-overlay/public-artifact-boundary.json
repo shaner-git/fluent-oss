@@ -1,0 +1,21 @@
+{
+  "publicRoots": [
+    "README.md",
+    "CHANGELOG.md",
+    "package.json",
+    ".env.oss.example",
+    ".env.postgres-s3.example",
+    ".oss-export/export.json",
+    "docs",
+    "tests",
+    "scripts/scaffold-mcp.ts",
+    "plugins",
+    "claude-plugin",
+    "openclaw-plugin",
+    "ops/public-oss-overlay"
+  ],
+  "excludedDirectories": [
+    ".git",
+    "node_modules"
+  ]
+}

@@ -14,7 +14,7 @@ if (isInvokedDirectly()) {
 }
 
 export async function buildHostedGroceryExport(options = {}) {
-  const baseUrl = String(options.baseUrl || process.env.FLUENT_BASE_URL || 'https://fluent-mcp.accounts-ca9.workers.dev').replace(/\/$/, '');
+  const baseUrl = String(options.baseUrl || process.env.FLUENT_BASE_URL || 'http://127.0.0.1:8788').replace(/\/$/, '');
   const accessToken = String(options.accessToken || process.env.FLUENT_ACCESS_TOKEN || '').trim();
   if (!accessToken) {
     throw new Error('Hosted grocery export requires FLUENT_ACCESS_TOKEN or --access-token.');

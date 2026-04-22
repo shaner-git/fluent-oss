@@ -8,8 +8,8 @@ import { buildConfirmedOrderSyncMetadata } from '../plugins/fluent/skills/fluent
 
 const tempRoots: string[] = [];
 const provenance = {
-  actorEmail: 'tester@example.com',
-  actorName: 'Shane Rodness',
+  actorEmail: 'jordan@example.invalid',
+  actorName: 'Alex Example',
   confidence: 1,
   scopes: ['meals:write'],
   sessionId: 'inventory-batch-node-test',

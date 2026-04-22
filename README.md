@@ -10,11 +10,12 @@ It is the open-source self-hosted track of Fluent. If you want Fluent without ru
 
 ## Public Release
 
-- GitHub release: [Fluent OSS v0.1.0](https://github.com/shaner-git/fluent-oss/releases/tag/v0.1.0)
-- release-pinned quickstart: [docs/fluent-oss.md at `v0.1.0`](https://github.com/shaner-git/fluent-oss/blob/v0.1.0/docs/fluent-oss.md)
-- release-pinned docs bucket: [docs/oss at `v0.1.0`](https://github.com/shaner-git/fluent-oss/tree/v0.1.0/docs/oss)
+- release notes: [CHANGELOG.md](./CHANGELOG.md)
+- quickstart: [docs/fluent-oss.md](./docs/fluent-oss.md)
+- OSS docs bucket: [docs/oss/README.md](./docs/oss/README.md)
+- public release guide: [docs/fluent-release-gate.md](./docs/fluent-release-gate.md)
 - supported direct runtime: Node.js `22.x`
-- supported minimum contract version: `2026-04-13.fluent-core-v1.34`
+- supported minimum contract version: `2026-04-20.fluent-core-v1.37`
 
 ## Who This Is For
 
@@ -181,6 +182,7 @@ Then see the operator guide:
 - upgrade notes: [docs/oss/fluent-oss-upgrade-notes.md](./docs/oss/fluent-oss-upgrade-notes.md)
 - Docker notes: [docs/oss/fluent-oss-docker-notes.md](./docs/oss/fluent-oss-docker-notes.md)
 - GitHub release checklist: [docs/oss/fluent-oss-github-release-checklist.md](./docs/oss/fluent-oss-github-release-checklist.md)
+- public artifact boundary: [docs/oss/public-artifact-boundary.md](./docs/oss/public-artifact-boundary.md)
 - shared contract and architecture docs: [docs/shared/README.md](./docs/shared/README.md)
 - release gate: [docs/fluent-release-gate.md](./docs/fluent-release-gate.md)
 

@@ -4,13 +4,15 @@ Fluent OSS is the supported self-hosted open-source runtime for Fluent.
 
 Public release references:
 
-- public release: [Fluent OSS v0.1.0](https://github.com/shaner-git/fluent-oss/releases/tag/v0.1.0)
-- release-pinned docs: [public OSS docs at `v0.1.0`](https://github.com/shaner-git/fluent-oss/tree/v0.1.0/docs/oss)
+- release notes: [../CHANGELOG.md](../CHANGELOG.md)
+- current OSS docs: [./oss/README.md](./oss/README.md)
+- public release guide: [./fluent-release-gate.md](./fluent-release-gate.md)
 - changelog: [../CHANGELOG.md](../CHANGELOG.md)
 - known limitations: [./oss/fluent-oss-known-limitations.md](./oss/fluent-oss-known-limitations.md)
 - setup matrix: [./oss/fluent-oss-setup-matrix.md](./oss/fluent-oss-setup-matrix.md)
 - upgrade notes: [./oss/fluent-oss-upgrade-notes.md](./oss/fluent-oss-upgrade-notes.md)
 - Docker notes: [./oss/fluent-oss-docker-notes.md](./oss/fluent-oss-docker-notes.md)
+- public artifact boundary: [./oss/public-artifact-boundary.md](./oss/public-artifact-boundary.md)
 
 ## OSS Boundaries
 
@@ -20,11 +22,11 @@ Public release references:
 - open `GET /health`
 - open `GET /codex-probe`
 - same MCP contract as Hosted Fluent
-- supported minimum contract version: `2026-04-13.fluent-core-v1.34`
+- supported minimum contract version: `2026-04-20.fluent-core-v1.37`
 - local DB and artifacts stored under `~/.fluent/` by default
 - no OAuth, no `/authorize`, no `/token`
 - direct runtime support is documented for Node.js `22.x`
-- public `--track cloud` scaffolds require an explicit `--base-url` until Fluent Cloud is GA
+- public `--track cloud` scaffolds require an explicit `--base-url` until Fluent Cloud has a documented public endpoint
 
 ## Local Laptop Usage
 

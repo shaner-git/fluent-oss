@@ -133,7 +133,7 @@ For Claude-connected clients, separate two cases clearly:
   - the MCP tool flow in this skill applies directly
 - direct Claude.ai:
   - this plugin does not control behavior by itself
-  - use [docs/fluent-claude-ai-visual-guidance.md](C:/Users/accou/fluent-mcp/docs/fluent-claude-ai-visual-guidance.md) as the prompt-shaping companion
+  - use [docs/fluent-claude-ai-visual-guidance.md](../../../../docs/fluent-claude-ai-visual-guidance.md) as the prompt-shaping companion
 
 Do not treat Claude like a ChatGPT App SDK host.
 
