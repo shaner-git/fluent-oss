@@ -61,7 +61,7 @@ export function createLocalRuntime(options: { origin: string; rootDir?: string }
   const paths = resolveLocalRuntimePaths(options.rootDir);
   const tokenState = ensureLocalTokenState(paths.rootDir);
   const sqliteDb = new SqliteD1Database(paths.dbPath);
-  applyMigrations(sqliteDb, findMigrationFiles());
+  applyMigrations(sqliteDb, findBootstrapFile(), findMigrationFiles());
   applyLocalDefaults(sqliteDb);
 
   const storageBackend: FluentStorageBackend = 'sqlite-fs';
@@ -137,7 +137,7 @@ export function localHealth(origin: string, paths: LocalRuntimePaths) {
   };
 }
 
-function applyMigrations(db: SqliteD1Database, migrationFiles: string[]): void {
+function applyMigrations(db: SqliteD1Database, bootstrapFile: string, migrationFiles: string[]): void {
   db.sqlite.exec(
     `CREATE TABLE IF NOT EXISTS local_migrations (
       name TEXT PRIMARY KEY,
@@ -150,6 +150,16 @@ function applyMigrations(db: SqliteD1Database, migrationFiles: string[]): void {
       (row) => row.name,
     ),
   );
+
+  if (applied.size === 0 && !hasTable(db, 'fluent_tenants')) {
+    db.sqlite.exec(readFileSync(bootstrapFile, 'utf8'));
+    const markApplied = db.sqlite.prepare('INSERT INTO local_migrations (name) VALUES (?)');
+    markApplied.run(path.basename(bootstrapFile));
+    for (const file of migrationFiles) {
+      markApplied.run(path.basename(file));
+    }
+    return;
+  }
 
   for (const file of migrationFiles) {
     const name = path.basename(file);
@@ -208,6 +218,18 @@ function findMigrationFiles(): string[] {
     .filter((file) => /^\d+_.*\.sql$/i.test(file))
     .sort()
     .map((file) => path.join(migrationsDir, file));
+}
+
+function findBootstrapFile(): string {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(path.join(moduleDir, '..', '..', 'migrations', 'postgres', 'bootstrap.sql'));
+}
+
+function hasTable(db: SqliteD1Database, tableName: string): boolean {
+  const row = db.sqlite
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { name?: string } | undefined;
+  return row?.name === tableName;
 }
 
 function safeParseJson(value: string): unknown {

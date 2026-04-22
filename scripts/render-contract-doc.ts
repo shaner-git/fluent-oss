@@ -4,8 +4,11 @@ import { fileURLToPath } from 'node:url';
 import {
   FLUENT_CONTRACT_FREEZE,
   FLUENT_CONTRACT_VERSION,
+  FLUENT_DEV_RESOURCE_URIS,
+  FLUENT_DEV_TOOL_NAMES,
   FLUENT_OPTIONAL_CAPABILITIES,
   FLUENT_RESOURCE_URIS,
+  FLUENT_TOOL_ALIASES,
   FLUENT_TOOL_NAMES,
 } from '../src/contract';
 
@@ -39,6 +42,8 @@ const ADDITIVE_GUIDANCE = [
   'Meals may consume Health\'s derived `trainingSupportSummary`, but Health remains the only canonical owner of training structure',
   'Style now exposes a narrow closet-derived domain surface with import-seeded items, canonical comparator keys, typed media roles, item status, minimal onboarding/calibration state, typed item profiles, and coverage-aware wardrobe-context purchase analysis',
   'The Meals render tools stay in the frozen public contract because Fluent Cloud and Fluent OSS both register the output-template resources required to serve them',
+  '`meals_show_recipe` stays registered as a runtime alias for `meals_render_recipe_card`, but the frozen contract keeps the canonical tool name only',
+  '`meals_render_grocery_widget_smoke` and its standalone widget resource stay dev-only for host verification and are intentionally excluded from the frozen public contract',
   'Hosts that do not support MCP output templates should still prefer `meals_get_recipe` and `meals_get_grocery_plan` as the portable data-first fallback',
   'Retailer/cart execution remains skill-side by design',
 ];
@@ -54,7 +59,7 @@ export function renderContractDocMarkdown(): string {
   return [
     '# Fluent MCP Contract v1 Freeze',
     '',
-    'This document records the current Fluent MCP `v1.35` freeze for the shared Fluent Cloud and Fluent OSS contract.',
+    `This document records the current Fluent MCP \`${FLUENT_CONTRACT_VERSION.split('.fluent-core-')[1]}\` freeze for the shared Fluent Cloud and Fluent OSS contract.`,
     '',
     'Current freeze note:',
     '',
@@ -69,6 +74,17 @@ export function renderContractDocMarkdown(): string {
     ...formatCodeList(FLUENT_TOOL_NAMES),
     '- optional capabilities:',
     ...formatCodeList(FLUENT_OPTIONAL_CAPABILITIES),
+    '',
+    '## Runtime Notes',
+    '',
+    'Registered runtime aliases:',
+    '',
+    ...FLUENT_TOOL_ALIASES.map((entry) => `- \`${entry.name}\` -> \`${entry.canonicalTool}\`: ${entry.note}`),
+    '',
+    'Registered dev-only surfaces:',
+    '',
+    ...formatCodeList(FLUENT_DEV_TOOL_NAMES),
+    ...formatCodeList(FLUENT_DEV_RESOURCE_URIS),
     '',
     '## Required Capability Fields',
     '',

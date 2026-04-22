@@ -1,14 +1,14 @@
 # Fluent MCP Contract v1 Freeze
 
-This document records the current Fluent MCP `v1.35` freeze for the shared Fluent Cloud and Fluent OSS contract.
+This document records the current Fluent MCP `v1.37` freeze for the shared Fluent Cloud and Fluent OSS contract.
 
 Current freeze note:
 
-- Phase 20 keeps the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; preserves the Meals recipe-card and grocery-list render surfaces for hosts that support MCP output templates; and keeps Health on the block-first coaching surface instead of the pre-production weekly-plan contract.
+- Phase 20 keeps the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; preserves the Meals recipe-card, pantry-dashboard, and grocery-list render surfaces plus their widget template resources for hosts that support MCP output templates; and keeps Health on the block-first coaching surface instead of the pre-production weekly-plan contract.
 
 ## Frozen Surface
 
-- contract version: `2026-04-17.fluent-core-v1.35`
+- contract version: `2026-04-20.fluent-core-v1.37`
 - resources:
   - `fluent://core/capabilities`
   - `fluent://core/profile`
@@ -28,12 +28,16 @@ Current freeze note:
   - `fluent://meals/recipes/{recipe_id}`
   - `fluent://meals/grocery-plan/{week_start}`
   - `fluent://meals/confirmed-order-sync/{retailer}/{retailer_order_id}`
+  - `ui://widget/fluent-recipe-card-v7.html`
+  - `ui://widget/fluent-grocery-list-v55.html`
+  - `ui://widget/fluent-pantry-dashboard-v1.html`
   - `fluent://style/profile`
   - `fluent://style/context`
   - `fluent://style/items`
   - `fluent://style/items/{item_id}`
   - `fluent://style/item-profiles/{item_id}`
   - `fluent://style/item-provenance/{item_id}`
+  - `ui://widget/fluent-purchase-analysis-v2.html`
 - tools:
   - `fluent_get_capabilities`
   - `fluent_get_profile`
@@ -66,6 +70,7 @@ Current freeze note:
   - `meals_get_today_context`
   - `meals_get_recipe`
   - `meals_render_recipe_card`
+  - `meals_render_pantry_dashboard`
   - `meals_render_grocery_list_v2`
   - `meals_render_grocery_list`
   - `meals_create_recipe`
@@ -96,6 +101,7 @@ Current freeze note:
   - `meals_list_grocery_intents`
   - `meals_upsert_grocery_intent`
   - `meals_delete_grocery_intent`
+  - `meals_apply_pantry_dashboard_action`
   - `style_get_profile`
   - `style_update_profile`
   - `style_get_context`
@@ -110,6 +116,8 @@ Current freeze note:
   - `style_upsert_item_profile`
   - `style_upsert_item_photos`
   - `style_analyze_purchase`
+  - `style_render_purchase_analysis`
+  - `style_apply_purchase_analysis_action`
   - `style_get_visual_bundle`
 - optional capabilities:
   - `structured_content`
@@ -132,11 +140,13 @@ Current freeze note:
   - `tool_list_fallback`
   - `ingredient_form_groups`
   - `recipe_card_widget`
+  - `pantry_dashboard_widget`
   - `grocery_list_widget`
   - `grocery_list_widget_v2`
   - `style_profile`
   - `style_context`
   - `style_purchase_analysis`
+  - `style_purchase_analysis_widget`
   - `style_onboarding_summary`
   - `style_media_roles`
   - `style_media_delivery`
@@ -156,6 +166,17 @@ Current freeze note:
   - `health_block_reviews`
   - `health_workout_logging`
   - `health_body_metrics`
+
+## Runtime Notes
+
+Registered runtime aliases:
+
+- `meals_show_recipe` -> `meals_render_recipe_card`: Preferred public runtime alias for ChatGPT/App SDK recipe-opening prompts. The frozen contract keeps meals_render_recipe_card as the canonical tool name.
+
+Registered dev-only surfaces:
+
+  - `meals_render_grocery_widget_smoke`
+  - `ui://widget/fluent-grocery-smoke-v1.html`
 
 ## Required Capability Fields
 
@@ -196,7 +217,7 @@ The Meals rich render tools stay in the public contract only because the runtime
 
 ## Phase 20 Additive Guidance
 
-Phase 20 keeps the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; preserves the Meals recipe-card and grocery-list render surfaces for hosts that support MCP output templates; and keeps Health on the block-first coaching surface instead of the pre-production weekly-plan contract.
+Phase 20 keeps the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; preserves the Meals recipe-card, pantry-dashboard, and grocery-list render surfaces plus their widget template resources for hosts that support MCP output templates; and keeps Health on the block-first coaching surface instead of the pre-production weekly-plan contract.
 
 Current additive guidance:
 
@@ -221,6 +242,8 @@ Current additive guidance:
 - Meals may consume Health's derived `trainingSupportSummary`, but Health remains the only canonical owner of training structure
 - Style now exposes a narrow closet-derived domain surface with import-seeded items, canonical comparator keys, typed media roles, item status, minimal onboarding/calibration state, typed item profiles, and coverage-aware wardrobe-context purchase analysis
 - The Meals render tools stay in the frozen public contract because Fluent Cloud and Fluent OSS both register the output-template resources required to serve them
+- `meals_show_recipe` stays registered as a runtime alias for `meals_render_recipe_card`, but the frozen contract keeps the canonical tool name only
+- `meals_render_grocery_widget_smoke` and its standalone widget resource stay dev-only for host verification and are intentionally excluded from the frozen public contract
 - Hosts that do not support MCP output templates should still prefer `meals_get_recipe` and `meals_get_grocery_plan` as the portable data-first fallback
 - Retailer/cart execution remains skill-side by design
 

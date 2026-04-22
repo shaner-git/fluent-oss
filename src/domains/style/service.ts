@@ -1218,6 +1218,20 @@ export class StyleService {
       exactComparatorCount: exactComparatorItems.length,
       itemsById,
     });
+    const comparatorReasoning = buildPurchaseComparatorReasoning({
+      candidate,
+      contextBuckets: {
+        exactComparatorItems,
+        nearbyFormalityItems,
+        pairingCandidates,
+        sameCategoryItems,
+        sameColorFamilyItems,
+        typedRoleItems,
+      },
+      coverageImpact,
+      items,
+      laneAssessment,
+    });
 
     const analysis: StylePurchaseAnalysis = {
       candidate,
@@ -1235,6 +1249,7 @@ export class StyleService {
       },
       comparatorCoverage,
       comparatorDescriptorSummaries,
+      comparatorReasoning,
       confidenceNotes,
       contextBuckets: {
         exactComparatorItems,
@@ -2133,6 +2148,611 @@ function descriptorDeltaNotes(input: {
       return { itemId, notes: [...notes] };
     })
     .filter((entry) => entry.notes.length > 0);
+}
+
+function buildPurchaseComparatorReasoning(input: {
+  candidate: StylePurchaseAnalysis['candidate'];
+  contextBuckets: StylePurchaseAnalysis['contextBuckets'];
+  coverageImpact: StylePurchaseAnalysis['coverageImpact'];
+  items: StyleItemRecord[];
+  laneAssessment: StylePurchaseAnalysis['laneAssessment'];
+}): StylePurchaseAnalysis['comparatorReasoning'] {
+  const comparatorIds = Array.from(
+    new Set([
+      ...input.contextBuckets.exactComparatorItems.map((entry) => entry.itemId),
+      ...input.contextBuckets.typedRoleItems.map((entry) => entry.itemId),
+      ...input.contextBuckets.sameCategoryItems.map((entry) => entry.itemId),
+      ...input.contextBuckets.sameColorFamilyItems.map((entry) => entry.itemId),
+    ]),
+  );
+  const itemMap = new Map(input.items.map((item) => [item.id, item]));
+  const comparatorItems = comparatorIds
+    .map((itemId) => itemMap.get(itemId))
+    .filter((item): item is StyleItemRecord => Boolean(item));
+
+  if (input.candidate.category === 'SHOE') {
+    return buildShoeComparatorReasoning({
+      candidate: input.candidate,
+      comparatorItems,
+      coverageImpact: input.coverageImpact,
+      laneAssessment: input.laneAssessment,
+    });
+  }
+
+  return buildBaselineComparatorReasoning({
+    candidate: input.candidate,
+    comparatorItems,
+    coverageImpact: input.coverageImpact,
+    laneAssessment: input.laneAssessment,
+  });
+}
+
+function buildBaselineComparatorReasoning(input: {
+  candidate: StylePurchaseAnalysis['candidate'];
+  comparatorItems: StyleItemRecord[];
+  coverageImpact: StylePurchaseAnalysis['coverageImpact'];
+  laneAssessment: StylePurchaseAnalysis['laneAssessment'];
+}): StylePurchaseAnalysis['comparatorReasoning'] {
+  const topComparisons = input.comparatorItems.slice(0, 3).map((item) => ({
+    confidence: 'medium' as const,
+    itemId: item.id,
+    notes: [`same category lane (${input.candidate.category.toLowerCase()})`],
+    overlapScore: item.category === input.candidate.category ? 58 : 42,
+    relation: 'adjacent' as const,
+    summary: `${item.name ?? item.id} sits in a nearby lane, but it is not a clean duplicate.`,
+  }));
+
+  if (input.coverageImpact.strengthensWeakArea || input.laneAssessment.introduces) {
+    return {
+      framing: 'addition',
+      mode: 'baseline',
+      notes: ['This still reads like a real addition rather than a near-duplicate.'],
+      summary: 'This looks like a real addition, not more of the same.',
+      topComparisons,
+    };
+  }
+
+  if (topComparisons.length > 0) {
+    return {
+      framing: 'adjacent',
+      mode: 'baseline',
+      notes: [topComparisons[0]!.summary],
+      summary: 'There is overlap, but it does not read like an obvious duplicate.',
+      topComparisons,
+    };
+  }
+
+  return {
+    framing: 'uncertain',
+    mode: 'baseline',
+    notes: ['There are not enough grounded closet comparators yet to make a sharper call.'],
+    summary: 'The closet signal is still too thin to make a stronger comparison.',
+    topComparisons: [],
+  };
+}
+
+function buildShoeComparatorReasoning(input: {
+  candidate: StylePurchaseAnalysis['candidate'];
+  comparatorItems: StyleItemRecord[];
+  coverageImpact: StylePurchaseAnalysis['coverageImpact'];
+  laneAssessment: StylePurchaseAnalysis['laneAssessment'];
+}): StylePurchaseAnalysis['comparatorReasoning'] {
+  const shoeKindLabel = describeShoeKind(input.candidate);
+  const topComparisons = input.comparatorItems
+    .map((item) => compareShoeCandidateAgainstItem(input.candidate, item))
+    .sort((left, right) => {
+      const priority = shoeRelationPriority(right.relation) - shoeRelationPriority(left.relation);
+      if (priority !== 0) {
+        return priority;
+      }
+      return right.overlapScore - left.overlapScore;
+    })
+    .slice(0, 4);
+
+  const duplicateComparisons = topComparisons.filter((entry) => entry.relation === 'duplicate');
+  const replacementComparisons = topComparisons.filter((entry) => entry.relation === 'replacement');
+  const upgradeComparisons = topComparisons.filter((entry) => entry.relation === 'upgrade');
+  const adjacentComparisons = topComparisons.filter((entry) => entry.relation === 'adjacent');
+
+  if (
+    duplicateComparisons.length >= 2 ||
+    duplicateComparisons.some((entry) => entry.confidence === 'high')
+  ) {
+    return {
+      framing: 'duplicate',
+      mode: 'shoe_pairwise',
+      notes: duplicateComparisons.slice(0, 2).map((entry) => entry.summary),
+      summary: `This looks too close to ${pluralizeShoeKind(shoeKindLabel)} you already own.`,
+      topComparisons,
+    };
+  }
+
+  if (replacementComparisons.length > 0) {
+    return {
+      framing: 'replacement',
+      mode: 'shoe_pairwise',
+      notes: replacementComparisons.slice(0, 2).map((entry) => entry.summary),
+      summary: `This reads more like a replacement than a genuinely new ${shoeKindLabel}.`,
+      topComparisons,
+    };
+  }
+
+  if (upgradeComparisons.length > 0) {
+    return {
+      framing: 'upgrade',
+      mode: 'shoe_pairwise',
+      notes: upgradeComparisons.slice(0, 2).map((entry) => entry.summary),
+      summary: `This could upgrade a ${shoeKindLabel} you already wear rather than expand your rotation.`,
+      topComparisons,
+    };
+  }
+
+  if (input.coverageImpact.strengthensWeakArea || input.laneAssessment.introduces) {
+    return {
+      framing: 'addition',
+      mode: 'shoe_pairwise',
+      notes: topComparisons.slice(0, 2).map((entry) => entry.summary),
+      summary: 'The closest shoe comparisons still point toward a real addition.',
+      topComparisons,
+    };
+  }
+
+  if (adjacentComparisons.length > 0) {
+    return {
+      framing: 'adjacent',
+      mode: 'shoe_pairwise',
+      notes: adjacentComparisons.slice(0, 2).map((entry) => entry.summary),
+      summary: 'This overlaps with shoes you own, but it may still earn a slightly different role.',
+      topComparisons,
+    };
+  }
+
+  return {
+    framing: 'uncertain',
+    mode: 'shoe_pairwise',
+    notes: ['The closest shoe comparisons are still too thin to call this a duplicate or a real addition.'],
+    summary: 'There is not enough grounded shoe context yet for a sharper call.',
+    topComparisons,
+  };
+}
+
+function compareShoeCandidateAgainstItem(
+  candidate: StylePurchaseAnalysis['candidate'],
+  item: StyleItemRecord,
+): StylePurchaseAnalysis['comparatorReasoning']['topComparisons'][number] {
+  const shoeKindLabel = describeShoeKind(candidate);
+  const candidateSignals = buildShoeComparisonSignalsFromCandidate(candidate);
+  const itemSignals = buildShoeComparisonSignalsFromItem(item);
+  const familyOverlap = intersectStrings(candidateSignals.families, itemSignals.families);
+  const sameArchetype = Boolean(candidateSignals.archetype && candidateSignals.archetype === itemSignals.archetype);
+  const sameColor =
+    Boolean(candidate.colorFamily) &&
+    Boolean(item.colorFamily) &&
+    candidate.colorFamily!.toLowerCase() === item.colorFamily!.toLowerCase();
+  const colorSignalMissing = !candidate.colorFamily || !item.colorFamily;
+  const overlappingRoles = intersectStrings(candidateSignals.roleTags, itemSignals.roleTags);
+  const sameRole = overlappingRoles.length > 0;
+  const refinementDelta = candidateSignals.refinementScore - itemSignals.refinementScore;
+  const candidateMoreRefined = refinementDelta >= 1.4;
+
+  const notes: string[] = [];
+  if (familyOverlap.length > 0) {
+    notes.push(`same family (${familyOverlap.map(formatShoeFamilyLabel).join(', ')})`);
+  }
+  if (sameArchetype && candidateSignals.archetype) {
+    notes.push(`same archetype (${formatShoeArchetypeLabel(candidateSignals.archetype)})`);
+  }
+  if (sameColor && candidate.colorFamily) {
+    notes.push(`same color family (${candidate.colorFamily})`);
+  }
+  if (sameRole) {
+    notes.push(`same role (${overlappingRoles.map(formatShoeRoleLabel).join(', ')})`);
+  }
+  if (candidateMoreRefined) {
+    notes.push('candidate reads more refined than the owned comparator');
+  } else if (refinementDelta <= -1.4) {
+    notes.push('owned comparator already reads more refined');
+  }
+
+  let relation: StylePurchaseAnalysis['comparatorReasoning']['topComparisons'][number]['relation'] = 'distinct';
+  if (
+    (familyOverlap.length > 0 && sameRole && !candidateMoreRefined) ||
+    (sameArchetype && sameRole && !candidateMoreRefined && (sameColor || colorSignalMissing))
+  ) {
+    relation = 'duplicate';
+  } else if ((familyOverlap.length > 0 || sameArchetype) && sameRole && candidateMoreRefined && sameColor) {
+    relation = 'replacement';
+  } else if ((familyOverlap.length > 0 || sameArchetype) && sameRole && candidateMoreRefined) {
+    relation = 'upgrade';
+  } else if (familyOverlap.length > 0 || sameArchetype || (sameColor && sameRole)) {
+    relation = 'adjacent';
+  }
+
+  const overlapScore = Math.max(
+    24,
+    Math.min(
+      94,
+      18 +
+        (familyOverlap.length > 0 ? 42 : 0) +
+        (sameArchetype ? 20 : 0) +
+        (sameColor ? 8 : 0) +
+        (sameRole ? 12 : 0) +
+        (relation === 'replacement' || relation === 'upgrade' ? 6 : 0),
+    ),
+  );
+  const confidence =
+    familyOverlap.length > 0 || (sameArchetype && sameRole && sameColor)
+      ? 'high'
+      : sameArchetype || sameRole
+        ? 'medium'
+        : 'low';
+
+  const itemLabel = formatOwnedItemLabel(item);
+  let summary = `${itemLabel} is nearby, but not close enough to treat as the same kind of ${shoeKindLabel}.`;
+  if (relation === 'duplicate') {
+    summary = `${itemLabel} already covers almost the same kind of ${shoeKindLabel} in your closet.`;
+  } else if (relation === 'replacement') {
+    summary = `${itemLabel} is the closest version you already own, so this feels more like a nicer replacement than a true addition.`;
+  } else if (relation === 'upgrade') {
+    summary = `${itemLabel} covers a similar role, but this reads as a more elevated take on that kind of ${shoeKindLabel}.`;
+  } else if (relation === 'adjacent') {
+    summary = `${itemLabel} is close, but this could still earn a slightly different role.`;
+  }
+
+  return {
+    confidence,
+    itemId: item.id,
+    notes,
+    overlapScore,
+    relation,
+    summary,
+  };
+}
+
+function buildShoeComparisonSignalsFromCandidate(candidate: StylePurchaseAnalysis['candidate']) {
+  const profileSummary = descriptorSummaryFromCandidate(candidate);
+  const brand = candidate.brand?.trim().toLowerCase() ?? null;
+  const blob = buildShoeSignalBlob([
+    candidate.brand,
+    candidate.name,
+    candidate.subcategory,
+    candidate.notes,
+    candidate.silhouette,
+    candidate.fitType,
+    ...(candidate.useCases ?? []),
+  ]);
+  return buildShoeComparisonSignals({
+    archetype: inferShoeArchetype(blob),
+    blob,
+    brand,
+    colorFamily: candidate.colorFamily,
+    descriptorSummary: profileSummary,
+    formality: candidate.formality,
+    styleRole: null,
+  });
+}
+
+function buildShoeComparisonSignalsFromItem(item: StyleItemRecord) {
+  const profileSummary = descriptorSummaryFromItem(item);
+  const brand = item.brand?.trim().toLowerCase() ?? null;
+  const blob = buildShoeSignalBlob([
+    item.brand,
+    item.name,
+    item.subcategory,
+    item.profile?.raw.itemType,
+    item.profile?.raw.styleRole,
+    ...(item.profile?.raw.tags ?? []),
+    ...(item.profile?.raw.useCases ?? []),
+  ]);
+  return buildShoeComparisonSignals({
+    archetype: inferShoeArchetype(blob),
+    blob,
+    brand,
+    colorFamily: item.colorFamily,
+    descriptorSummary: profileSummary,
+    formality: item.formality,
+    styleRole: item.profile?.raw.styleRole ?? null,
+  });
+}
+
+function buildShoeComparisonSignals(input: {
+  archetype: string | null;
+  blob: string;
+  brand: string | null;
+  colorFamily: string | null;
+  descriptorSummary: StyleDescriptorSummaryRecord | null;
+  formality: number | null;
+  styleRole: string | null;
+}) {
+  const refinementScore = inferShoeRefinementScore({
+    archetype: input.archetype,
+    blob: input.blob,
+    brand: input.brand,
+    descriptorSummary: input.descriptorSummary,
+    formality: input.formality,
+  });
+  return {
+    archetype: input.archetype,
+    colorFamily: input.colorFamily?.toLowerCase() ?? null,
+    families: extractShoeFamilySignals(input.blob),
+    refinementScore,
+    roleTags: inferShoeRoleTags({
+      archetype: input.archetype,
+      blob: input.blob,
+      refinementScore,
+      styleRole: input.styleRole,
+    }),
+  };
+}
+
+function buildShoeSignalBlob(values: Array<string | null | undefined>): string {
+  return values
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+}
+
+function inferShoeArchetype(blob: string): string | null {
+  if (!blob) {
+    return null;
+  }
+  if (/\bloafer\b/.test(blob)) {
+    return 'loafer';
+  }
+  if (/\bchelsea\b/.test(blob)) {
+    return 'chelsea_boot';
+  }
+  if (/\b(oxford|derby|cap-toe)\b/.test(blob)) {
+    return 'dress_shoe';
+  }
+  if (/\b(slide|slides|sandal|sandals)\b/.test(blob)) {
+    return 'slide';
+  }
+  if (/\b(air force 1|af1|stan smith|achilles|common projects|court sneaker|tennis sneaker|leather sneaker)\b/.test(blob)) {
+    return 'court_sneaker';
+  }
+  if (/\b(air max|runner|running|retro runner)\b/.test(blob)) {
+    return 'runner';
+  }
+  if (/\b(kobe|kyrie|basketball|jordan)\b/.test(blob)) {
+    return 'basketball_sneaker';
+  }
+  if (/\b(boot|ranger)\b/.test(blob)) {
+    return 'boot';
+  }
+  if (/\b(sneaker|sneakers|trainer|trainers)\b/.test(blob)) {
+    return 'general_sneaker';
+  }
+  return null;
+}
+
+function extractShoeFamilySignals(blob: string): string[] {
+  const families = new Set<string>();
+  const familyPatterns: Array<[RegExp, string]> = [
+    [/\b(air force 1|af1)\b/, 'air_force_1'],
+    [/\bstan smith\b/, 'stan_smith'],
+    [/\b(common projects|achilles)\b/, 'common_projects_achilles'],
+    [/\bair max\b/, 'air_max'],
+    [/\bhot step\b/, 'hot_step'],
+    [/\biron ranger\b/, 'iron_ranger'],
+    [/\bduke chelsea\b/, 'duke_chelsea'],
+  ];
+
+  for (const [pattern, family] of familyPatterns) {
+    if (pattern.test(blob)) {
+      families.add(family);
+    }
+  }
+
+  return [...families];
+}
+
+function inferShoeRoleTags(input: {
+  archetype: string | null;
+  blob: string;
+  refinementScore: number;
+  styleRole: string | null;
+}): string[] {
+  const tags = new Set<string>();
+  if (/\b(training|running|athletic|performance|basketball)\b/.test(input.blob)) {
+    tags.add('athletic');
+  }
+  if (/\b(streetwear|collab|nocta|statement)\b/.test(input.blob)) {
+    tags.add('statement');
+  }
+  if (input.styleRole && /statement/i.test(input.styleRole)) {
+    tags.add('statement');
+  }
+  if (
+    input.archetype === 'loafer' ||
+    input.archetype === 'dress_shoe' ||
+    input.archetype === 'chelsea_boot' ||
+    input.refinementScore >= 4.2
+  ) {
+    tags.add('elevated');
+  }
+  if (
+    input.archetype === 'court_sneaker' ||
+    input.archetype === 'general_sneaker' ||
+    input.archetype === 'runner' ||
+    input.archetype === 'boot'
+  ) {
+    tags.add('everyday');
+  }
+  if (tags.size === 0) {
+    tags.add('general');
+  }
+  return [...tags];
+}
+
+function inferShoeRefinementScore(input: {
+  archetype: string | null;
+  blob: string;
+  brand: string | null;
+  descriptorSummary: StyleDescriptorSummaryRecord | null;
+  formality: number | null;
+}): number {
+  let score = 2.6;
+  const qualityTier = input.descriptorSummary?.qualityTier?.toLowerCase() ?? null;
+  if (qualityTier === 'investment') {
+    score += 1.8;
+  } else if (qualityTier === 'premium') {
+    score += 1.2;
+  } else if (qualityTier === 'mid') {
+    score += 0.4;
+  } else if (qualityTier === 'budget') {
+    score -= 0.4;
+  }
+
+  const polish = input.descriptorSummary?.polishLevel?.toLowerCase() ?? '';
+  if (/(polished|refined|minimal|sleek|clean|luxury|quiet luxury|italian)/.test(polish + ' ' + input.blob)) {
+    score += 0.8;
+  }
+
+  if (input.formality != null) {
+    score += Math.max(0, input.formality - 2) * 0.25;
+  }
+
+  if (input.archetype === 'dress_shoe' || input.archetype === 'loafer') {
+    score += 0.6;
+  }
+
+  const brandScores: Record<string, number> = {
+    'common projects': 4.8,
+    alden: 4.6,
+    'allen edmonds': 4.1,
+    'red wing': 3.8,
+    'thursday boots': 3.2,
+    nike: 2.8,
+    adidas: 2.5,
+  };
+  if (input.brand && brandScores[input.brand] != null) {
+    score = Math.max(score, brandScores[input.brand]!);
+  }
+
+  return Math.max(1, Math.min(5, Number(score.toFixed(1))));
+}
+
+function shoeRelationPriority(
+  relation: StylePurchaseAnalysis['comparatorReasoning']['topComparisons'][number]['relation'],
+): number {
+  switch (relation) {
+    case 'duplicate':
+      return 5;
+    case 'replacement':
+      return 4;
+    case 'upgrade':
+      return 3;
+    case 'adjacent':
+      return 2;
+    case 'distinct':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function intersectStrings(left: string[], right: string[]): string[] {
+  const rightSet = new Set(right);
+  return left.filter((entry) => rightSet.has(entry));
+}
+
+function formatShoeFamilyLabel(family: string): string {
+  switch (family) {
+    case 'air_force_1':
+      return 'Air Force 1';
+    case 'stan_smith':
+      return 'Stan Smith';
+    case 'common_projects_achilles':
+      return 'Common Projects / Achilles';
+    case 'air_max':
+      return 'Air Max';
+    case 'hot_step':
+      return 'Hot Step';
+    case 'iron_ranger':
+      return 'Iron Ranger';
+    case 'duke_chelsea':
+      return 'Duke Chelsea';
+    default:
+      return family.replace(/_/g, ' ');
+  }
+}
+
+function describeShoeKind(candidate: StylePurchaseAnalysis['candidate']): string {
+  const archetype = inferShoeArchetype(buildShoeSignalBlob([
+    candidate.brand,
+    candidate.name,
+    candidate.subcategory,
+    candidate.notes,
+    candidate.silhouette,
+    candidate.texture,
+  ]));
+
+  switch (archetype) {
+    case 'court_sneaker':
+    case 'general_sneaker':
+    case 'runner':
+      return 'sneaker';
+    case 'loafer':
+      return 'loafer';
+    case 'chelsea_boot':
+    case 'boot':
+      return 'boot';
+    case 'dress_shoe':
+      return 'dress shoe';
+    case 'slide':
+      return 'slide';
+    default:
+      break;
+  }
+
+  const fallback = candidate.subcategory ?? candidate.comparatorKey ?? candidate.category ?? 'shoe';
+  return fallback.toString().trim().toLowerCase().replace(/_/g, ' ') || 'shoe';
+}
+
+function pluralizeShoeKind(kind: string): string {
+  if (kind.endsWith('s')) return kind;
+  if (kind.endsWith('y')) return `${kind.slice(0, -1)}ies`;
+  return `${kind}s`;
+}
+
+function formatOwnedItemLabel(item: StyleItemRecord): string {
+  const name = item.name?.trim();
+  const brand = item.brand?.trim();
+  if (!name) return item.id;
+  if (!brand) return name;
+  if (name.toLowerCase().includes(brand.toLowerCase())) {
+    return name;
+  }
+  return `${brand} ${name}`;
+}
+
+function formatShoeArchetypeLabel(archetype: string): string {
+  switch (archetype) {
+    case 'court_sneaker':
+      return 'court sneaker';
+    case 'runner':
+      return 'runner';
+    case 'basketball_sneaker':
+      return 'basketball sneaker';
+    case 'dress_shoe':
+      return 'dress shoe';
+    case 'chelsea_boot':
+      return 'Chelsea boot';
+    default:
+      return archetype.replace(/_/g, ' ');
+  }
+}
+
+function formatShoeRoleLabel(role: string): string {
+  switch (role) {
+    case 'everyday':
+      return 'everyday casual';
+    case 'elevated':
+      return 'elevated casual';
+    default:
+      return role.replace(/_/g, ' ');
+  }
 }
 
 function activeStyleColorSignals(profile: StyleProfileRecord['raw']): string[] {

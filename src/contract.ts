@@ -1,4 +1,13 @@
-export const FLUENT_CONTRACT_VERSION = '2026-04-17.fluent-core-v1.35';
+import {
+  MEALS_GROCERY_LIST_TEMPLATE_URI,
+  MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+} from './domains/meals/grocery-list';
+import { MEALS_PANTRY_DASHBOARD_TEMPLATE_URI } from './domains/meals/pantry-dashboard';
+import { MEALS_RECIPE_CARD_TEMPLATE_URI } from './domains/meals/recipe-card';
+import { STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI } from './domains/style/purchase-analysis';
+
+export const FLUENT_CONTRACT_VERSION = '2026-04-20.fluent-core-v1.37';
+export const FLUENT_MINIMUM_SUPPORTED_CONTRACT_VERSION = FLUENT_CONTRACT_VERSION;
 
 export const FLUENT_RESOURCE_URIS = [
   'fluent://core/capabilities',
@@ -19,12 +28,16 @@ export const FLUENT_RESOURCE_URIS = [
   'fluent://meals/recipes/{recipe_id}',
   'fluent://meals/grocery-plan/{week_start}',
   'fluent://meals/confirmed-order-sync/{retailer}/{retailer_order_id}',
+  MEALS_RECIPE_CARD_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_TEMPLATE_URI,
+  MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
   'fluent://style/profile',
   'fluent://style/context',
   'fluent://style/items',
   'fluent://style/items/{item_id}',
   'fluent://style/item-profiles/{item_id}',
   'fluent://style/item-provenance/{item_id}',
+  STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
 ] as const;
 
 export const FLUENT_TOOL_NAMES = [
@@ -59,6 +72,7 @@ export const FLUENT_TOOL_NAMES = [
   'meals_get_today_context',
   'meals_get_recipe',
   'meals_render_recipe_card',
+  'meals_render_pantry_dashboard',
   'meals_render_grocery_list_v2',
   'meals_render_grocery_list',
   'meals_create_recipe',
@@ -89,6 +103,7 @@ export const FLUENT_TOOL_NAMES = [
   'meals_list_grocery_intents',
   'meals_upsert_grocery_intent',
   'meals_delete_grocery_intent',
+  'meals_apply_pantry_dashboard_action',
   'style_get_profile',
   'style_update_profile',
   'style_get_context',
@@ -103,6 +118,8 @@ export const FLUENT_TOOL_NAMES = [
   'style_upsert_item_profile',
   'style_upsert_item_photos',
   'style_analyze_purchase',
+  'style_render_purchase_analysis',
+  'style_apply_purchase_analysis_action',
   'style_get_visual_bundle',
 ] as const;
 
@@ -127,11 +144,13 @@ export const FLUENT_OPTIONAL_CAPABILITIES = [
   'tool_list_fallback',
   'ingredient_form_groups',
   'recipe_card_widget',
+  'pantry_dashboard_widget',
   'grocery_list_widget',
   'grocery_list_widget_v2',
   'style_profile',
   'style_context',
   'style_purchase_analysis',
+  'style_purchase_analysis_widget',
   'style_onboarding_summary',
   'style_media_roles',
   'style_media_delivery',
@@ -153,9 +172,26 @@ export const FLUENT_OPTIONAL_CAPABILITIES = [
   'health_body_metrics',
 ] as const;
 
+export const FLUENT_TOOL_ALIASES = [
+  {
+    canonicalTool: 'meals_render_recipe_card',
+    name: 'meals_show_recipe',
+    note:
+      'Preferred public runtime alias for ChatGPT/App SDK recipe-opening prompts. The frozen contract keeps meals_render_recipe_card as the canonical tool name.',
+  },
+] as const;
+
+export const FLUENT_DEV_TOOL_NAMES = [
+  'meals_render_grocery_widget_smoke',
+] as const;
+
+export const FLUENT_DEV_RESOURCE_URIS = [
+  MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+] as const;
+
 export const FLUENT_CONTRACT_FREEZE = {
   backwardCompatibility:
-    'Phase 20 keeps the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; preserves the Meals recipe-card and grocery-list render surfaces for hosts that support MCP output templates; and keeps Health on the block-first coaching surface instead of the pre-production weekly-plan contract.',
+    'Phase 20 keeps the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; preserves the Meals recipe-card, pantry-dashboard, and grocery-list render surfaces plus their widget template resources for hosts that support MCP output templates; and keeps Health on the block-first coaching surface instead of the pre-production weekly-plan contract.',
   frozenAt: 'workstream-5',
   requiredFields: [
     'contractVersion',
@@ -184,5 +220,20 @@ export function fluentContractSnapshot() {
     optionalCapabilities: [...FLUENT_OPTIONAL_CAPABILITIES],
     resources: [...FLUENT_RESOURCE_URIS],
     tools: [...FLUENT_TOOL_NAMES],
+  };
+}
+
+export function fluentRuntimeSurfaceSnapshot() {
+  return {
+    aliasTools: FLUENT_TOOL_ALIASES.map((entry) => ({
+      canonicalTool: entry.canonicalTool,
+      name: entry.name,
+      note: entry.note,
+    })),
+    contractVersion: FLUENT_CONTRACT_VERSION,
+    devResources: [...FLUENT_DEV_RESOURCE_URIS],
+    devTools: [...FLUENT_DEV_TOOL_NAMES],
+    publicResources: [...FLUENT_RESOURCE_URIS],
+    publicTools: [...FLUENT_TOOL_NAMES],
   };
 }

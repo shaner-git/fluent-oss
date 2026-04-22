@@ -13,7 +13,7 @@ Use these notes when moving an existing Fluent OSS or legacy Fluent Local instal
 - `Fluent OSS` is now the supported public naming
 - direct runtime docs are pinned to Node.js `22.x`
 - OSS release docs now treat Docker as the default packaged path
-- the supported contract floor is `2026-04-13.fluent-core-v1.34`
+- the supported contract floor is `2026-04-20.fluent-core-v1.37`
 
 ## Legacy Fluent Local Compatibility
 

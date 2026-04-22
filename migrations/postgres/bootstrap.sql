@@ -113,8 +113,8 @@ CREATE TABLE IF NOT EXISTS meal_recipes (
 
 CREATE TABLE IF NOT EXISTS meal_plans (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
-  profile_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
+  profile_id TEXT NOT NULL DEFAULT 'owner',
   week_start TEXT NOT NULL,
   week_end TEXT,
   status TEXT NOT NULL,
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS meal_plans (
 
 CREATE TABLE IF NOT EXISTS meal_plan_entries (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
   meal_plan_id TEXT NOT NULL,
   date TEXT,
   day_label TEXT,
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS meal_plan_entries (
 
 CREATE TABLE IF NOT EXISTS meal_inventory_items (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
   name TEXT NOT NULL,
   normalized_name TEXT,
   status TEXT NOT NULL DEFAULT 'present',
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS meal_inventory_items (
 
 CREATE TABLE IF NOT EXISTS meal_memory (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
   recipe_id TEXT NOT NULL,
   status TEXT NOT NULL,
   last_feedback_json TEXT,
@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS meal_memory (
 
 CREATE TABLE IF NOT EXISTS meal_brand_preferences (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
   item_family TEXT NOT NULL,
   brand TEXT NOT NULL,
   preference_strength TEXT,
@@ -208,8 +208,8 @@ CREATE TABLE IF NOT EXISTS meal_brand_preferences (
 
 CREATE TABLE IF NOT EXISTS meal_feedback (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
-  profile_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
+  profile_id TEXT NOT NULL DEFAULT 'owner',
   meal_plan_id TEXT,
   meal_plan_entry_id TEXT,
   recipe_id TEXT NOT NULL,
@@ -235,8 +235,8 @@ CREATE TABLE IF NOT EXISTS meal_feedback (
 
 CREATE TABLE IF NOT EXISTS meal_plan_reviews (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
-  profile_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
+  profile_id TEXT NOT NULL DEFAULT 'owner',
   meal_plan_id TEXT,
   week_start TEXT NOT NULL,
   summary TEXT,
@@ -255,8 +255,8 @@ CREATE TABLE IF NOT EXISTS meal_plan_reviews (
 
 CREATE TABLE IF NOT EXISTS meal_grocery_runs (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
-  profile_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
+  profile_id TEXT NOT NULL DEFAULT 'owner',
   meal_plan_id TEXT,
   store TEXT NOT NULL,
   export_artifact_id TEXT,
@@ -291,7 +291,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 
 CREATE TABLE IF NOT EXISTS grocery_intents (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
   normalized_name TEXT NOT NULL,
   display_name TEXT NOT NULL,
   quantity DOUBLE PRECISION,
@@ -325,8 +325,8 @@ CREATE TABLE IF NOT EXISTS meal_preferences (
 
 CREATE TABLE IF NOT EXISTS meal_grocery_plans (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
-  profile_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
+  profile_id TEXT NOT NULL DEFAULT 'owner',
   week_start TEXT NOT NULL,
   meal_plan_id TEXT,
   raw_json TEXT NOT NULL,
@@ -340,8 +340,8 @@ CREATE TABLE IF NOT EXISTS meal_grocery_plans (
 
 CREATE TABLE IF NOT EXISTS meal_plan_generations (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
-  profile_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
+  profile_id TEXT NOT NULL DEFAULT 'owner',
   week_start TEXT NOT NULL,
   input_hash TEXT NOT NULL,
   raw_json TEXT NOT NULL,
@@ -356,7 +356,7 @@ CREATE TABLE IF NOT EXISTS meal_plan_generations (
 
 CREATE TABLE IF NOT EXISTS meal_grocery_plan_actions (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
   week_start TEXT NOT NULL,
   meal_plan_id TEXT,
   item_key TEXT NOT NULL,
@@ -378,7 +378,7 @@ CREATE TABLE IF NOT EXISTS meal_grocery_plan_actions (
 
 CREATE TABLE IF NOT EXISTS meal_confirmed_order_syncs (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'primary',
   retailer TEXT NOT NULL,
   retailer_order_id TEXT NOT NULL,
   week_start TEXT NOT NULL,

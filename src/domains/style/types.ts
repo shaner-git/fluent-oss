@@ -295,6 +295,27 @@ export interface StylePurchaseAnalysisItemMatch {
   reasons: string[];
 }
 
+export type StylePurchaseComparisonRelation = 'duplicate' | 'replacement' | 'upgrade' | 'adjacent' | 'distinct' | 'uncertain';
+export type StylePurchaseComparisonConfidence = 'low' | 'medium' | 'high';
+export type StylePurchaseReasoningFraming = 'duplicate' | 'replacement' | 'upgrade' | 'adjacent' | 'addition' | 'uncertain';
+
+export interface StylePurchasePairwiseComparison {
+  confidence: StylePurchaseComparisonConfidence;
+  itemId: string;
+  notes: string[];
+  overlapScore: number;
+  relation: StylePurchaseComparisonRelation;
+  summary: string;
+}
+
+export interface StylePurchaseComparatorReasoning {
+  framing: StylePurchaseReasoningFraming;
+  mode: 'baseline' | 'shoe_pairwise';
+  notes: string[];
+  summary: string;
+  topComparisons: StylePurchasePairwiseComparison[];
+}
+
 export interface StylePurchaseAnalysisBuckets {
   exactComparatorItems: StylePurchaseAnalysisItemMatch[];
   nearbyFormalityItems: StylePurchaseAnalysisItemMatch[];
@@ -328,6 +349,7 @@ export interface StylePurchaseAnalysis {
   };
   comparatorDescriptorSummaries: Record<string, StyleDescriptorSummaryRecord | null>;
   comparatorCoverage: StyleComparatorCoverage;
+  comparatorReasoning: StylePurchaseComparatorReasoning;
   confidenceNotes: string[];
   contextBuckets: StylePurchaseAnalysisBuckets;
   coverageImpact: {

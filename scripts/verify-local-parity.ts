@@ -261,45 +261,20 @@ async function verifyWrites(db: DatabaseSync) {
 
     const recipesResult = await client.callTool({ name: 'meals_list_recipes', arguments: {} });
     const recipes = extractToolStructuredContent(recipesResult) as Array<Record<string, unknown>>;
-    const recipeId = String(recipes[0]?.id ?? '');
+    let recipeId = String(recipes[0]?.id ?? '');
+    let createdTemporaryRecipe = false;
+
     if (!recipeId) {
-      throw new Error('No OSS recipes found for parity verification.');
+      recipeId = await createParityRecipe(client);
+      createdTemporaryRecipe = true;
     }
 
-    const recipeResult = await client.callTool({ name: 'meals_get_recipe', arguments: { recipe_id: recipeId } });
-    const recipe = extractToolStructuredContent(recipeResult) as Record<string, unknown>;
-    const priorPrepNotes = recipe.prep_notes;
-
-    await client.callTool({
-      name: 'meals_patch_recipe',
-      arguments: {
-        recipe_id: recipeId,
-        operations: [
-          {
-            op: 'add',
-            path: '/prep_notes',
-            value: 'OSS parity verification note.',
-          },
-        ],
-        source_agent: 'verify-local-parity',
-        source_skill: 'fluent-meals',
-      },
+    const restoredRecipe = await verifyRecipeWritePath({
+      client,
+      createdTemporaryRecipe,
+      db,
+      recipeId,
     });
-
-    await client.callTool({
-      name: 'meals_patch_recipe',
-      arguments: {
-        recipe_id: recipeId,
-        operations:
-          priorPrepNotes === undefined
-            ? [{ op: 'remove', path: '/prep_notes' }]
-            : [{ op: 'replace', path: '/prep_notes', value: priorPrepNotes }],
-        source_agent: 'verify-local-parity',
-        source_skill: 'fluent-meals',
-      },
-    });
-
-    const restoredRecipe = readRecipePrepNotes(db, recipeId) === normalizeDbJsonValue(priorPrepNotes);
 
     return {
       core: {
@@ -358,6 +333,91 @@ function readRecipePrepNotes(db: DatabaseSync, recipeId: string): string | null 
     .prepare('SELECT prep_notes FROM meal_recipes WHERE id = ?')
     .get(recipeId) as { prep_notes: string | null } | undefined;
   return row?.prep_notes ?? null;
+}
+
+async function verifyRecipeWritePath(input: {
+  client: Client;
+  createdTemporaryRecipe: boolean;
+  db: DatabaseSync;
+  recipeId: string;
+}) {
+  const recipeResult = await input.client.callTool({ name: 'meals_get_recipe', arguments: { recipe_id: input.recipeId } });
+  const recipe = extractToolStructuredContent(recipeResult) as Record<string, unknown>;
+  const priorPrepNotes = recipe.prep_notes;
+
+  await input.client.callTool({
+    name: 'meals_patch_recipe',
+    arguments: {
+      recipe_id: input.recipeId,
+      operations: [
+        {
+          op: 'add',
+          path: '/prep_notes',
+          value: 'OSS parity verification note.',
+        },
+      ],
+      source_agent: 'verify-local-parity',
+      source_skill: 'fluent-meals',
+    },
+  });
+
+  if (input.createdTemporaryRecipe) {
+    input.db.prepare('DELETE FROM meal_recipes WHERE id = ?').run(input.recipeId);
+    return !hasRecipe(input.db, input.recipeId);
+  }
+
+  await input.client.callTool({
+    name: 'meals_patch_recipe',
+    arguments: {
+      recipe_id: input.recipeId,
+      operations:
+        priorPrepNotes === undefined
+          ? [{ op: 'remove', path: '/prep_notes' }]
+          : [{ op: 'replace', path: '/prep_notes', value: priorPrepNotes }],
+      source_agent: 'verify-local-parity',
+      source_skill: 'fluent-meals',
+    },
+  });
+
+  return readRecipePrepNotes(input.db, input.recipeId) === normalizeDbJsonValue(priorPrepNotes);
+}
+
+async function createParityRecipe(client: Client) {
+  const recipeId = 'oss-parity-verification-recipe';
+  await client.callTool({
+    name: 'meals_create_recipe',
+    arguments: {
+      recipe: {
+        id: recipeId,
+        name: 'OSS Parity Verification Recipe',
+        meal_type: 'dinner',
+        servings: 2,
+        total_time: 15,
+        active_time: 10,
+        macros: {
+          calories: 450,
+          protein_g: 28,
+          fiber_g: 6,
+          sodium_mg: 520,
+        },
+        cost_per_serving_cad: 4.25,
+        ingredients: [
+          { item: 'pasta', quantity: 200, unit: 'g', ordering_policy: 'direct_match' },
+          { item: 'tomatoes', quantity: 2, unit: 'count', ordering_policy: 'direct_match' },
+        ],
+        instructions: ['Boil pasta.', 'Simmer tomatoes.', 'Combine and serve.'],
+      },
+      response_mode: 'ack',
+      source_agent: 'verify-local-parity',
+      source_skill: 'fluent-meals',
+    },
+  });
+  return recipeId;
+}
+
+function hasRecipe(db: DatabaseSync, recipeId: string) {
+  const row = db.prepare('SELECT id FROM meal_recipes WHERE id = ?').get(recipeId) as { id?: string } | undefined;
+  return row?.id === recipeId;
 }
 
 function readStyleProfileRawJson(db: DatabaseSync): string | null {

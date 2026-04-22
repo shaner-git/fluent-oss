@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -9,6 +10,16 @@ import {
   FLUENT_STYLE_WRITE_SCOPE,
   requireAnyScope,
 } from './auth';
+import {
+  normalizeStylePurchaseCandidate,
+} from './domains/style/helpers';
+import {
+  buildPurchaseAnalysisMetadata,
+  buildPurchaseAnalysisStructuredContent,
+  buildPurchaseAnalysisViewModel,
+  getPurchaseAnalysisWidgetHtml,
+  STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+} from './domains/style/purchase-analysis';
 import {
   presentStyleDescriptorBacklog,
   buildStyleMutationAck,
@@ -37,8 +48,60 @@ import {
 const styleVisualBundleDeliveryModeSchema = z.enum(['authenticated_only', 'authenticated_with_signed_fallback']).optional();
 const styleEvidenceGapPriorityFilterSchema = z.enum(['actionable', 'all', 'high', 'medium', 'low']).optional();
 const styleDescriptorBacklogFocusSchema = z.enum(['priority', 'blocked', 'all']).optional();
+const stylePurchaseAnalysisActionIdSchema = z.enum(['log_purchase']);
+
+function buildClaudeWidgetDomain(origin: string) {
+  return `${createHash('sha256').update(origin).digest('hex').slice(0, 32)}.claudemcpcontent.com`;
+}
+
+function buildWidgetMeta(description: string, origin: string) {
+  return {
+    'openai/widgetCSP': {
+      connect_domains: [],
+      resource_domains: [],
+    },
+    'openai/widgetDescription': description,
+    'openai/widgetDomain': origin,
+    'openai/widgetPrefersBorder': true,
+    ui: {
+      csp: {
+        connectDomains: [],
+        resourceDomains: [],
+      },
+      domain: buildClaudeWidgetDomain(origin),
+      prefersBorder: true,
+    },
+  } as const;
+}
 
 export function registerStyleMcpSurface(server: McpServer, style: StyleService, origin: string) {
+  const purchaseAnalysisWidgetMeta = buildWidgetMeta(
+    'Rich Fluent purchase analysis for Style buy/skip decisions in ChatGPT-style widget hosts.',
+    origin,
+  );
+
+  server.registerResource(
+    'fluent-style-purchase-analysis-widget',
+    STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+    {
+      title: 'Purchase Analysis Widget',
+      description: 'Rich Style purchase analysis card for buy, consider, wait, or skip decisions.',
+      mimeType: 'text/html;profile=mcp-app',
+      icons: iconFor(origin),
+      _meta: purchaseAnalysisWidgetMeta,
+    },
+    async () => ({
+      contents: [
+        {
+          uri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+          mimeType: 'text/html;profile=mcp-app',
+          text: getPurchaseAnalysisWidgetHtml(),
+          _meta: purchaseAnalysisWidgetMeta,
+        },
+      ],
+    }),
+  );
+
   server.registerResource(
     'style-profile',
     'fluent://style/profile',
@@ -516,6 +579,116 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
       return toolResult(analysis, {
         textData: summarizeStylePurchaseAnalysis(analysis),
         structuredContent: full,
+      });
+    },
+  );
+
+  server.registerTool(
+    'style_render_purchase_analysis',
+    {
+      title: 'Show Purchase Analysis (ChatGPT/App SDK Widget)',
+      description:
+        'Show a Fluent Style purchase analysis as a rich widget only in hosts that support MCP output templates, such as ChatGPT / MCP Apps-style hosts. Prefer this for natural prompts like "should I buy this?", "analyze this purchase", or "show me the purchase analysis" in those hosts. Keep style_analyze_purchase as the raw analysis tool for Claude-side visuals, Codex, OpenClaw, generic plain MCP clients, or downstream automation.',
+      inputSchema: {
+        candidate: z.any(),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      _meta: {
+        ui: {
+          resourceUri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+        },
+        'openai/outputTemplate': STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+        'openai/toolInvocation/invoked': 'Purchase analysis ready.',
+        'openai/toolInvocation/invoking': 'Opening purchase analysis…',
+      },
+    },
+    async ({ candidate }) => {
+      requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
+      const analysis = await style.analyzePurchase({ candidate });
+      const viewModel = buildPurchaseAnalysisViewModel(analysis, {
+        actionToolName: 'style_apply_purchase_analysis_action',
+      });
+      return {
+        _meta: buildPurchaseAnalysisMetadata(viewModel),
+        content: [
+          {
+            type: 'text' as const,
+            text: `Showing the purchase analysis for ${viewModel.item.name}.`,
+          },
+        ],
+        structuredContent: buildPurchaseAnalysisStructuredContent(viewModel),
+      };
+    },
+  );
+
+  server.registerTool(
+    'style_apply_purchase_analysis_action',
+    {
+      title: 'Apply Purchase Analysis Action',
+      description:
+        'Apply a widget-originated Style purchase analysis action, such as logging a purchased item into the Fluent closet.',
+      inputSchema: {
+        action_id: stylePurchaseAnalysisActionIdSchema,
+        candidate: z.any(),
+        ...provenanceInputSchema,
+      },
+      _meta: {
+        'openai/widgetAccessible': true,
+      },
+    },
+    async (args) => {
+      const authProps = requireAnyScope([FLUENT_STYLE_WRITE_SCOPE, FLUENT_MEALS_WRITE_SCOPE]);
+      const candidate = normalizeStylePurchaseCandidate(args.candidate);
+
+      if (args.action_id !== 'log_purchase') {
+        throw new Error(`Unsupported purchase analysis action: ${args.action_id}`);
+      }
+
+      const itemId = `style-item:purchase:${crypto.randomUUID()}`;
+      const item = await style.upsertItem({
+        item: {
+          id: itemId,
+          brand: candidate.brand,
+          category: candidate.category,
+          color_family: candidate.colorFamily,
+          formality: candidate.formality,
+          name: candidate.name ?? candidate.subcategory ?? candidate.category,
+          status: 'active',
+          subcategory: candidate.subcategory,
+        },
+        provenance: buildMutationProvenance(authProps, args),
+        sourceSnapshot: candidate,
+      });
+
+      if (candidate.imageUrls[0]) {
+        try {
+          await style.upsertItemPhotos({
+            itemId,
+            photos: [
+              {
+                id: `style-photo:${itemId}:1`,
+                is_primary: true,
+                source_url: candidate.imageUrls[0],
+                view: 'front',
+              },
+            ],
+            provenance: buildMutationProvenance(authProps, args),
+          });
+        } catch {
+          // Best-effort only: a purchase log should still succeed even if the
+          // remote product image cannot be fetched into Fluent storage yet.
+        }
+      }
+
+      const created = await style.getItem(itemId);
+      const ack = buildStyleMutationAck('style_item', itemId, 'style.purchase_logged', new Date().toISOString(), {
+        category: created?.category ?? item.category,
+        name: created?.name ?? item.name,
+        photoCount: created?.photos.length ?? item.photos.length,
+      });
+      return toolResult(created ?? item, {
+        structuredContent: ack,
+        textData: ack,
       });
     },
   );

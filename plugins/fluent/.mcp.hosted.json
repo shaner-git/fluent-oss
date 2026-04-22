@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fluent": {
+      "type": "http",
+      "url": "https://mcp.meetfluent.app/mcp"
+    }
+  }
+}

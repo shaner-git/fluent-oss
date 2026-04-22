@@ -17,7 +17,14 @@ import {
   summarizeMealPreferences,
   summarizePreparedOrder,
 } from './domains/meals/service';
-import type { GroceryIntentRecord, GroceryPlanRecord, PreparedOrderRecord } from './domains/meals/service';
+import type {
+  GroceryIntentRecord,
+  GroceryPlanRecord,
+  InventoryRecord,
+  MealPlanRecord,
+  PreparedOrderRecord,
+  UpdateInventoryInput,
+} from './domains/meals/service';
 import {
   buildRecipeCardMetadata,
   buildRecipeCardStructuredContent,
@@ -37,6 +44,21 @@ import {
   type GroceryListItemViewModel,
   type GroceryListViewModel,
 } from './domains/meals/grocery-list';
+import {
+  buildPantryDashboardMetadata,
+  buildPantryDashboardStructuredContent,
+  getPantryDashboardWidgetHtml,
+  MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
+  type PantryDashboardActionViewModel,
+  type PantryBoughtRecentlyViewModel,
+  type PantryLikelyOpenViewModel,
+  type PantryShopItemViewModel,
+  type PantryShopViewModel,
+  type PantryStapleViewModel,
+  type PantryDashboardViewModel,
+  type StapleState,
+} from './domains/meals/pantry-dashboard';
+import { normalizeIngredient } from './domains/meals/helpers';
 import { firstTemplateValue, iconFor, jsonResource, provenanceInputSchema, readViewSchema, toolResult, writeResponseModeSchema } from './mcp-shared';
 
 const calendarMealTypeSchema = z.enum(['breakfast', 'lunch', 'dinner', 'snack']);
@@ -62,6 +84,393 @@ function buildWidgetMeta(description: string, origin: string) {
       prefersBorder: true,
     },
   } as const;
+}
+
+type MealsMcpSurfaceOptions = {
+  includeDevWidgetSurfaces?: boolean;
+};
+
+function normalizeMealsText(value: string | null | undefined): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function titleCaseWords(value: string | null | undefined): string {
+  const text = (value ?? '').trim();
+  if (!text) return '';
+  return text
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function parseObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function parseString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function parseBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function quantityDisplay(quantity: number | null | undefined, unit: string | null | undefined): string | null {
+  if (quantity == null && !unit) return null;
+  if (quantity == null) return unit ?? null;
+  return unit ? `${quantity} ${unit}` : `${quantity}`;
+}
+
+function formatPantryDateLabel(date: string | null | undefined): string | null {
+  if (!date) return null;
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Intl.DateTimeFormat('en-CA', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'America/Toronto',
+  }).format(parsed);
+}
+
+function daysAgoFromDate(date: string | null | undefined): number | null {
+  if (!date) return null;
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 86400000));
+}
+
+function isPantryDashboardUsedUp(item: InventoryRecord): boolean {
+  const metadata = parseObject(item.metadata);
+  return parseBoolean(metadata?.pantry_dashboard_used_up) === true;
+}
+
+function isPantryDashboardStaple(item: InventoryRecord): boolean {
+  const metadata = parseObject(item.metadata);
+  return parseBoolean(metadata?.pantry_dashboard_staple) === true;
+}
+
+function parseStapleState(value: unknown): StapleState | null {
+  return value === 'ok' || value === 'low' || value === 'out' ? value : null;
+}
+
+function pickRecentShopStore(item: InventoryRecord): string {
+  const metadata = parseObject(item.metadata);
+  return (
+    parseString(metadata?.store_name) ??
+    parseString(metadata?.storeName) ??
+    parseString(metadata?.retailer) ??
+    parseString(item.source) ??
+    'Recent shop'
+  );
+}
+
+function isStapleCandidate(item: InventoryRecord): boolean {
+  if (isPantryDashboardStaple(item)) return true;
+  const normalized = normalizeMealsText(item.name);
+  const stapleKeywords = ['egg', 'milk', 'olive oil', 'oil', 'butter', 'yogurt', 'granola', 'bread', 'rice', 'oat'];
+  return item.longLifeDefault || stapleKeywords.some((keyword) => normalized.includes(keyword));
+}
+
+function inferStapleState(item: InventoryRecord): StapleState {
+  const metadata = parseObject(item.metadata);
+  const explicit = parseStapleState(metadata?.pantry_dashboard_staple_state);
+  if (explicit) return explicit;
+  const normalizedStatus = normalizeMealsText(item.status);
+  if (normalizedStatus === 'out' || normalizedStatus === 'empty') return 'out';
+  if (item.quantity != null && item.quantity <= 1) return 'low';
+  return 'ok';
+}
+
+function nextStapleState(current: StapleState): StapleState {
+  if (current === 'ok') return 'low';
+  if (current === 'low') return 'out';
+  return 'ok';
+}
+
+interface PantryRecipeSuggestionViewModel {
+  recipeId: string;
+  recipeName: string;
+  mealType: string;
+  matchedItemCount: number;
+  ingredientCount: number;
+  matchedItems: string[];
+  matchSummary: string;
+}
+
+function buildPantryInventoryMatchMap(inventory: InventoryRecord[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const item of inventory) {
+    const label = titleCaseWords(item.name);
+    const keys = [
+      item.canonicalItemKey,
+      item.normalizedName,
+      item.name,
+    ].map((value) => normalizeMealsText(value));
+    for (const key of keys) {
+      if (!key || map.has(key)) continue;
+      map.set(key, label);
+    }
+  }
+  return map;
+}
+
+function buildPantryRecipeSuggestions(input: {
+  inventory: InventoryRecord[];
+  recipes: Array<{
+    id: string;
+    mealType: string;
+    name: string;
+    raw: unknown;
+  }>;
+  limit?: number;
+}): PantryRecipeSuggestionViewModel[] {
+  const activeInventory = input.inventory.filter((item) => !isPantryDashboardUsedUp(item));
+  const inventoryMatchMap = buildPantryInventoryMatchMap(activeInventory);
+  const suggestions: PantryRecipeSuggestionViewModel[] = [];
+
+  for (const recipe of input.recipes) {
+    const raw = parseObject(recipe.raw);
+    const ingredients = Array.isArray(raw?.ingredients) ? raw.ingredients : [];
+    const matchedItems = new Set<string>();
+    let ingredientCount = 0;
+
+    for (const ingredient of ingredients) {
+      const normalizedIngredient = normalizeIngredient(ingredient, 1);
+      if (!normalizedIngredient) continue;
+      ingredientCount += 1;
+      const keys = [
+        normalizedIngredient.canonicalItemKey,
+        normalizedIngredient.normalizedName,
+        normalizedIngredient.name,
+      ].map((value) => normalizeMealsText(value));
+      for (const key of keys) {
+        if (!key) continue;
+        const match = inventoryMatchMap.get(key);
+        if (match) {
+          matchedItems.add(match);
+          break;
+        }
+      }
+    }
+
+    if (matchedItems.size === 0) continue;
+    const matchedList = Array.from(matchedItems);
+    suggestions.push({
+      recipeId: recipe.id,
+      recipeName: recipe.name,
+      mealType: recipe.mealType,
+      matchedItemCount: matchedList.length,
+      ingredientCount,
+      matchedItems: matchedList,
+      matchSummary:
+        matchedList.length === 1
+          ? `${matchedList[0]} is already around`
+          : `${matchedList.slice(0, 2).join(' and ')}${matchedList.length > 2 ? ` + ${matchedList.length - 2} more` : ''} are already around`,
+    });
+  }
+
+  return suggestions
+    .sort((left, right) => {
+      if (right.matchedItemCount !== left.matchedItemCount) {
+        return right.matchedItemCount - left.matchedItemCount;
+      }
+      const leftRatio = left.ingredientCount > 0 ? left.matchedItemCount / left.ingredientCount : 0;
+      const rightRatio = right.ingredientCount > 0 ? right.matchedItemCount / right.ingredientCount : 0;
+      if (rightRatio !== leftRatio) {
+        return rightRatio - leftRatio;
+      }
+      return left.recipeName.localeCompare(right.recipeName);
+    })
+    .slice(0, input.limit ?? 5);
+}
+
+function buildRecipeContextMap(groceryPlan: GroceryPlanRecord | null): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  if (!groceryPlan) return map;
+
+  const append = (item: GroceryPlanRecord['raw']['items'][number] | GroceryPlanRecord['raw']['resolvedItems'][number]) => {
+    const keys = [item.canonicalItemKey, item.normalizedName, item.name].map((value) => normalizeMealsText(value));
+    const recipes = (item.sourceRecipeNames ?? []).filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    for (const key of keys) {
+      if (!key) continue;
+      const existing = map.get(key) ?? [];
+      for (const recipe of recipes) {
+        if (!existing.includes(recipe)) existing.push(recipe);
+      }
+      map.set(key, existing);
+    }
+  };
+
+  for (const item of groceryPlan.raw.items ?? []) append(item);
+  for (const item of groceryPlan.raw.resolvedItems ?? []) append(item);
+  return map;
+}
+
+function inventoryRecipeContext(item: InventoryRecord, recipeContext: Map<string, string[]>): string | null {
+  const keys = [item.canonicalItemKey, item.normalizedName, item.name].map((value) => normalizeMealsText(value));
+  for (const key of keys) {
+    if (!key) continue;
+    const matches = recipeContext.get(key);
+    if (!matches || matches.length === 0) continue;
+    if (matches.length === 1) return matches[0]!;
+    return `across ${matches.length} meals`;
+  }
+  return null;
+}
+
+function buildInventoryMutationArgs(
+  item: InventoryRecord,
+  metadataPatch: Record<string, unknown>,
+): Omit<UpdateInventoryInput, 'provenance'> {
+  const existingMetadata = parseObject(item.metadata) ?? {};
+  return {
+    brand: item.brand ?? undefined,
+    confirmedAt: item.confirmedAt ?? undefined,
+    costCad: item.costCad ?? undefined,
+    estimatedExpiry: item.estimatedExpiry ?? undefined,
+    location: item.location ?? undefined,
+    longLifeDefault: item.longLifeDefault || undefined,
+    metadata: { ...existingMetadata, ...metadataPatch },
+    name: item.name,
+    perishability: item.perishability ?? undefined,
+    purchasedAt: item.purchasedAt ?? undefined,
+    quantity: item.quantity ?? undefined,
+    source: item.source ?? undefined,
+    status: item.status ?? undefined,
+    unit: item.unit ?? undefined,
+  };
+}
+
+function buildPantryDashboardViewModel(input: {
+  currentPlan: MealPlanRecord | null;
+  groceryPlan: GroceryPlanRecord | null;
+  inventory: InventoryRecord[];
+}): PantryDashboardViewModel {
+  const recipeContext = buildRecipeContextMap(input.groceryPlan);
+  const activeInventory = input.inventory.filter((item) => !isPantryDashboardUsedUp(item));
+  const groupedRecentShops = new Map<string, InventoryRecord[]>();
+
+  for (const item of activeInventory.filter((entry) => entry.purchasedAt).sort((a, b) => (b.purchasedAt ?? '').localeCompare(a.purchasedAt ?? ''))) {
+    const dateKey = (item.purchasedAt ?? '').slice(0, 10);
+    if (!dateKey) continue;
+    const bucket = groupedRecentShops.get(dateKey) ?? [];
+    bucket.push(item);
+    groupedRecentShops.set(dateKey, bucket);
+  }
+
+  const recentShopKeys = Array.from(groupedRecentShops.keys()).sort((a, b) => b.localeCompare(a)).slice(0, 3);
+  const recentShops: PantryShopViewModel[] = recentShopKeys.map((dateKey) => {
+    const items = groupedRecentShops.get(dateKey) ?? [];
+    const mappedItems: PantryShopItemViewModel[] = items.slice(0, 8).map((item) => ({
+      forMeal: inventoryRecipeContext(item, recipeContext),
+      id: `inventory:${item.id}`,
+      name: titleCaseWords(item.name),
+      qty: quantityDisplay(item.quantity ?? item.canonicalQuantity, item.unit ?? item.canonicalUnit),
+      status: item.confirmedAt && item.purchasedAt && item.confirmedAt > item.purchasedAt ? 'opened' : 'unused',
+    }));
+    return {
+      date: formatPantryDateLabel(dateKey) ?? dateKey,
+      daysAgo: daysAgoFromDate(dateKey),
+      id: `shop:${dateKey}`,
+      items: mappedItems,
+      store: pickRecentShopStore(items[0]!),
+    };
+  });
+
+  const recentShopInventoryIds = new Set(recentShopKeys.flatMap((dateKey) => (groupedRecentShops.get(dateKey) ?? []).map((item) => item.id)));
+
+  const likelyOpen: PantryLikelyOpenViewModel[] = activeInventory
+    .filter((item) => !recentShopInventoryIds.has(item.id))
+    .filter((item) => item.location === 'pantry' || item.longLifeDefault)
+    .filter((item) => item.confirmedAt || item.purchasedAt)
+    .sort((a, b) => (b.confirmedAt ?? b.purchasedAt ?? '').localeCompare(a.confirmedAt ?? a.purchasedAt ?? ''))
+    .slice(0, 8)
+    .map((item) => ({
+      id: item.id,
+      lastAppearedIn: inventoryRecipeContext(item, recipeContext),
+      lastSeenRelative: (() => {
+        const daysAgo = daysAgoFromDate(item.confirmedAt ?? item.purchasedAt);
+        return daysAgo == null ? null : `${daysAgo}d ago`;
+      })(),
+      name: titleCaseWords(item.name),
+    }));
+
+  const boughtRecently: PantryBoughtRecentlyViewModel[] = activeInventory
+    .filter((item) => !recentShopInventoryIds.has(item.id))
+    .filter((item) => Boolean(item.purchasedAt))
+    .sort((a, b) => (b.purchasedAt ?? '').localeCompare(a.purchasedAt ?? ''))
+    .slice(0, 8)
+    .map((item) => ({
+      daysAgo: daysAgoFromDate(item.purchasedAt),
+      id: item.id,
+      name: titleCaseWords(item.name),
+      note: inventoryRecipeContext(item, recipeContext),
+    }));
+
+  const staples: PantryStapleViewModel[] = activeInventory
+    .filter(isStapleCandidate)
+    .slice(0, 10)
+    .map((item) => ({
+      id: item.id,
+      name: titleCaseWords(item.name),
+      qty: quantityDisplay(item.quantity ?? item.canonicalQuantity, item.unit ?? item.canonicalUnit),
+      state: inferStapleState(item),
+    }));
+
+  const actions: PantryDashboardActionViewModel[] = [
+    {
+      id: 'mark_used_up',
+      label: 'Mark used up',
+      toolName: 'meals_apply_pantry_dashboard_action',
+      args: { action_id: 'mark_used_up' },
+    },
+    {
+      id: 'undo_used_up',
+      label: 'Undo used up',
+      toolName: 'meals_apply_pantry_dashboard_action',
+      args: { action_id: 'undo_used_up' },
+    },
+    {
+      id: 'update_staple',
+      label: 'Update staple',
+      toolName: 'meals_apply_pantry_dashboard_action',
+      args: { action_id: 'update_staple' },
+    },
+    {
+      id: 'add_staple',
+      label: 'Add staple',
+      toolName: 'meals_apply_pantry_dashboard_action',
+      args: { action_id: 'add_staple' },
+    },
+    {
+      id: 'suggest_recipes',
+      label: 'Suggest recipes',
+      toolName: 'meals_apply_pantry_dashboard_action',
+      args: { action_id: 'suggest_recipes' },
+    },
+    {
+      id: 'plan_meals',
+      label: 'Plan meals around these',
+      toolName: 'meals_apply_pantry_dashboard_action',
+      args: { action_id: 'plan_meals' },
+    },
+  ];
+
+  const shopItemCount = recentShops.reduce((count, shop) => count + shop.items.length, 0);
+  return {
+    actions,
+    boughtRecently,
+    generatedAt: new Date().toISOString(),
+    headline: recentShops.length ? 'Here’s what probably came home with you' : 'Kitchen confidence dashboard',
+    honestyNote:
+      'These are estimates grounded in your receipts, grocery history, and meal plans, not a live view of your fridge or pantry.',
+    id: input.currentPlan?.id ?? input.groceryPlan?.id ?? 'pantry-dashboard',
+    likelyOpen,
+    recentShops,
+    staples,
+    subheadline: input.currentPlan?.weekStart ? `Week of ${input.currentPlan.weekStart}` : 'Grounded in your recent shops and plans',
+    totalsLabel: `${shopItemCount} recent item${shopItemCount === 1 ? '' : 's'} · ${staples.length} staple${staples.length === 1 ? '' : 's'}`,
+  };
 }
 const calendarContextDaySchema = z.object({
   date: z.string(),
@@ -100,13 +509,23 @@ function normalizeMealsTrainingContextInput(
   };
 }
 
-export function registerMealsMcpSurface(server: McpServer, meals: MealsService, fluentCore: FluentCoreService, origin: string) {
+export function registerMealsMcpSurface(
+  server: McpServer,
+  meals: MealsService,
+  fluentCore: FluentCoreService,
+  origin: string,
+  options?: MealsMcpSurfaceOptions,
+) {
   const recipeCardWidgetMeta = buildWidgetMeta(
     'Fluent recipe card for a saved meal recipe, with ingredients, steps, and cook mode.',
     origin,
   );
   const groceryListWidgetMeta = buildWidgetMeta(
     'Fluent grocery checklist for the current week, with To buy, Verify quantity, Check pantry, and quick sync actions.',
+    origin,
+  );
+  const pantryDashboardWidgetMeta = buildWidgetMeta(
+    'Fluent pantry dashboard grounded in recent shops, likely-open staples, and kitchen-confidence signals.',
     origin,
   );
 
@@ -154,32 +573,56 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
     }),
   );
 
-  const grocerySmokeWidgetMeta = buildWidgetMeta(
-    'Static Fluent grocery smoke widget for ChatGPT host verification.',
-    origin,
-  );
-
   server.registerResource(
-    'fluent-meals-grocery-smoke-widget',
-    MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+    'fluent-meals-pantry-dashboard-widget',
+    MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
     {
-      title: 'Grocery Smoke Widget',
-      description: 'Static grocery smoke widget for ChatGPT host verification.',
+      title: 'Pantry Dashboard Widget',
+      description: 'Rich pantry dashboard for recent shops, likely-open items, and tracked staples.',
       mimeType: 'text/html;profile=mcp-app',
       icons: iconFor(origin),
-      _meta: grocerySmokeWidgetMeta,
+      _meta: pantryDashboardWidgetMeta,
     },
     async () => ({
       contents: [
         {
-          uri: MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+          uri: MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
           mimeType: 'text/html;profile=mcp-app',
-          text: getGrocerySmokeWidgetHtml(),
-          _meta: grocerySmokeWidgetMeta,
+          text: getPantryDashboardWidgetHtml(),
+          _meta: pantryDashboardWidgetMeta,
         },
       ],
     }),
   );
+
+  if (options?.includeDevWidgetSurfaces) {
+    const grocerySmokeWidgetMeta = buildWidgetMeta(
+      'Static Fluent grocery smoke widget for ChatGPT host verification.',
+      origin,
+    );
+
+    server.registerResource(
+      'fluent-meals-grocery-smoke-widget',
+      MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+      {
+        title: 'Grocery Smoke Widget',
+        description: 'Static grocery smoke widget for ChatGPT host verification.',
+        mimeType: 'text/html;profile=mcp-app',
+        icons: iconFor(origin),
+        _meta: grocerySmokeWidgetMeta,
+      },
+      async () => ({
+        contents: [
+          {
+            uri: MEALS_GROCERY_SMOKE_TEMPLATE_URI,
+            mimeType: 'text/html;profile=mcp-app',
+            text: getGrocerySmokeWidgetHtml(),
+            _meta: grocerySmokeWidgetMeta,
+          },
+        ],
+      }),
+    );
+  }
 
   server.registerResource(
     'meals-current-plan',
@@ -444,7 +887,7 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
     {
       title: 'Get Recipe Data',
       description:
-        'Fetch canonical recipe data by recipe ID. Use this for raw recipe details, ingredient extraction, editing, patching, or hosts that render first-party recipe visuals themselves. In ChatGPT app surfaces and other hosts that support Fluent MCP widgets, if the user wants to show, view, open, or pull up the recipe, prefer meals_render_recipe_card instead of this raw data tool.',
+        'Fetch canonical recipe data by recipe ID. Use this for raw recipe details, ingredient extraction, editing, patching, simple data questions, and as the default recipe path in Codex, OpenClaw, generic plain MCP clients, and hosts that render first-party recipe visuals themselves. In ChatGPT / MCP Apps-style hosts that support Fluent widgets, if the user wants to show, view, open, or pull up the recipe, prefer meals_render_recipe_card instead of this raw data tool.',
       inputSchema: {
         recipe_id: z.string().optional(),
         id: z.string().optional(),
@@ -546,11 +989,11 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
       toolName,
       {
         title: options?.preferredAlias
-          ? 'Show Recipe (ChatGPT/App SDK Widget)'
+          ? 'Show Recipe (Preferred ChatGPT/App SDK Alias)'
           : 'Show Recipe Card (ChatGPT/App SDK Widget)',
         description: options?.preferredAlias
-          ? 'Show a saved Fluent recipe as a rich Fluent widget only in hosts that support MCP output templates, such as ChatGPT app surfaces. Prefer this for ordinary prompts like "show me the recipe for X", "open this recipe", or "pull up that recipe" in ChatGPT. Do not use this in Claude.ai, Claude Code, or other first-party visual hosts; there, prefer meals_get_recipe and let the host render its own recipe visual or recipe_display_v0.'
-          : 'Show a saved Fluent recipe as a rich Fluent widget only in hosts that support MCP output templates, such as ChatGPT app surfaces. Prefer this when the user says show, open, view, or pull up a recipe in those hosts, including prompts like "show me the recipe for X." Do not use this in Claude.ai, Claude Code, or other first-party visual hosts; there, prefer meals_get_recipe and let the host render its own recipe visual or recipe_display_v0.',
+          ? 'Preferred public alias for showing a saved Fluent recipe as a rich Fluent widget only in hosts that support MCP output templates, such as ChatGPT / MCP Apps-style hosts. Prefer this for ordinary prompts like "show me the recipe for X", "open this recipe", or "pull up that recipe" in those hosts. Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer meals_get_recipe and either let the host render its own recipe visual or answer in text.'
+          : 'Show a saved Fluent recipe as a rich Fluent widget only in hosts that support MCP output templates, such as ChatGPT / MCP Apps-style hosts. Prefer this when the user says show, open, view, or pull up a recipe in those hosts, including prompts like "show me the recipe for X." Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer meals_get_recipe and either let the host render its own recipe visual or answer in text.',
         inputSchema: {
           recipe_id: z.string().optional(),
           recipeId: z.string().optional(),
@@ -584,8 +1027,8 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
           ? 'Show Grocery Checklist (Legacy ChatGPT/App SDK Alias)'
           : 'Show Grocery Checklist (ChatGPT/App SDK Widget)',
         description: options?.deprecatedAlias
-          ? 'Legacy alias for showing the user\'s real Fluent grocery checklist only in hosts that support MCP output templates, such as ChatGPT app surfaces. Do not use this in Claude.ai, Claude Code, or other first-party visual hosts; there, prefer meals_get_grocery_plan and let the host render with its own visualizer. Do not use this for standalone smoke tests, host verification, widget debugging, or standalone widget prompts.'
-          : 'Show the user\'s real Fluent grocery checklist for the active week only in hosts that support Fluent MCP output templates, such as ChatGPT app surfaces. Use this for ordinary grocery-list asks when the user wants a rich checklist with To buy, Verify quantity, and Check pantry sections in those hosts. Do not use this in Claude.ai, Claude Code, or other first-party visual hosts; there, prefer canonical grocery data from meals_get_grocery_plan and let the host render with its own visualizer. Do not use this for standalone smoke tests, host verification, widget debugging, or standalone widget prompts.',
+          ? 'Legacy alias for showing the user\'s real Fluent grocery checklist only in hosts that support MCP output templates, such as ChatGPT / MCP Apps-style hosts. Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer meals_get_grocery_plan and either let the host render with its own visualizer or answer in text. Do not use this for standalone smoke tests, host verification, widget debugging, or standalone widget prompts.'
+          : 'Show the user\'s real Fluent grocery checklist for the active week only in hosts that support Fluent MCP output templates, such as ChatGPT / MCP Apps-style hosts. Use this for ordinary grocery-list asks when the user wants a rich checklist with To buy, Verify quantity, and Check pantry sections in those hosts. Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer canonical grocery data from meals_get_grocery_plan and either let the host render with its own visualizer or answer in text. Do not use this for standalone smoke tests, host verification, widget debugging, or standalone widget prompts.',
         inputSchema: {
           week_start: z.string().optional(),
           weekStart: z.string().optional(),
@@ -657,16 +1100,267 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
   registerRenderGroceryListTool('meals_render_grocery_list', { deprecatedAlias: true });
 
   server.registerTool(
-    'meals_render_grocery_widget_smoke',
+    'meals_render_pantry_dashboard',
     {
-      title: 'Render Standalone Grocery Widget',
+      title: 'Show Pantry Dashboard (ChatGPT/App SDK Widget)',
       description:
-        'Render a standalone static grocery widget for ChatGPT host verification. Prefer this for prompts about a standalone grocery widget, grocery widget smoke test, host verification, or widget debugging. Use this instead of the real grocery list whenever the user asks for a standalone or verification widget.',
+        'Show a Fluent pantry dashboard for recent shops, likely-open pantry items, and tracked staples only in hosts that support Fluent MCP output templates, such as ChatGPT / MCP Apps-style hosts. Prefer this when the user wants a kitchen or pantry dashboard rather than the grocery checklist. Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients.',
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
       },
+      _meta: {
+        ui: {
+          resourceUri: MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
+        },
+        'openai/outputTemplate': MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
+        'openai/toolInvocation/invoked': 'Pantry dashboard ready.',
+        'openai/toolInvocation/invoking': 'Opening pantry dashboard…',
+        'openai/widgetAccessible': true,
+      },
+    },
+    async () => {
+      requireScope(FLUENT_MEALS_READ_SCOPE);
+      const currentPlan = await meals.getCurrentPlan();
+      const groceryPlan = currentPlan ? await meals.getGroceryPlan(currentPlan.weekStart) : null;
+      const inventory = await meals.getInventory();
+      const viewModel = buildPantryDashboardViewModel({
+        currentPlan,
+        groceryPlan,
+        inventory,
+      });
+      return {
+        _meta: buildPantryDashboardMetadata(viewModel),
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Showing the pantry dashboard.',
+          },
+        ],
+        structuredContent: buildPantryDashboardStructuredContent(viewModel),
+      };
+    },
+  );
+
+  server.registerTool(
+    'meals_apply_pantry_dashboard_action',
+    {
+      title: 'Apply Pantry Dashboard Action',
+      description:
+        'Apply a widget-originated pantry dashboard action, such as marking a recent-shop item used up, updating a tracked staple, suggesting pantry-aware recipes, or generating a pantry-aware meal-plan candidate.',
+      inputSchema: {
+        action_id: z.enum([
+          'mark_used_up',
+          'undo_used_up',
+          'update_staple',
+          'add_staple',
+          'suggest_recipes',
+          'plan_meals',
+        ]),
+        dashboard_id: z.string().optional(),
+        item_key: z.string().optional(),
+        staple_id: z.string().optional(),
+        staple_name: z.string().optional(),
+        ...provenanceInputSchema,
+      },
+      _meta: {
+        'openai/widgetAccessible': true,
+      },
+    },
+    async (args) => {
+      const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
+      const provenance = buildMutationProvenance(authProps, args);
+      const inventory = await meals.getInventory();
+
+      if (args.action_id === 'mark_used_up' || args.action_id === 'undo_used_up') {
+        if (!args.item_key?.trim()) {
+          throw new Error(`Pantry dashboard action ${args.action_id} requires item_key.`);
+        }
+        const inventoryId = args.item_key.startsWith('inventory:') ? args.item_key.slice('inventory:'.length) : args.item_key;
+        const target = inventory.find((item) => item.id === inventoryId);
+        if (!target) {
+          throw new Error(`Could not find pantry dashboard inventory item ${args.item_key}.`);
+        }
+
+        const metadataPatch =
+          args.action_id === 'mark_used_up'
+            ? { pantry_dashboard_used_up: true }
+            : { pantry_dashboard_used_up: false };
+
+        const updated = await meals.updateInventory({
+          ...buildInventoryMutationArgs(target, metadataPatch),
+          provenance,
+        });
+
+        return toolResult(updated, {
+          structuredContent: {
+            action: args.action_id,
+            experience: 'pantry_dashboard_action',
+            inventoryItemId: updated.id,
+            name: updated.name,
+            pantryDashboardUsedUp: parseBoolean(parseObject(updated.metadata)?.pantry_dashboard_used_up),
+          },
+          textData: {
+            action: args.action_id,
+            inventoryItemId: updated.id,
+            name: updated.name,
+            pantryDashboardUsedUp: parseBoolean(parseObject(updated.metadata)?.pantry_dashboard_used_up),
+          },
+        });
+      }
+
+      if (args.action_id === 'update_staple') {
+        if (!args.staple_id?.trim()) {
+          throw new Error('Pantry dashboard action update_staple requires staple_id.');
+        }
+        const target = inventory.find((item) => item.id === args.staple_id);
+        if (!target) {
+          throw new Error(`Could not find pantry staple ${args.staple_id}.`);
+        }
+        const existingMetadata = parseObject(target.metadata) ?? {};
+        const nextState = nextStapleState(inferStapleState(target));
+        const updated = await meals.updateInventory({
+          ...buildInventoryMutationArgs(target, {
+            ...existingMetadata,
+            pantry_dashboard_staple: true,
+            pantry_dashboard_staple_added_at:
+              parseString(existingMetadata.pantry_dashboard_staple_added_at) ?? new Date().toISOString(),
+            pantry_dashboard_staple_state: nextState,
+          }),
+          provenance,
+        });
+        return toolResult(updated, {
+          structuredContent: {
+            action: args.action_id,
+            experience: 'pantry_dashboard_action',
+            inventoryItemId: updated.id,
+            name: updated.name,
+            stapleState: nextState,
+          },
+          textData: {
+            action: args.action_id,
+            inventoryItemId: updated.id,
+            name: updated.name,
+            stapleState: nextState,
+          },
+        });
+      }
+
+      if (args.action_id === 'add_staple') {
+        const stapleName = titleCaseWords(args.staple_name);
+        if (!stapleName) {
+          throw new Error('Add staple requires a name.');
+        }
+        const now = new Date().toISOString();
+        const created = await meals.updateInventory({
+          name: stapleName,
+          status: 'present',
+          source: 'pantry_dashboard',
+          confirmedAt: null,
+          purchasedAt: null,
+          estimatedExpiry: null,
+          perishability: 'long_life',
+          longLifeDefault: true,
+          quantity: null,
+          unit: null,
+          location: 'pantry',
+          brand: null,
+          costCad: null,
+          metadata: {
+            pantry_dashboard_staple: true,
+            pantry_dashboard_staple_added_at: now,
+            pantry_dashboard_staple_state: 'ok',
+          },
+          provenance,
+        });
+        return toolResult(created, {
+          structuredContent: {
+            action: args.action_id,
+            experience: 'pantry_dashboard_action',
+            inventoryItemId: created.id,
+            name: created.name,
+            stapleState: 'ok',
+          },
+          textData: {
+            action: args.action_id,
+            inventoryItemId: created.id,
+            name: created.name,
+            stapleState: 'ok',
+          },
+        });
+      }
+
+      if (args.action_id === 'suggest_recipes') {
+        const suggestions = buildPantryRecipeSuggestions({
+          inventory,
+          recipes: await meals.listRecipes(undefined, 'active'),
+          limit: 4,
+        });
+        const result = {
+          experience: 'pantry_recipe_suggestions',
+          title: suggestions.length ? 'Recipes that fit what is probably around' : 'No pantry-led recipe ideas yet',
+          suggestionCount: suggestions.length,
+          suggestions,
+        };
+        return toolResult(result, {
+          structuredContent: result,
+          textData: result,
+        });
+      }
+
+      if (args.action_id === 'plan_meals') {
+        const suggestions = buildPantryRecipeSuggestions({
+          inventory,
+          recipes: await meals.listRecipes(undefined, 'active'),
+          limit: 6,
+        });
+        const weekStart = await resolveMealsGroceryWeekStart(meals);
+        const generation = await meals.generatePlan({
+          weekStart,
+          overrides: {
+            includeRecipeIds: suggestions.map((entry) => entry.recipeId),
+            prioritizeInventory: true,
+          },
+          provenance,
+        });
+        const result = {
+          candidateCount: generation.candidates.length,
+          candidatePreview: generation.candidates.slice(0, 3).map((candidate) => ({
+            candidateId: candidate.candidateId,
+            dinnerCount: candidate.entries.filter((entry) => entry.mealType === 'dinner').length,
+            entryCount: candidate.entryCount,
+            recipeNamePreview: candidate.recipeNamePreview,
+            warningCount: candidate.warnings.length,
+          })),
+          experience: 'pantry_plan_generation',
+          generationId: generation.id,
+          seededRecipeIds: suggestions.map((entry) => entry.recipeId),
+          title: 'Meal-plan candidate built around what is already here',
+          weekStart: generation.weekStart,
+        };
+        return toolResult(generation, {
+          structuredContent: result,
+          textData: result,
+        });
+      }
+
+      throw new Error(`Unsupported pantry dashboard action ${args.action_id}.`);
+    },
+  );
+
+  if (options?.includeDevWidgetSurfaces) {
+    server.registerTool(
+      'meals_render_grocery_widget_smoke',
+      {
+        title: 'Render Standalone Grocery Widget',
+        description:
+          'Render a standalone static grocery widget for ChatGPT host verification. Prefer this for prompts about a standalone grocery widget, grocery widget smoke test, host verification, or widget debugging. Use this instead of the real grocery list whenever the user asks for a standalone or verification widget.',
+        inputSchema: {},
+        annotations: {
+          readOnlyHint: true,
+          idempotentHint: true,
+        },
         _meta: {
           ui: {
             resourceUri: MEALS_GROCERY_SMOKE_TEMPLATE_URI,
@@ -676,27 +1370,28 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
           'openai/toolInvocation/invoking': 'Building standalone grocery smoke widget…',
         },
       },
-    async () => {
-      requireScope(FLUENT_MEALS_READ_SCOPE);
-      return {
-        _meta: {
-          experience: 'grocery_widget_smoke_tool',
-          version: 'v1',
-        },
-        content: [
-          {
-            type: 'text' as const,
-            text: 'Showing the standalone grocery smoke widget.',
+      async () => {
+        requireScope(FLUENT_MEALS_READ_SCOPE);
+        return {
+          _meta: {
+            experience: 'grocery_widget_smoke_tool',
+            version: 'v1',
           },
-        ],
-        structuredContent: {
-          experience: 'grocery_widget_smoke_tool',
-          title: 'Standalone grocery smoke widget',
-          version: 'v1',
-        },
-      };
-    },
-  );
+          content: [
+            {
+              type: 'text' as const,
+              text: 'Showing the standalone grocery smoke widget.',
+            },
+          ],
+          structuredContent: {
+            experience: 'grocery_widget_smoke_tool',
+            title: 'Standalone grocery smoke widget',
+            version: 'v1',
+          },
+        };
+      },
+    );
+  }
 
   server.registerTool(
     'meals_create_recipe',
@@ -1432,7 +2127,7 @@ export function registerMealsMcpSurface(server: McpServer, meals: MealsService, 
     {
       title: 'Get Grocery Plan',
       description:
-        'Fetch the underlying grocery-plan document for a meal-plan week, including buy-list items, pantry checks, substitutions, and resolved grocery actions. Prefer this for audit/debugging, when the user explicitly wants the raw plan data, and as the canonical grocery source for Claude.ai, Claude Code, and other hosts that can render first-party checklist visuals. In hosts that explicitly support Fluent MCP widgets, ordinary grocery-list asks can instead use meals_render_grocery_list_v2.',
+        'Fetch the underlying grocery-plan document for a meal-plan week, including buy-list items, pantry checks, substitutions, and resolved grocery actions. Prefer this for audit/debugging, when the user explicitly wants the raw plan data, for simple grocery data questions, and as the canonical grocery source for Claude.ai, Claude Code, Codex, OpenClaw, and generic plain MCP clients. In ChatGPT / MCP Apps-style hosts that explicitly support Fluent MCP widgets, ordinary grocery-list asks can instead use meals_render_grocery_list_v2.',
       inputSchema: {
         week_start: z.string(),
         view: readViewSchema,
