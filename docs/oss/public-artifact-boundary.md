@@ -9,6 +9,7 @@ Public scrub coverage includes:
 - root release docs such as `README.md`, `CHANGELOG.md`, and example env files
 - exported docs under `docs/`
 - packaged client bundles under `plugins/`, `claude-plugin/`, and `openclaw-plugin/`
+- the `openclaw-plugin/fluent` bundle is exported as the helper package `fluent-openclaw-oss-helper`, not as the published standalone `fluent-openclaw` package
 - public tests and scaffold examples
 - export metadata under `.oss-export/`
 

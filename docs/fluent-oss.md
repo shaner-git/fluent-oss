@@ -21,7 +21,7 @@ Public release references:
 - bearer-token protected `/mcp`
 - open `GET /health`
 - open `GET /codex-probe`
-- same MCP contract as Hosted Fluent
+- same MCP contract as Fluent Cloud
 - supported minimum contract version: `2026-04-20.fluent-core-v1.37`
 - local DB and artifacts stored under `~/.fluent/` by default
 - no OAuth, no `/authorize`, no `/token`
@@ -66,7 +66,21 @@ Generate an OpenClaw config:
 npm run scaffold:mcp -- --client openclaw --track oss --base-url http://127.0.0.1:8788
 ```
 
-For OpenClaw, this scaffold output is the native `mcp.servers.fluent` JSON block you should register with `openclaw mcp set fluent ...`.
+Install the published OpenClaw package first:
+
+```bash
+openclaw plugins install fluent-openclaw
+```
+
+Then bind Fluent OSS with:
+
+```bash
+openclaw fluent mcp oss --base-url http://127.0.0.1:8788 --token <oss-token>
+```
+
+For OpenClaw, the scaffold output is still the native `mcp.servers.fluent` JSON block you can register manually with `openclaw mcp set fluent ...`.
+
+The checked-in `openclaw-plugin/fluent/` bundle is the separate helper package `fluent-openclaw-oss-helper`, not the published `fluent-openclaw` package line.
 
 ## Docker Compose Usage
 

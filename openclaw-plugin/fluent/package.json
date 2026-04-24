@@ -1,9 +1,9 @@
 {
-  "name": "fluent-openclaw",
+  "name": "fluent-openclaw-oss-helper",
   "version": "0.1.0",
-  "private": false,
+  "private": true,
   "type": "module",
-  "description": "Native OpenClaw plugin packaging for Fluent skills, managed auth, and MCP setup.",
+  "description": "Bundled Fluent OSS helper package for OpenClaw skills, local auth, and MCP setup.",
   "author": {
     "name": "Fluent",
     "email": "alex@example.invalid",
@@ -48,6 +48,11 @@
     }
   },
   "x-fluent": {
+    "artifactKind": "oss-bundled-openclaw-helper",
+    "packagingDecision": "oss-embedded-openclaw-bundle-is-a-distinct-helper-package",
+    "standalonePackageName": "fluent-openclaw",
+    "standalonePackageRepository": "https://github.com/shaner-git/fluent-openclaw",
+    "versionPolicy": "Tracks bundled Fluent OSS helper revisions and is not the published fluent-openclaw package line.",
     "backendModesStatus": "plugin-managed-auth-beta",
     "backendModes": ["hosted", "local"],
     "legacyBackendModes": ["hosted", "local"],

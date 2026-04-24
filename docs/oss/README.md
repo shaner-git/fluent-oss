@@ -15,6 +15,7 @@ Public release references:
 - upgrade notes: [./fluent-oss-upgrade-notes.md](./fluent-oss-upgrade-notes.md)
 - Docker notes: [./fluent-oss-docker-notes.md](./fluent-oss-docker-notes.md)
 - GitHub release checklist: [./fluent-oss-github-release-checklist.md](./fluent-oss-github-release-checklist.md)
+- OpenClaw package versioning: [./openclaw-package-versioning.md](./openclaw-package-versioning.md)
 - public artifact boundary: [./public-artifact-boundary.md](./public-artifact-boundary.md)
 - release gate: [../fluent-release-gate.md](../fluent-release-gate.md)
 
@@ -23,7 +24,7 @@ Primary OSS expectations:
 - single-user in v1
 - self-hostable over HTTP
 - bearer-token protected `/mcp`
-- contract-compatible with Hosted Fluent
+- contract-compatible with Fluent Cloud
 - Docker-first distribution plus raw Node runtime support
 - direct runtime requirement: Node.js `22.x`
 - supported minimum contract version: `2026-04-20.fluent-core-v1.37`

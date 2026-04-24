@@ -105,6 +105,10 @@ export async function verifyContractParity(options?: { cwd?: string }) {
     report.parity.claudePackage.ok === true,
     report.parity.claudePackage.minimumContractVersion === FLUENT_CONTRACT_VERSION,
     report.parity.openclawPackage.ok === true,
+    report.parity.openclawPackage.packageName === 'fluent-openclaw-oss-helper',
+    report.parity.openclawPackage.private === true,
+    report.parity.openclawPackage.artifactKind === 'oss-bundled-openclaw-helper',
+    report.parity.openclawPackage.packagingDecision === 'oss-embedded-openclaw-bundle-is-a-distinct-helper-package',
     report.parity.openclawPackage.minimumContractVersion === FLUENT_CONTRACT_VERSION,
     report.parity.codexMcp.ok === true && report.parity.codexMcp.baseUrl === 'http://127.0.0.1:8788',
     report.parity.codexOssMcp.ok === true && report.parity.codexOssMcp.baseUrl === 'http://127.0.0.1:8788',
@@ -194,8 +198,11 @@ async function readPluginPackage(filePath: string) {
   const json = JSON.parse(await readFile(filePath, 'utf8')) as JsonRecord;
   return {
     ok: true,
+    artifactKind: asRecord(json['x-fluent'])?.artifactKind ?? null,
     minimumContractVersion: asRecord(json['x-fluent'])?.minimumContractVersion ?? null,
+    packagingDecision: asRecord(json['x-fluent'])?.packagingDecision ?? null,
     packageName: json.name ?? null,
+    private: json.private ?? null,
   };
 }
 

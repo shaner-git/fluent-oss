@@ -19,6 +19,7 @@ for (const relativePath of [
   'docs/oss/README.md',
   'docs/oss/fluent-oss-github-release-checklist.md',
   'docs/oss/fluent-oss-setup-matrix.md',
+  'docs/oss/openclaw-package-versioning.md',
   'docs/oss/fluent-oss-upgrade-notes.md',
 ]) {
   const body = readRepoFile(relativePath);
@@ -54,6 +55,24 @@ for (const relativePath of [
   };
   assert.equal(json['x-fluent']?.minimumContractVersion, currentVersion, `${relativePath} must stay on ${currentVersion}.`);
 }
+
+const openclawPackage = JSON.parse(readRepoFile('openclaw-plugin/fluent/package.json')) as {
+  name?: string;
+  private?: boolean;
+  'x-fluent'?: Record<string, unknown>;
+};
+assert.equal(openclawPackage.name, 'fluent-openclaw-oss-helper');
+assert.equal(openclawPackage.private, true);
+assert.equal(openclawPackage['x-fluent']?.artifactKind, 'oss-bundled-openclaw-helper');
+assert.equal(
+  openclawPackage['x-fluent']?.packagingDecision,
+  'oss-embedded-openclaw-bundle-is-a-distinct-helper-package',
+);
+
+const openclawHelperReadme = readRepoFile('openclaw-plugin/fluent/README.md');
+assert.equal(openclawHelperReadme.includes('fluent-openclaw-oss-helper'), true);
+assert.equal(openclawHelperReadme.includes('openclaw plugins install fluent-openclaw'), true);
+assert.equal(openclawHelperReadme.includes('not the published standalone `fluent-openclaw` package'), true);
 
 console.log('oss docs ok');
 

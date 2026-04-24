@@ -82,7 +82,8 @@ Client packaging stays platform-specific even though the MCP contract is shared:
 
 - Codex keeps the main bundle with local helper scripts for execution-heavy skills.
 - Claude keeps a parallel bundle tuned to Claude's plugin layout.
-- OpenClaw ships as a native plugin for the shared `skills/` tree, but its hosted or OSS MCP connection is applied through native `mcp.servers` profile config rather than package-loaded HTTP MCP state.
+- OpenClaw ships as a native plugin for the shared `skills/` tree, but the checked-in `openclaw-plugin/fluent` copy is a bundled OSS helper package rather than the published standalone `fluent-openclaw` release line.
+- OpenClaw's hosted or OSS MCP connection is applied through native `mcp.servers` profile config rather than package-loaded HTTP MCP state.
 
 ## Domain Model
 

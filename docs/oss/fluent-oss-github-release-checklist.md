@@ -11,8 +11,11 @@ Use this checklist when cutting a public OSS release such as `v0.1.0`.
 - confirm [docs/oss/fluent-oss-upgrade-notes.md](./fluent-oss-upgrade-notes.md) is current
 - confirm [docs/oss/fluent-oss-docker-notes.md](./fluent-oss-docker-notes.md) is current
 - confirm [docs/oss/public-artifact-boundary.md](./public-artifact-boundary.md) is current
+- confirm [docs/oss/openclaw-package-versioning.md](./openclaw-package-versioning.md) is current
 - confirm the supported contract version is `2026-04-20.fluent-core-v1.37`
 - confirm Node.js `22.x` is the stated direct-runtime requirement across README, docs, and CI
+- confirm `openclaw-plugin/fluent/package.json` still uses the helper package name `fluent-openclaw-oss-helper`
+- confirm no OSS release-facing doc presents `openclaw-plugin/fluent` as the published `fluent-openclaw` package
 
 ## Verification
 

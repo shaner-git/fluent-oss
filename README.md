@@ -6,7 +6,7 @@ Fluent OSS is a self-hosted MCP server for:
 - health planning and workout logging
 - closet-aware style decisions
 
-It is the open-source self-hosted track of Fluent. If you want Fluent without running infrastructure yourself, Hosted Fluent is the managed commercial option. Both tracks share the same MCP contract.
+It is the open-source self-hosted track of Fluent. If you want Fluent without running infrastructure yourself, Fluent Cloud is the managed early-access option. Both tracks share the same MCP contract.
 
 ## Public Release
 
@@ -23,7 +23,7 @@ It is the open-source self-hosted track of Fluent. If you want Fluent without ru
 - Codex, Claude, and OpenClaw users who want an MCP server they control
 - power users who are comfortable with a local token, local storage, and a small amount of setup
 
-If you want the easiest path, Hosted Fluent will be the simpler choice. If you want control, local data, and self-hosting flexibility, start here.
+If you want the easiest hosted path, Fluent Cloud will be the simpler choice once you have early-access eligibility. If you want control, local data, and self-hosting flexibility, start here.
 
 ## What You Get
 
@@ -40,13 +40,13 @@ If you want the easiest path, Hosted Fluent will be the simpler choice. If you w
 - bearer-token auth instead of OAuth
 - Postgres + S3 is experimental
 - this repo focuses on self-hosting, not Hosted billing or onboarding
-- `npm run scaffold:mcp -- --track cloud` requires an explicit `--base-url` in this public repo until Fluent Cloud is GA
+- `npm run scaffold:mcp -- --track cloud` requires an explicit `--base-url` in this public repo while Fluent Cloud remains invite-based early access
 
-## Hosted Vs OSS
+## Cloud Vs OSS
 
 | Option | Best for | Auth | Ops model |
 | --- | --- | --- | --- |
-| Hosted Fluent | people who want managed setup | OAuth | Fluent runs it for you |
+| Fluent Cloud early access | people who want managed setup | OAuth | Fluent runs it for you |
 | Fluent OSS | self-hosters and power users | bearer token | you run it yourself |
 
 ## Prerequisites
@@ -114,7 +114,15 @@ For OpenClaw:
 npm run scaffold:mcp -- --client openclaw --track oss --base-url http://127.0.0.1:8788
 ```
 
-For OpenClaw, the scaffold output is the native `mcp.servers.fluent` JSON block you should register with `openclaw mcp set fluent ...`.
+For OpenClaw, install the published package first:
+
+```bash
+openclaw plugins install fluent-openclaw
+```
+
+Then either run `openclaw fluent mcp oss --base-url http://127.0.0.1:8788 --token <oss-token>` or register the scaffold output as the native `mcp.servers.fluent` JSON block in your OpenClaw profile.
+
+The checked-in `openclaw-plugin/fluent/` directory is the bundled helper package `fluent-openclaw-oss-helper`, not the published `fluent-openclaw` package.
 
 The scaffold command automatically uses your local OSS token unless you override it with `--token` or `--root`.
 
@@ -182,10 +190,11 @@ Then see the operator guide:
 - upgrade notes: [docs/oss/fluent-oss-upgrade-notes.md](./docs/oss/fluent-oss-upgrade-notes.md)
 - Docker notes: [docs/oss/fluent-oss-docker-notes.md](./docs/oss/fluent-oss-docker-notes.md)
 - GitHub release checklist: [docs/oss/fluent-oss-github-release-checklist.md](./docs/oss/fluent-oss-github-release-checklist.md)
+- OpenClaw package versioning: [docs/oss/openclaw-package-versioning.md](./docs/oss/openclaw-package-versioning.md)
 - public artifact boundary: [docs/oss/public-artifact-boundary.md](./docs/oss/public-artifact-boundary.md)
 - shared contract and architecture docs: [docs/shared/README.md](./docs/shared/README.md)
 - release gate: [docs/fluent-release-gate.md](./docs/fluent-release-gate.md)
 
 ## About This Repo
 
-This public repo is generated from Fluent's canonical private source repo so Hosted and OSS stay aligned. Public contributions are welcome, but the source of truth remains the canonical repo and changes are re-exported here.
+This public repo is generated from Fluent's canonical private source repo so Cloud and OSS stay aligned. Public contributions are welcome, but the source of truth remains the canonical repo and changes are re-exported here.

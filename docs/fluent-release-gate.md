@@ -41,6 +41,7 @@ OSS expectations:
 - localhost remains the default bind
 - the runtime can intentionally bind outside localhost when requested
 - Codex and Claude bundles point at the same supported OSS endpoint shape, and OpenClaw scaffolds the same Fluent server as a native `mcp.servers.fluent` entry
+- the checked-in OpenClaw bundle stays identified as the helper package `fluent-openclaw-oss-helper`, not as the published `fluent-openclaw` package
 - Docker image and container smoke checks remain green
 - OSS snapshot backup and restore stay format-compatible across supported OSS backends
 

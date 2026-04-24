@@ -120,6 +120,7 @@ for (const filePath of [
   'docs/oss/README.md',
   'docs/oss/fluent-oss-github-release-checklist.md',
   'docs/oss/fluent-oss-setup-matrix.md',
+  'docs/oss/openclaw-package-versioning.md',
   'docs/oss/fluent-oss-upgrade-notes.md',
   'plugins/fluent/README.md',
   'claude-plugin/fluent/README.md',
@@ -162,6 +163,22 @@ for (const filePath of [
     `${filePath} must declare the canonical contract version as its minimum contract version.`,
   );
 }
+
+const openclawPackage = JSON.parse(readRepoFile('openclaw-plugin/fluent/package.json')) as {
+  name?: string;
+  private?: boolean;
+  'x-fluent'?: {
+    artifactKind?: string;
+    packagingDecision?: string;
+  };
+};
+assert.equal(openclawPackage.name, 'fluent-openclaw-oss-helper');
+assert.equal(openclawPackage.private, true);
+assert.equal(openclawPackage['x-fluent']?.artifactKind, 'oss-bundled-openclaw-helper');
+assert.equal(
+  openclawPackage['x-fluent']?.packagingDecision,
+  'oss-embedded-openclaw-bundle-is-a-distinct-helper-package',
+);
 
 if (repoFileExists('docs/fluent-hosted-client-testing.md')) {
   const hostedClientTestingDoc = readRepoFile('docs/fluent-hosted-client-testing.md');

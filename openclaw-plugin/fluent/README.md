@@ -1,6 +1,12 @@
-# Fluent OpenClaw Plugin
+# Fluent OSS OpenClaw Helper
 
-This public OpenClaw plugin package is OSS-first.
+This directory is the bundled OpenClaw helper package exported with `fluent-oss`.
+
+It is not the published standalone `fluent-openclaw` package. If you want the public OpenClaw install surface, use:
+
+```bash
+openclaw plugins install fluent-openclaw
+```
 
 Default MCP config:
 
@@ -9,13 +15,13 @@ Default MCP config:
 Recommended setup:
 
 1. Start Fluent OSS from the repo root with `npm run oss:start -- --host 127.0.0.1 --port 8788`.
-2. Install this native plugin so OpenClaw loads the Fluent skills.
-3. Run `npm run scaffold:mcp -- --client openclaw --track oss --base-url http://127.0.0.1:8788 --out ./tmp/fluent-openclaw.json`.
-4. Register that server with `openclaw --profile <name> mcp set fluent "<paste-the-json-from-./tmp/fluent-openclaw.json>"`.
+2. Install the published OpenClaw package with `openclaw plugins install fluent-openclaw`.
+3. Bind Fluent OSS into OpenClaw with `openclaw fluent mcp oss --base-url http://127.0.0.1:8788 --token <oss-token>`.
+4. Verify the connection with `openclaw fluent doctor oss --base-url http://127.0.0.1:8788 --token <oss-token>`.
 5. Start a fresh OpenClaw session or use `openclaw agent --local --session-id <new-id> ...`.
 
-This public package ships as a native OpenClaw plugin with `openclaw.plugin.json` plus `package.json`, but the live MCP connection should still be applied through native profile config.
+If you are validating the exported OSS helper itself, this package remains installable from the repo checkout, but it should only be described as the bundled helper package `fluent-openclaw-oss-helper`.
 
-This public OpenClaw package intentionally omits the bundled Meals browser and retailer-execution scripts so standard installs do not require the unsafe-install override.
+This bundled OpenClaw helper intentionally omits the bundled Meals browser and retailer-execution scripts so standard installs do not require the unsafe-install override.
 
-This public plugin package intentionally focuses on OSS client config assets. Hosted packaging and internal operator flows are maintained outside the OSS repo.
+This helper package focuses on OSS client config assets. The published standalone OpenClaw package and its release line are maintained in the separate `fluent-openclaw` repository.

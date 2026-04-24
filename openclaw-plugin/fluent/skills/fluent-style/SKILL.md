@@ -269,7 +269,7 @@ If the user indicates they are keeping the item, or wants it saved to the closet
    - fit photo if that is the only image available
 3. Create the item with `style_upsert_item`.
 4. Write photos with `style_upsert_item_photos`.
-   - On hosted Fluent, local upload file paths are not enough by themselves.
+   - On Fluent Cloud, local upload file paths are not enough by themselves.
    - Prefer `data_url`, `data_base64`, or a fetchable remote image URL so Fluent can own the image asset immediately.
 
 Do not create closet items from analysis alone.
