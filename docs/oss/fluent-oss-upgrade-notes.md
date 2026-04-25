@@ -1,6 +1,6 @@
-# Fluent OSS Upgrade Notes
+# Fluent open-source runtime Upgrade Notes
 
-Use these notes when moving an existing Fluent OSS or legacy Fluent Local install onto the public `v0.1.0` release.
+Use these notes when moving an existing Fluent open-source runtime or legacy Fluent Local install onto the public `v0.1.0` release.
 
 ## Before You Upgrade
 
@@ -10,7 +10,7 @@ Use these notes when moving an existing Fluent OSS or legacy Fluent Local instal
 
 ## What Changed For v0.1.0
 
-- `Fluent OSS` is now the supported public naming
+- `Fluent open-source runtime` is now the supported public naming
 - direct runtime docs are pinned to Node.js `22.x`
 - OSS release docs now treat Docker as the default packaged path
 - the supported contract floor is `2026-04-20.fluent-core-v1.37`

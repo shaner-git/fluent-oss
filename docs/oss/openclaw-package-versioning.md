@@ -13,7 +13,7 @@ Decision: `openclaw-plugin/fluent` is a bundled OSS helper package, not the publ
 
 - package name: `fluent-openclaw-oss-helper`
 - package location: `openclaw-plugin/fluent`
-- package role: bundled helper for the Fluent OSS export
+- package role: bundled helper for the Fluent open-source runtime export
 - version policy: tracks OSS helper revisions and must not be described as the published `fluent-openclaw` package line
 
 ## Rules

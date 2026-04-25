@@ -4,8 +4,8 @@
 
 Fluent is one product with one MCP contract and two supported deployment tracks:
 
-- `Fluent Cloud`
-- `Fluent OSS`
+- `Fluent early access`
+- `Fluent open-source runtime`
 
 The contract is shared. Runtime-specific auth and infrastructure concerns are not.
 
@@ -32,13 +32,13 @@ This pass keeps persistence SQL-heavy and D1-shaped at the callsite while moving
 
 Current storage backends:
 
-- `d1-r2`: Fluent Cloud on native Cloudflare storage bindings
-- `sqlite-fs`: default Fluent OSS on SQLite plus filesystem artifacts
-- `postgres-s3`: experimental Fluent OSS backend on Postgres plus S3-compatible blobs
+- `d1-r2`: Fluent early access on native Cloudflare storage bindings
+- `sqlite-fs`: default Fluent open-source runtime on SQLite plus filesystem artifacts
+- `postgres-s3`: experimental Fluent open-source runtime backend on Postgres plus S3-compatible blobs
 
 Cloud and default OSS remain the supported production tracks. `postgres-s3` is experimental and intentionally additive.
 
-## Fluent Cloud
+## Fluent early access
 
 Cloud owns:
 
@@ -57,7 +57,7 @@ Public hosted direction:
 - Cloudflare Access is being reduced to an operator or beta-only compatibility path
 - Fluent still needs request-scoped tenant resolution before hosted multi-user is complete
 
-## Fluent OSS
+## Fluent open-source runtime
 
 OSS owns:
 

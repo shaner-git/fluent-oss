@@ -1,4 +1,4 @@
-# Fluent OSS GitHub Release Checklist
+# Fluent open-source runtime GitHub Release Checklist
 
 Use this checklist when cutting a public OSS release such as `v0.1.0`.
 
@@ -35,7 +35,7 @@ Use this checklist when cutting a public OSS release such as `v0.1.0`.
 ## GitHub Release
 
 - create tag `v0.1.0` in the public `fluent-oss` repository
-- create the GitHub release titled `Fluent OSS v0.1.0`
+- create the GitHub release titled `Fluent open-source runtime v0.1.0`
 - use the `v0.1.0` changelog entry as the release body
 - verify the release page renders without missing links
 

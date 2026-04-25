@@ -1,4 +1,4 @@
-# Fluent OSS Docker Notes
+# Fluent open-source runtime Docker Notes
 
 These notes apply to the supported Docker path in the public `v0.1.0` release.
 
@@ -12,7 +12,7 @@ docker compose --env-file .env.oss.example up --build
 
 This path:
 
-- builds the bundled Fluent OSS image
+- builds the bundled Fluent open-source runtime image
 - runs the service with the repo's Compose defaults
 - persists OSS state in the named Docker volume
 
@@ -46,9 +46,9 @@ curl http://127.0.0.1:8788/health
 
 ## Reverse Proxy Notes
 
-- terminate TLS at your reverse proxy, not inside Fluent OSS
+- terminate TLS at your reverse proxy, not inside Fluent open-source runtime
 - expose only the routes you intend to support publicly
-- keep Fluent OSS on a private interface or internal port when possible
+- keep Fluent open-source runtime on a private interface or internal port when possible
 
 ## Upgrade Notes
 

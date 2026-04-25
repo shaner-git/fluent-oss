@@ -1,16 +1,16 @@
 # Changelog
 
-All notable Fluent OSS release-facing changes are documented here.
+All notable Fluent open-source runtime release-facing changes are documented here.
 
 ## v0.1.0 - 2026-04-19
 
-First public Fluent OSS release.
+First public Fluent open-source runtime release.
 
 ### Highlights
 
-- publishes the supported single-user self-hosted Fluent OSS runtime
+- publishes the supported single-user self-managed Fluent open-source runtime runtime
 - ships Docker-first and direct Node.js 22.x setup paths
-- supports the shared Fluent MCP contract used by Fluent Cloud
+- supports the shared Fluent MCP contract used by Fluent early access
 - includes Codex, Claude, and OpenClaw scaffold generation for OSS
 - includes snapshot export and import support for OSS operators
 

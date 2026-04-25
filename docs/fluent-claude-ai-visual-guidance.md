@@ -1,6 +1,6 @@
 # Fluent Claude AI Visual Guidance
 
-Use this public companion when shaping Claude-first recipe and grocery responses against Fluent OSS.
+Use this public companion when shaping Claude-first recipe and grocery responses against Fluent open-source runtime.
 
 Core guidance:
 

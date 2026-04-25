@@ -1,6 +1,6 @@
-# Fluent OSS Experimental Postgres + S3
+# Fluent open-source runtime Experimental Postgres + S3
 
-This is the experimental storage backend for `Fluent OSS`.
+This is the experimental storage backend for `Fluent open-source runtime`.
 
 It keeps the same deployment track and MCP contract as default OSS, but replaces the storage layer with:
 
@@ -46,7 +46,7 @@ One practical local setup is:
 
 - Postgres on `127.0.0.1:55432`
 - MinIO on `127.0.0.1:59000`
-- Fluent OSS experimental on `127.0.0.1:8788`
+- Fluent open-source runtime experimental on `127.0.0.1:8788`
 
 The example env file is already shaped for that style of stack.
 

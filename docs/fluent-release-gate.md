@@ -1,6 +1,6 @@
 # Fluent Release Gate
 
-This public repo publishes Fluent OSS artifacts. Hosted Cloud and operator-only release gates stay outside this export boundary.
+This public repo publishes Fluent open-source runtime artifacts. Hosted Cloud and operator-only release gates stay outside this export boundary.
 
 ## Required Checks
 
@@ -19,7 +19,7 @@ The public scrub gate scans only the exported public surface defined in
 [`../ops/public-oss-overlay/public-artifact-boundary.json`](../ops/public-oss-overlay/public-artifact-boundary.json).
 Keep internal-only docs, operator playbooks, and hosted-only runbooks outside that boundary until they are intentionally exported.
 
-## Fluent OSS Gate
+## Fluent open-source runtime Gate
 
 Required OSS checks:
 

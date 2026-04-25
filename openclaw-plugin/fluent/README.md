@@ -1,4 +1,4 @@
-# Fluent OSS OpenClaw Helper
+# Fluent open-source runtime OpenClaw Helper
 
 This directory is the bundled OpenClaw helper package exported with `fluent-oss`.
 
@@ -14,9 +14,9 @@ Default MCP config:
 
 Recommended setup:
 
-1. Start Fluent OSS from the repo root with `npm run oss:start -- --host 127.0.0.1 --port 8788`.
+1. Start Fluent open-source runtime from the repo root with `npm run oss:start -- --host 127.0.0.1 --port 8788`.
 2. Install the published OpenClaw package with `openclaw plugins install fluent-openclaw`.
-3. Bind Fluent OSS into OpenClaw with `openclaw fluent mcp oss --base-url http://127.0.0.1:8788 --token <oss-token>`.
+3. Bind Fluent open-source runtime into OpenClaw with `openclaw fluent mcp oss --base-url http://127.0.0.1:8788 --token <oss-token>`.
 4. Verify the connection with `openclaw fluent doctor oss --base-url http://127.0.0.1:8788 --token <oss-token>`.
 5. Start a fresh OpenClaw session or use `openclaw agent --local --session-id <new-id> ...`.
 

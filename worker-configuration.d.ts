@@ -1,4 +1,4 @@
-/* Minimal worker type stubs for the public Fluent OSS repo. */
+/* Minimal worker type stubs for the public Fluent open-source runtime repo. */
 interface D1ResultMeta {
   changes?: number;
   last_row_id?: number | string;

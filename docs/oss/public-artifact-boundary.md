@@ -1,6 +1,6 @@
 # Public Artifact Boundary
 
-Fluent OSS keeps the public export boundary explicit so scrub rules apply only to the surfaces that ship publicly.
+Fluent open-source runtime keeps the public export boundary explicit so scrub rules apply only to the surfaces that ship publicly.
 
 The manifest lives at [../../ops/public-oss-overlay/public-artifact-boundary.json](../../ops/public-oss-overlay/public-artifact-boundary.json).
 

@@ -1,12 +1,12 @@
-# Fluent OSS
+# Fluent open-source runtime
 
-Fluent OSS is a self-hosted MCP server for:
+Fluent open-source runtime is a self-hosted MCP server for:
 
 - meal planning and grocery workflows
 - health planning and workout logging
 - closet-aware style decisions
 
-It is the open-source self-hosted track of Fluent. If you want Fluent without running infrastructure yourself, Fluent Cloud is the managed early-access option. Both tracks share the same MCP contract.
+It is the open-source runtime for Fluent. If you want Fluent without running infrastructure yourself, request early access. Both paths share the same MCP contract.
 
 ## Public Release
 
@@ -23,7 +23,7 @@ It is the open-source self-hosted track of Fluent. If you want Fluent without ru
 - Codex, Claude, and OpenClaw users who want an MCP server they control
 - power users who are comfortable with a local token, local storage, and a small amount of setup
 
-If you want the easiest hosted path, Fluent Cloud will be the simpler choice once you have early-access eligibility. If you want control, local data, and self-hosting flexibility, start here.
+If you want the easiest managed path, request early access. If you want control, local data, and self-hosting flexibility, start here.
 
 ## What You Get
 
@@ -39,23 +39,23 @@ If you want the easiest hosted path, Fluent Cloud will be the simpler choice onc
 - single-user only in v1
 - bearer-token auth instead of OAuth
 - Postgres + S3 is experimental
-- this repo focuses on self-hosting, not Hosted billing or onboarding
-- `npm run scaffold:mcp -- --track cloud` requires an explicit `--base-url` in this public repo while Fluent Cloud remains invite-based early access
+- this repo focuses on self-hosting, not managed billing or onboarding
+- `npm run scaffold:mcp -- --track cloud` requires an explicit `--base-url` in this public repo while Fluent early access remains invite-based early access
 
-## Cloud Vs OSS
+## Early Access And Open Source
 
 | Option | Best for | Auth | Ops model |
 | --- | --- | --- | --- |
-| Fluent Cloud early access | people who want managed setup | OAuth | Fluent runs it for you |
-| Fluent OSS | self-hosters and power users | bearer token | you run it yourself |
+| Fluent early access | people who want managed setup | OAuth | Fluent runs it for you |
+| Fluent open-source runtime | self-hosters and power users | bearer token | you run it yourself |
 
 ## Prerequisites
 
-- Node.js 22.x if you want to run Fluent OSS directly
+- Node.js 22.x if you want to run Fluent open-source runtime directly
 - Docker Desktop or Docker Engine if you prefer the container path
 - an MCP client such as Codex, Claude Desktop, or OpenClaw
 
-By default, Fluent OSS:
+By default, Fluent open-source runtime:
 
 - listens on `127.0.0.1`
 - stores data under `~/.fluent/`
@@ -86,7 +86,7 @@ npm run oss:start -- --host 127.0.0.1 --port 8788
 ```
 
 Expected result:
-- Fluent OSS starts on `http://127.0.0.1:8788`
+- Fluent open-source runtime starts on `http://127.0.0.1:8788`
 
 Optional health check:
 
@@ -168,7 +168,7 @@ npm run oss:import:snapshot -- --file ./tmp/fluent-oss-snapshot.json
 
 ## Experimental Postgres + S3
 
-Fluent OSS supports an experimental `Postgres + S3-compatible storage` mode for more advanced deployments.
+Fluent open-source runtime supports an experimental `Postgres + S3-compatible storage` mode for more advanced deployments.
 
 Start with:
 
@@ -197,4 +197,4 @@ Then see the operator guide:
 
 ## About This Repo
 
-This public repo is generated from Fluent's canonical private source repo so Cloud and OSS stay aligned. Public contributions are welcome, but the source of truth remains the canonical repo and changes are re-exported here.
+This public repo is generated from Fluent's canonical private source repo so early access and the open-source runtime stay aligned. Public contributions are welcome, but the source of truth remains the canonical repo and changes are re-exported here.

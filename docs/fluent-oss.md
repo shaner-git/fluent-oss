@@ -1,6 +1,6 @@
-# Fluent OSS
+# Fluent open-source runtime
 
-Fluent OSS is the supported self-hosted open-source runtime for Fluent.
+Fluent open-source runtime is the supported self-hosted open-source runtime for Fluent.
 
 Public release references:
 
@@ -21,12 +21,12 @@ Public release references:
 - bearer-token protected `/mcp`
 - open `GET /health`
 - open `GET /codex-probe`
-- same MCP contract as Fluent Cloud
+- same MCP contract as Fluent early access
 - supported minimum contract version: `2026-04-20.fluent-core-v1.37`
 - local DB and artifacts stored under `~/.fluent/` by default
 - no OAuth, no `/authorize`, no `/token`
 - direct runtime support is documented for Node.js `22.x`
-- public `--track cloud` scaffolds require an explicit `--base-url` until Fluent Cloud has a documented public endpoint
+- public `--track cloud` scaffolds require an explicit `--base-url` until Fluent early access has a documented public endpoint
 
 ## Local Laptop Usage
 
@@ -72,7 +72,7 @@ Install the published OpenClaw package first:
 openclaw plugins install fluent-openclaw
 ```
 
-Then bind Fluent OSS with:
+Then bind Fluent open-source runtime with:
 
 ```bash
 openclaw fluent mcp oss --base-url http://127.0.0.1:8788 --token <oss-token>
@@ -84,7 +84,7 @@ The checked-in `openclaw-plugin/fluent/` bundle is the separate helper package `
 
 ## Docker Compose Usage
 
-Start Fluent OSS with the bundled defaults:
+Start Fluent open-source runtime with the bundled defaults:
 
 ```bash
 docker compose --env-file .env.oss.example up --build
@@ -124,7 +124,7 @@ npm run oss:start -- --host 0.0.0.0 --port 8788
 
 Recommended pattern:
 
-1. Run Fluent OSS on a private interface or internal port.
+1. Run Fluent open-source runtime on a private interface or internal port.
 2. Put TLS and any extra perimeter controls at the reverse proxy layer.
 3. Forward only `/mcp`, `/health`, `/codex-probe`, and any image routes you intend to expose.
 4. Keep the bearer token secret even behind the proxy.

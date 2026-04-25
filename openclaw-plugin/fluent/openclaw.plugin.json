@@ -1,7 +1,7 @@
 {
   "id": "fluent",
   "name": "Fluent",
-  "description": "Bundled Fluent OSS helper for OpenClaw skills and MCP setup guidance.",
+  "description": "Bundled Fluent open-source runtime helper for OpenClaw skills and MCP setup guidance.",
   "skills": [
     "skills"
   ],

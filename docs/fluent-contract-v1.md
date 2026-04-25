@@ -1,6 +1,6 @@
 # Fluent MCP Contract v1 Freeze
 
-This document records the current Fluent MCP `v1.37` freeze for the shared Fluent Cloud and Fluent OSS contract.
+This document records the current Fluent MCP `v1.37` freeze for the shared Fluent early access and Fluent open-source runtime contract.
 
 Current freeze note:
 
@@ -211,7 +211,7 @@ Health tools prefer health:read and health:write. Style tools prefer style:read 
 
 ## Local Parity Rule
 
-Fluent OSS must use the same public tool names, resource names, payload shapes, provenance fields, and onboarding writes as hosted Fluent. The legacy `backendMode = "local"` bridge value may remain, but differences in transport or auth are allowed only when they do not change the MCP contract itself.
+Fluent open-source runtime must use the same public tool names, resource names, payload shapes, provenance fields, and onboarding writes as managed Fluent. The legacy `backendMode = "local"` bridge value may remain, but differences in transport or auth are allowed only when they do not change the MCP contract itself.
 
 The Meals rich render tools stay in the public contract only because the runtime really registers them in both deployment tracks. Hosts without MCP output-template support should still fall back to the portable data tools.
 
@@ -241,7 +241,7 @@ Current additive guidance:
 - Meal plans, planning-critical preferences, recipes, grocery-plan outputs, inventory, feedback, and audit history are MCP-native
 - Meals may consume Health's derived `trainingSupportSummary`, but Health remains the only canonical owner of training structure
 - Style now exposes a narrow closet-derived domain surface with import-seeded items, canonical comparator keys, typed media roles, item status, minimal onboarding/calibration state, typed item profiles, and coverage-aware wardrobe-context purchase analysis
-- The Meals render tools stay in the frozen public contract because Fluent Cloud and Fluent OSS both register the output-template resources required to serve them
+- The Meals render tools stay in the frozen public contract because Fluent early access and Fluent open-source runtime both register the output-template resources required to serve them
 - `meals_show_recipe` stays registered as a runtime alias for `meals_render_recipe_card`, but the frozen contract keeps the canonical tool name only
 - `meals_render_grocery_widget_smoke` and its standalone widget resource stay dev-only for host verification and are intentionally excluded from the frozen public contract
 - Hosts that do not support MCP output templates should still prefer `meals_get_recipe` and `meals_get_grocery_plan` as the portable data-first fallback

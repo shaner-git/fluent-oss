@@ -1,4 +1,4 @@
-# Fluent OSS Setup Matrix
+# Fluent open-source runtime Setup Matrix
 
 Supported setup paths for the public `v0.1.0` release.
 
@@ -13,8 +13,8 @@ Supported setup paths for the public `v0.1.0` release.
 
 | Client | Supported path | Notes |
 | --- | --- | --- |
-| Codex | `npm run scaffold:mcp -- --client codex --track oss --base-url <url>` | generated config targets Fluent OSS |
-| Claude | `npm run scaffold:mcp -- --client claude --track oss --base-url <url>` | generated config targets Fluent OSS |
+| Codex | `npm run scaffold:mcp -- --client codex --track oss --base-url <url>` | generated config targets Fluent open-source runtime |
+| Claude | `npm run scaffold:mcp -- --client claude --track oss --base-url <url>` | generated config targets Fluent open-source runtime |
 | OpenClaw | `openclaw plugins install fluent-openclaw` plus `openclaw fluent mcp oss --base-url <url> --token <oss-token>` | the checked-in `openclaw-plugin/fluent` bundle is the separate helper package `fluent-openclaw-oss-helper`; scaffold output remains a native `mcp.servers.fluent` block |
 
 ## Contract Support

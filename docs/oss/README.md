@@ -1,4 +1,4 @@
-# Fluent OSS Docs
+# Fluent open-source runtime Docs
 
 Use this bucket if you want to run Fluent yourself.
 
@@ -24,7 +24,7 @@ Primary OSS expectations:
 - single-user in v1
 - self-hostable over HTTP
 - bearer-token protected `/mcp`
-- contract-compatible with Fluent Cloud
+- contract-compatible with Fluent early access
 - Docker-first distribution plus raw Node runtime support
 - direct runtime requirement: Node.js `22.x`
 - supported minimum contract version: `2026-04-20.fluent-core-v1.37`

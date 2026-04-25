@@ -4,11 +4,11 @@ This public plugin bundle is OSS-first.
 
 Default MCP config:
 
-- `plugins/fluent/.mcp.json` points at Fluent OSS on `http://127.0.0.1:8788/mcp`
+- `plugins/fluent/.mcp.json` points at Fluent open-source runtime on `http://127.0.0.1:8788/mcp`
 
 Recommended setup:
 
-1. Start Fluent OSS from the repo root with `npm run oss:start -- --host 127.0.0.1 --port 8788`.
+1. Start Fluent open-source runtime from the repo root with `npm run oss:start -- --host 127.0.0.1 --port 8788`.
 2. Run `npm run scaffold:mcp -- --client codex --track oss --base-url http://127.0.0.1:8788 --out plugins/fluent/.mcp.json`.
 3. Reconnect Codex so it refreshes the MCP registration.
 

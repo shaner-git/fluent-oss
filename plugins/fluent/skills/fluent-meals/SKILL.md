@@ -22,7 +22,7 @@ Use this skill when the user wants Meals help that depends on Fluent meal state,
 - Reads canonical meal state from Fluent MCP.
 - Handles meals first-use onboarding when the meals domain is not ready.
 - Orchestrates weekly planning, grocery generation, inventory work, and recipe reads.
-- Keeps browser ordering outside Fluent Core, with a Cloud-first hosted purchase lane for Fluent Cloud and a local fallback path for OSS or operator recovery.
+- Keeps browser ordering outside Fluent Core, with a managed purchase lane for Fluent early access and a local fallback path for OSS or operator recovery.
 - Requires a hosted order preflight before retailer automation.
 
 ## Core Rules
@@ -160,9 +160,9 @@ Do not run the full planning loop for ordinary chat unless the user is clearly p
 - Fluent Core owns lifecycle and onboarding truth.
 - This skill provides workflow guidance for first-use wording, planning orchestration, and the ordering handoff.
 - Keep retailer credentials out of Fluent MCP, D1, and hosted profile metadata.
-- For Fluent Cloud, prefer the hosted purchase runner after the hosted grocery plan exists and `meals_prepare_order` returns a safe remaining-to-buy set.
+- For Fluent early access, prefer the hosted purchase runner after the hosted grocery plan exists and `meals_prepare_order` returns a safe remaining-to-buy set.
 - The hosted purchase runner may use Cloudflare-managed secret material and internal Worker routes, but that execution subsystem remains outside the public Meals MCP contract.
-- Fluent OSS keeps the local export plus browser flow as the supported execution path.
+- Fluent open-source runtime keeps the local export plus browser flow as the supported execution path.
 - After checkout succeeds and a real retailer order exists, sync the confirmed order details back into Fluent.
 - If the confirmed order includes a delivery slot, the local workflow may emit a delivery-event candidate keyed by the retailer order id for whatever calendar tooling the client actually has.
 - If the user says they already bought items and inventory may be stale, pause ordering until inventory is updated.
