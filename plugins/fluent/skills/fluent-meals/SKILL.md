@@ -22,17 +22,20 @@ Use this skill when the user wants Meals help that depends on Fluent meal state,
 - Reads canonical meal state from Fluent MCP.
 - Handles meals first-use onboarding when the meals domain is not ready.
 - Orchestrates weekly planning, grocery generation, inventory work, and recipe reads.
-- Keeps browser ordering outside Fluent Core, with a managed purchase lane for Fluent early access and a local fallback path for OSS or operator recovery.
+- Keeps browser ordering outside the shared Fluent contract, with an early-access purchase lane and a local fallback path for self-hosted or operator recovery.
 - Requires a hosted order preflight before retailer automation.
 
 ## Core Rules
 
 - Use `fluent-core` patterns for readiness and lifecycle checks.
 - If capability discovery is deferred in the client, use `meals_list_tools` as the fallback directory.
+- Follow the host routing matrix in [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md) before choosing a rich render path.
+- In this Codex package, do not assume rich widget support by default. Prefer canonical data tools plus text unless the live host explicitly proves ChatGPT / MCP Apps-style widget support.
 - Prefer summary reads first.
 - If a summary read already answers the user's question, stop there unless the next step needs detail the summary did not provide.
 - Avoid duplicate reads in the same turn unless the user asks for a refresh.
 - Use writes only when the user clearly intends to change meal state.
+- Treat short grocery-status updates such as "Got Greek yogurt", "bought salmon", "picked up avocado", "we have garlic", or "I have enough Caesar dressing" as write intents, not acknowledgements. Resolve the item against the current week's grocery plan, call `meals_upsert_grocery_plan_action`, then acknowledge the persisted result.
 - Keep retailer ordering and local browser execution outside Fluent Core.
 - Keep final recommendations and prioritization in the agent.
 - Treat the grocery plan as planning state, not the final order list.
@@ -76,7 +79,6 @@ Default low-cost tools:
 - `meals_generate_grocery_plan`
 - `meals_get_grocery_plan` with `view: "summary"`
 - `meals_prepare_order`
-- `meals_render_grocery_list`
 
 When the user says they are already cooking a planned meal or have started prep:
 
@@ -97,23 +99,27 @@ Recipe presentation pattern:
 - if the user names a specific saved recipe or clearly refers to one, prefer Fluent recipe reads over generic cooking knowledge
 - treat asks like "show me the recipe", "how do I make X", "what's in X", "pull up X", and "walk me through X" as recipe-first turns when `X` matches a saved recipe
 - if the user is asking "which one is X" right after recipe discovery or list output, stay in recipe-disambiguation flow with `meals_list_recipes` or `meals_get_recipe`; do not jump to `meals_get_today_context` unless the user is explicitly asking about today's plan
-- for clearly recipe-centric turns, prefer the data/render split:
-  - if the user is asking for the recipe itself, how to make the dish, the ingredients, the steps, or a cook-from-this walkthrough, follow with `meals_render_recipe_card` when the host supports rich app surfaces
-  - do not require the user to ask for a "card" explicitly when the request is obviously recipe-first
+- for clearly recipe-centric turns, branch by host:
+  - in ChatGPT / MCP Apps-style hosts with rich UI, follow `meals_get_recipe` with `meals_render_recipe_card`
+  - in Codex and generic plain hosts, keep the response in text from `meals_get_recipe` unless the current host explicitly proves widget support
+  - do not require the user to ask for a "card" explicitly when the request is obviously recipe-first in a rich app host
 - do not call `meals_render_recipe_card` for ordinary chat turns where the recipe details are incidental and plain text already answers the question
 - keep the text answer truthful and complete even when you expect the host to render the recipe card
 - if a saved recipe lookup succeeds, do not answer from prior knowledge unless the user explicitly asks for a generic version instead of the saved Fluent recipe
 
 Grocery-list presentation pattern:
 
-- when the user is asking for the actionable grocery view itself, such as "What's on my grocery list?", "What do I still need to buy?", or "Show me this week's grocery list", prefer `meals_render_grocery_list` as the default end-user experience in rich hosts
-- do not require a raw grocery-plan read first for those ordinary grocery-list asks
+- when the user is asking for the actionable grocery view itself, such as "What's on my grocery list?", "What do I still need to buy?", or "Show me this week's grocery list", branch by host:
+  - in ChatGPT / MCP Apps-style hosts with rich UI, prefer `meals_render_grocery_list_v2` as the default end-user experience
+  - in Codex and generic plain hosts, prefer `meals_get_grocery_plan` and answer in text unless the live host explicitly proves widget support
+- do not require a raw grocery-plan read first for ordinary grocery-list asks in rich app hosts
 - gather or reconcile extra grocery state first only when the turn specifically needs underlying plan detail, reconciliation detail, or intent debugging:
   - `meals_get_grocery_plan`
   - `meals_prepare_order`
   - `meals_list_grocery_intents`
-- if the host supports rich app surfaces, use `meals_render_grocery_list` directly for the primary shopping view
+- if the host supports rich app surfaces, use `meals_render_grocery_list_v2` directly for the primary shopping view
 - do not require the user to ask for a "card" or "surface" explicitly when the turn is clearly grocery-list-first
+- for simple data questions such as quantities, ingredient checks, or pantry facts, do not jump to a render tool just because rich UI exists
 - keep the text answer truthful and complete even when you expect the host to render the grocery list
 
 ## Weekly Planning Loop
@@ -157,12 +163,12 @@ Do not run the full planning loop for ordinary chat unless the user is clearly p
 ## Ordering Execution Boundary
 
 - Fluent MCP owns canonical meal plans, preferences, grocery plans, inventory, recipes, feedback, and audit state.
-- Fluent Core owns lifecycle and onboarding truth.
+- Fluent owns lifecycle and onboarding truth.
 - This skill provides workflow guidance for first-use wording, planning orchestration, and the ordering handoff.
 - Keep retailer credentials out of Fluent MCP, D1, and hosted profile metadata.
-- For Fluent early access, prefer the hosted purchase runner after the hosted grocery plan exists and `meals_prepare_order` returns a safe remaining-to-buy set.
+- For early-access Fluent, prefer the hosted purchase runner after the hosted grocery plan exists and `meals_prepare_order` returns a safe remaining-to-buy set.
 - The hosted purchase runner may use Cloudflare-managed secret material and internal Worker routes, but that execution subsystem remains outside the public Meals MCP contract.
-- Fluent open-source runtime keeps the local export plus browser flow as the supported execution path.
+- The open-source runtime keeps the local export plus browser flow as the supported execution path.
 - After checkout succeeds and a real retailer order exists, sync the confirmed order details back into Fluent.
 - If the confirmed order includes a delivery slot, the local workflow may emit a delivery-event candidate keyed by the retailer order id for whatever calendar tooling the client actually has.
 - If the user says they already bought items and inventory may be stale, pause ordering until inventory is updated.
@@ -176,8 +182,22 @@ Do not run the full planning loop for ordinary chat unless the user is clearly p
     On Windows, Fluent may insert a tiny local CDP relay so Playwright can attach to the same Chrome session without requiring Chrome to be relaunched with permissive `--remote-allow-origins` flags. If the machine's live Chrome/CDP surface still refuses attach, Fluent falls back to a local Playwright-owned Chrome profile instead of failing the run outright.
   - `--browser-backend browser-use-cloud-cdp` for a remote Browser Use Cloud browser
   - keep `--browser-backend local` only as the legacy Playwright persistent-profile compatibility path
-- If a Browser Use Cloud run pauses in `waitingForVerification`, preserve the same remote session and resume with `--browser-use-session-id "<remoteSessionId>" --verification-code "<code>"`.
-- If Browser Use Cloud connects but navigation fails with `ERR_TUNNEL_CONNECTION_FAILED`, treat it as a Browser Use provider/network regression first, not a Fluent selector/auth bug. Prefer retrying later or switching to `--browser-backend browser-use-local-cdp`.
 - If the hosted purchase lane is requested, the current internal Worker route still uses `--browser-backend cloudflare-browser-rendering`; treat that as a separate hosted execution subsystem from the Browser Use local/remote agent-run lane.
-- If the hosted purchase lane pauses in `waiting` with a verification request, a capable agent may fetch the latest retailer email code through its own email surface and submit it back through the internal verification route before resuming the run.
+- If a direct CDP lane pauses with `waitingForVerification`, follow the agent-email verification bridge below. Do not improvise a different email-code loop.
+- If Browser Use Cloud connects but navigation fails with `ERR_TUNNEL_CONNECTION_FAILED`, treat it as a Browser Use provider/network regression first, not a Fluent selector/auth bug. Prefer retrying later or switching to `--browser-backend browser-use-local-cdp`.
+- If the legacy Worker-hosted lane pauses in `waiting` with a verification request, a capable agent may fetch the latest retailer email code through its own email surface and submit it back through the internal verification route before resuming the run.
 - Treat retailer order details as the post-checkout source of truth. Do not infer `skipped` from omission, and preserve confirmed ordered extras as inventory evidence instead of fabricating grocery-plan history.
+
+### Agent-Email Verification Bridge
+
+Use this bridge only when the current agent has an approved email surface, such as the Gmail connector, and the browser-flow report contains `waitingForVerification: true`.
+
+- Preserve the remote browser session. Do not rerun from the beginning and do not close the session unless the resume fails or the user cancels.
+- Read the report fields `browserBackend`, `remoteSessionId`, `verificationRequest.requestedAt`, and `verificationResume`.
+- Search email for the newest Voila/Voilà verification-code message received after `verificationRequest.requestedAt`. Prefer a narrow Gmail query such as `("Voila" OR "Voilà") ("verification code" OR "security code" OR "one-time code") newer_than:30m`; include the retailer account email only when it is known.
+- Extract only the 4-8 digit verification code from the newest matching message. Do not print the code in the user-facing handoff unless the user explicitly asks.
+- Resume the same browser session:
+  - Browser Run: pass `--browser-run-session-id "<remoteSessionId>" --verification-code "<code>"`.
+  - Browser Use Cloud: pass `--browser-use-session-id "<remoteSessionId>" --verification-code "<code>"`.
+- If multiple plausible codes exist, prefer the newest message after the request timestamp. If ambiguity remains, pause and ask the user for the code rather than guessing.
+- If resume succeeds, continue the cart-first flow and stop before checkout. If resume fails, close or stop the remote session so paid browser time is not left running.

@@ -8,8 +8,8 @@ import { createLocalRuntime } from '../src/local/runtime';
 
 const tempRoots: string[] = [];
 const provenance = {
-  actorEmail: 'jordan@example.invalid',
-  actorName: 'Alex Example',
+  actorEmail: 'tester@example.com',
+  actorName: 'Test User',
   confidence: 1,
   scopes: ['meals:write'],
   sessionId: 'grocery-actions-node-test',
@@ -38,6 +38,7 @@ async function main() {
     await pantryCheckItemsCanBeConfirmedOrPromotedToBuyList();
     await sufficiencyConfirmationsStayOnActivePantryLines();
     await coverageActionsRefreshInventoryEvidence();
+    await regeneratesLegacyGroceryPlanRowsForUpdatedMealPlans();
     await rejectsSufficiencyConfirmationsForNonPantryItems();
   } finally {
     while (tempRoots.length > 0) {
@@ -503,6 +504,45 @@ async function substitutionsPersistRecipeMemorySignals() {
     assert.equal(substitutionSignal?.substituteDisplayName, 'Three Farmers Roasted Chickpeas');
     assert.equal(substitutionSignal?.weekStart, weekStart);
     assert.equal(substitutionSignal?.count, 1);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function regeneratesLegacyGroceryPlanRowsForUpdatedMealPlans() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const weekStart = '2026-06-29';
+    await createSingleRecipePlan(service, {
+      weekStart,
+      recipeId: 'grocery-actions-stale-original',
+      recipeName: 'Stale Original Plan',
+      ingredient: { item: 'carrot sticks', quantity: 1, unit: 'bag' },
+      mealType: 'lunch',
+    });
+
+    const original = await service.generateGroceryPlan({ weekStart, provenance });
+    assert.ok(original.raw.items.some((item) => item.normalizedName === 'carrot sticks'));
+
+    await runtime.sqliteDb
+      .prepare(`UPDATE meal_grocery_plans SET id = ? WHERE week_start = ?`)
+      .bind('legacy:grocery-plan:2026-06-29', weekStart)
+      .run();
+
+    await createSingleRecipePlan(service, {
+      weekStart,
+      recipeId: 'grocery-actions-fresh-updated',
+      recipeName: 'Fresh Updated Plan',
+      ingredient: { item: 'chicken breast', quantity: 2, unit: 'count' },
+      mealType: 'dinner',
+    });
+
+    const regenerated = await service.generateGroceryPlan({ weekStart, provenance });
+    assert.equal(regenerated.id, `grocery-plan:primary:${weekStart}`);
+    assert.ok(regenerated.raw.items.some((item) => item.normalizedName === 'chicken breast'));
+    assert.equal(regenerated.raw.items.some((item) => item.normalizedName === 'carrot sticks'), false);
   } finally {
     runtime.sqliteDb.close();
   }

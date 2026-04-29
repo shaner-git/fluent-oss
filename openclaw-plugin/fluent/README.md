@@ -1,12 +1,8 @@
-# Fluent open-source runtime OpenClaw Helper
+# Fluent OpenClaw Plugin
 
-This directory is the bundled OpenClaw helper package exported with `fluent-oss`.
+This bundled OpenClaw helper package is for running Fluent yourself.
 
-It is not the published standalone `fluent-openclaw` package. If you want the public OpenClaw install surface, use:
-
-```bash
-openclaw plugins install fluent-openclaw
-```
+It is not the published `fluent-openclaw` package. The supported public OpenClaw install surface stays the standalone `fluent-openclaw` repo/package, while this directory is the helper copy shipped inside the Fluent public export.
 
 Default MCP config:
 
@@ -14,14 +10,14 @@ Default MCP config:
 
 Recommended setup:
 
-1. Start Fluent open-source runtime from the repo root with `npm run oss:start -- --host 127.0.0.1 --port 8788`.
-2. Install the published OpenClaw package with `openclaw plugins install fluent-openclaw`.
-3. Bind Fluent open-source runtime into OpenClaw with `openclaw fluent mcp oss --base-url http://127.0.0.1:8788 --token <oss-token>`.
-4. Verify the connection with `openclaw fluent doctor oss --base-url http://127.0.0.1:8788 --token <oss-token>`.
+1. Start Fluent from the repo root with `npm run oss:start -- --host 127.0.0.1 --port 8788`.
+2. Install this native plugin from the local helper directory only if you intentionally want the bundled public copy.
+3. Run `npm run scaffold:mcp -- --client openclaw --track oss --base-url http://127.0.0.1:8788 --out ./tmp/fluent-openclaw.json`.
+4. Register that server with `openclaw --profile <name> mcp set fluent "<paste-the-json-from-./tmp/fluent-openclaw.json>"`.
 5. Start a fresh OpenClaw session or use `openclaw agent --local --session-id <new-id> ...`.
 
-If you are validating the exported OSS helper itself, this package remains installable from the repo checkout, but it should only be described as the bundled helper package `fluent-openclaw-oss-helper`.
+This bundled helper ships as a native OpenClaw plugin with `openclaw.plugin.json` plus `package.json`, but the live MCP connection should still be applied through native profile config.
 
 This bundled OpenClaw helper intentionally omits the bundled Meals browser and retailer-execution scripts so standard installs do not require the unsafe-install override.
 
-This helper package focuses on OSS client config assets. The published standalone OpenClaw package and its release line are maintained in the separate `fluent-openclaw` repository.
+This helper package intentionally focuses on local client config assets. Managed packaging and the public `fluent-openclaw` release line are maintained outside the public repo.

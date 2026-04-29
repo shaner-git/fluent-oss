@@ -18,6 +18,7 @@ export const FLUENT_SUPPORTED_SCOPES = [
 export interface FluentAuthProps {
   accessToken?: string;
   email?: string;
+  identityRequired?: boolean;
   login?: string;
   name?: string;
   oauthClientId?: string;

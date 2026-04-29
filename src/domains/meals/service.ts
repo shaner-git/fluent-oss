@@ -1823,7 +1823,8 @@ export class MealsService {
         `INSERT INTO meal_grocery_plans (
           id, tenant_id, profile_id, week_start, meal_plan_id, raw_json, source_snapshot_json, generated_at, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM meal_grocery_plans WHERE tenant_id = ? AND week_start = ?), CURRENT_TIMESTAMP), ?)
-        ON CONFLICT(id) DO UPDATE SET
+        ON CONFLICT(week_start) DO UPDATE SET
+          id = excluded.id,
           tenant_id = excluded.tenant_id,
           profile_id = excluded.profile_id,
           meal_plan_id = excluded.meal_plan_id,

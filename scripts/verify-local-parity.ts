@@ -259,22 +259,35 @@ async function verifyWrites(db: DatabaseSync) {
 
     const restoredStyleProfile = normalizeDbJsonValue(readStyleProfileRawJson(db)) === normalizeDbJsonValue(styleProfile);
 
-    const recipesResult = await client.callTool({ name: 'meals_list_recipes', arguments: {} });
-    const recipes = extractToolStructuredContent(recipesResult) as Array<Record<string, unknown>>;
-    let recipeId = String(recipes[0]?.id ?? '');
-    let createdTemporaryRecipe = false;
+    const inventoryBeforeResult = await client.callTool({ name: 'meals_get_inventory', arguments: {} });
+    const inventoryBefore = extractToolStructuredContent(inventoryBeforeResult);
+    const tempInventoryName = `oss parity temp item ${Date.now()}`;
 
-    if (!recipeId) {
-      recipeId = await createParityRecipe(client);
-      createdTemporaryRecipe = true;
-    }
-
-    const restoredRecipe = await verifyRecipeWritePath({
-      client,
-      createdTemporaryRecipe,
-      db,
-      recipeId,
+    await client.callTool({
+      name: 'meals_update_inventory',
+      arguments: {
+        name: tempInventoryName,
+        status: 'in_stock',
+        quantity: 1,
+        unit: 'item',
+        location: 'pantry',
+        source_agent: 'verify-local-parity',
+        source_skill: 'fluent-meals',
+      },
     });
+
+    await client.callTool({
+      name: 'meals_delete_inventory_item',
+      arguments: {
+        name: tempInventoryName,
+        source_agent: 'verify-local-parity',
+        source_skill: 'fluent-meals',
+      },
+    });
+
+    const inventoryAfterResult = await client.callTool({ name: 'meals_get_inventory', arguments: {} });
+    const inventoryAfter = extractToolStructuredContent(inventoryAfterResult);
+    const restoredMealInventory = normalizeDbJsonValue(inventoryAfter) === normalizeDbJsonValue(inventoryBefore);
 
     return {
       core: {
@@ -287,8 +300,7 @@ async function verifyWrites(db: DatabaseSync) {
         restored: restoredStyleProfile,
       },
       meals: {
-        recipeId,
-        restored: restoredRecipe,
+        restored: restoredMealInventory,
       },
     };
   } finally {
@@ -328,98 +340,6 @@ function restoreDomainState(
   ).run(input.lifecycleState, input.onboardingState, FLUENT_PRIMARY_TENANT_ID, domainId);
 }
 
-function readRecipePrepNotes(db: DatabaseSync, recipeId: string): string | null {
-  const row = db
-    .prepare('SELECT prep_notes FROM meal_recipes WHERE id = ?')
-    .get(recipeId) as { prep_notes: string | null } | undefined;
-  return row?.prep_notes ?? null;
-}
-
-async function verifyRecipeWritePath(input: {
-  client: Client;
-  createdTemporaryRecipe: boolean;
-  db: DatabaseSync;
-  recipeId: string;
-}) {
-  const recipeResult = await input.client.callTool({ name: 'meals_get_recipe', arguments: { recipe_id: input.recipeId } });
-  const recipe = extractToolStructuredContent(recipeResult) as Record<string, unknown>;
-  const priorPrepNotes = recipe.prep_notes;
-
-  await input.client.callTool({
-    name: 'meals_patch_recipe',
-    arguments: {
-      recipe_id: input.recipeId,
-      operations: [
-        {
-          op: 'add',
-          path: '/prep_notes',
-          value: 'OSS parity verification note.',
-        },
-      ],
-      source_agent: 'verify-local-parity',
-      source_skill: 'fluent-meals',
-    },
-  });
-
-  if (input.createdTemporaryRecipe) {
-    input.db.prepare('DELETE FROM meal_recipes WHERE id = ?').run(input.recipeId);
-    return !hasRecipe(input.db, input.recipeId);
-  }
-
-  await input.client.callTool({
-    name: 'meals_patch_recipe',
-    arguments: {
-      recipe_id: input.recipeId,
-      operations:
-        priorPrepNotes === undefined
-          ? [{ op: 'remove', path: '/prep_notes' }]
-          : [{ op: 'replace', path: '/prep_notes', value: priorPrepNotes }],
-      source_agent: 'verify-local-parity',
-      source_skill: 'fluent-meals',
-    },
-  });
-
-  return readRecipePrepNotes(input.db, input.recipeId) === normalizeDbJsonValue(priorPrepNotes);
-}
-
-async function createParityRecipe(client: Client) {
-  const recipeId = 'oss-parity-verification-recipe';
-  await client.callTool({
-    name: 'meals_create_recipe',
-    arguments: {
-      recipe: {
-        id: recipeId,
-        name: 'OSS Parity Verification Recipe',
-        meal_type: 'dinner',
-        servings: 2,
-        total_time: 15,
-        active_time: 10,
-        macros: {
-          calories: 450,
-          protein_g: 28,
-          fiber_g: 6,
-          sodium_mg: 520,
-        },
-        cost_per_serving_cad: 4.25,
-        ingredients: [
-          { item: 'pasta', quantity: 200, unit: 'g', ordering_policy: 'direct_match' },
-          { item: 'tomatoes', quantity: 2, unit: 'count', ordering_policy: 'direct_match' },
-        ],
-        instructions: ['Boil pasta.', 'Simmer tomatoes.', 'Combine and serve.'],
-      },
-      response_mode: 'ack',
-      source_agent: 'verify-local-parity',
-      source_skill: 'fluent-meals',
-    },
-  });
-  return recipeId;
-}
-
-function hasRecipe(db: DatabaseSync, recipeId: string) {
-  const row = db.prepare('SELECT id FROM meal_recipes WHERE id = ?').get(recipeId) as { id?: string } | undefined;
-  return row?.id === recipeId;
-}
-
 function readStyleProfileRawJson(db: DatabaseSync): string | null {
   const row = db
     .prepare('SELECT raw_json FROM style_profile WHERE tenant_id = ? AND profile_id = ?')
@@ -431,7 +351,32 @@ function normalizeDbJsonValue(value: unknown): string | null {
   if (value === undefined || value === null) {
     return null;
   }
-  return typeof value === 'string' ? value : JSON.stringify(value);
+  return JSON.stringify(canonicalizeJsonValue(parseJsonIfPossible(value)));
+}
+
+function parseJsonIfPossible(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function canonicalizeJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalizeJsonValue(entry));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalizeJsonValue(entry)]),
+    );
+  }
+  return value;
 }
 
 function extractToolStructuredContent(result: Record<string, unknown>) {

@@ -9,6 +9,7 @@ import {
   FLUENT_RESOURCE_URIS,
   FLUENT_TOOL_NAMES,
 } from '../src/contract';
+import { FLUENT_OSS_DEFAULT_PROFILE_ID, FLUENT_OSS_DEFAULT_TENANT_ID } from '../src/fluent-identity';
 import { importHostedSnapshotIntoLocalDb, SnapshotImportError } from '../src/local/import-snapshot';
 import { createLocalRuntime } from '../src/local/runtime';
 
@@ -48,8 +49,8 @@ function relabelsImportedProfileMetadataAsLocal() {
     const snapshot = {
       fluent_tenants: [
         {
-          id: 'primary',
-          slug: 'primary',
+          id: FLUENT_OSS_DEFAULT_TENANT_ID,
+          slug: FLUENT_OSS_DEFAULT_TENANT_ID,
           display_name: 'Hosted Fluent',
           backend_mode: 'hosted',
           status: 'active',
@@ -62,9 +63,9 @@ function relabelsImportedProfileMetadataAsLocal() {
       ],
       fluent_profile: [
         {
-          tenant_id: 'primary',
-          profile_id: 'owner',
-          display_name: 'Riley Example',
+          tenant_id: FLUENT_OSS_DEFAULT_TENANT_ID,
+          profile_id: FLUENT_OSS_DEFAULT_PROFILE_ID,
+          display_name: 'Test User',
           timezone: 'America/Toronto',
           metadata_json: JSON.stringify({ backend_mode: 'hosted', product: 'Fluent' }),
           created_at: '2026-03-27 00:00:00',
@@ -81,18 +82,18 @@ function relabelsImportedProfileMetadataAsLocal() {
         backend_mode: 'local',
         deployment: 'oss',
         deployment_track: 'oss',
-        product: 'Fluent OSS',
+        product: 'Fluent',
       },
     );
 
     const row = runtime.sqliteDb.sqlite
       .prepare('SELECT metadata_json FROM fluent_profile WHERE tenant_id = ? AND profile_id = ?')
-      .get('primary', 'owner') as { metadata_json: string } | undefined;
+      .get(FLUENT_OSS_DEFAULT_TENANT_ID, FLUENT_OSS_DEFAULT_PROFILE_ID) as { metadata_json: string } | undefined;
     assert.deepEqual(JSON.parse(row?.metadata_json ?? '{}'), {
       backend_mode: 'local',
       deployment: 'oss',
       deployment_track: 'oss',
-      product: 'Fluent OSS',
+      product: 'Fluent',
     });
   } finally {
     runtime.sqliteDb.close();
@@ -110,22 +111,22 @@ function rollsBackWhenInsertsFailPartwayThroughImport() {
         importHostedSnapshotIntoLocalDb(runtime.sqliteDb, {
           fluent_tenants: [
             {
-              id: 'primary',
-              slug: 'primary',
-              display_name: 'Fluent OSS',
+              id: FLUENT_OSS_DEFAULT_TENANT_ID,
+              slug: FLUENT_OSS_DEFAULT_TENANT_ID,
+              display_name: 'Fluent',
               backend_mode: 'local',
               status: 'active',
               onboarding_state: 'onboarding_completed',
               onboarding_version: '1',
-              metadata_json: JSON.stringify({ product: 'Fluent OSS', deployment: 'oss', deployment_track: 'oss' }),
+              metadata_json: JSON.stringify({ product: 'Fluent', deployment: 'oss', deployment_track: 'oss' }),
               created_at: '2026-03-27 00:00:00',
               updated_at: '2026-03-27 00:00:00',
             },
           ],
           fluent_profile: [
             {
-              tenant_id: 'primary',
-              profile_id: 'owner',
+              tenant_id: FLUENT_OSS_DEFAULT_TENANT_ID,
+              profile_id: FLUENT_OSS_DEFAULT_PROFILE_ID,
               display_name: 'Owner One',
               timezone: 'America/Toronto',
               metadata_json: JSON.stringify({ backend_mode: 'hosted' }),
@@ -133,8 +134,8 @@ function rollsBackWhenInsertsFailPartwayThroughImport() {
               updated_at: '2026-03-27 00:00:00',
             },
             {
-              tenant_id: 'primary',
-              profile_id: 'owner',
+              tenant_id: FLUENT_OSS_DEFAULT_TENANT_ID,
+              profile_id: FLUENT_OSS_DEFAULT_PROFILE_ID,
               display_name: 'Owner Two',
               timezone: 'America/Toronto',
               metadata_json: JSON.stringify({ backend_mode: 'hosted' }),
@@ -164,7 +165,7 @@ function rollsBackAndReportsForeignKeyViolations() {
           fluent_profile: [
             {
               tenant_id: 'missing-tenant',
-              profile_id: 'owner',
+              profile_id: FLUENT_OSS_DEFAULT_PROFILE_ID,
               display_name: 'Broken Owner',
               timezone: 'America/Toronto',
               metadata_json: JSON.stringify({ backend_mode: 'hosted' }),

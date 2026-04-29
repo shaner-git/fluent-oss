@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { FLUENT_CONTRACT_VERSION, fluentContractSnapshot } from '../contract';
 import type { CoreRuntimeBindings } from '../config';
 import type { FluentStorageBackend } from '../config';
-import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../fluent-core';
+import { FLUENT_OSS_DEFAULT_PROFILE_ID, FLUENT_OSS_DEFAULT_TENANT_ID } from '../fluent-identity';
 import { LocalArtifactBucket } from './file-artifacts';
 import { SqliteD1Database } from './sqlite-d1';
 import {
@@ -61,7 +61,7 @@ export function createLocalRuntime(options: { origin: string; rootDir?: string }
   const paths = resolveLocalRuntimePaths(options.rootDir);
   const tokenState = ensureLocalTokenState(paths.rootDir);
   const sqliteDb = new SqliteD1Database(paths.dbPath);
-  applyMigrations(sqliteDb, findBootstrapFile(), findMigrationFiles());
+  applyMigrations(sqliteDb, findMigrationFiles());
   applyLocalDefaults(sqliteDb);
 
   const storageBackend: FluentStorageBackend = 'sqlite-fs';
@@ -104,7 +104,7 @@ export function localProbe(origin: string) {
     },
     contract: fluentContractSnapshot(),
     deploymentTrack: 'oss',
-    display_name: 'Fluent OSS',
+    display_name: 'Fluent',
     icon_url: `${origin}/icon.svg`,
     marker: `fluent-oss-probe-${FLUENT_CONTRACT_VERSION}`,
     legacy_auth_envs: [LOCAL_TOKEN_ENV],
@@ -137,7 +137,7 @@ export function localHealth(origin: string, paths: LocalRuntimePaths) {
   };
 }
 
-function applyMigrations(db: SqliteD1Database, bootstrapFile: string, migrationFiles: string[]): void {
+function applyMigrations(db: SqliteD1Database, migrationFiles: string[]): void {
   db.sqlite.exec(
     `CREATE TABLE IF NOT EXISTS local_migrations (
       name TEXT PRIMARY KEY,
@@ -150,16 +150,6 @@ function applyMigrations(db: SqliteD1Database, bootstrapFile: string, migrationF
       (row) => row.name,
     ),
   );
-
-  if (applied.size === 0 && !hasTable(db, 'fluent_tenants')) {
-    db.sqlite.exec(readFileSync(bootstrapFile, 'utf8'));
-    const markApplied = db.sqlite.prepare('INSERT INTO local_migrations (name) VALUES (?)');
-    markApplied.run(path.basename(bootstrapFile));
-    for (const file of migrationFiles) {
-      markApplied.run(path.basename(file));
-    }
-    return;
-  }
 
   for (const file of migrationFiles) {
     const name = path.basename(file);
@@ -178,12 +168,15 @@ function applyLocalDefaults(db: SqliteD1Database): void {
     .prepare(
       `UPDATE fluent_tenants
        SET backend_mode = 'local',
-           display_name = 'Fluent OSS',
+           display_name = 'Fluent',
            metadata_json = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
     )
-    .run(JSON.stringify({ product: 'Fluent OSS', deployment: 'oss', deployment_track: 'oss' }), FLUENT_PRIMARY_TENANT_ID);
+    .run(
+      JSON.stringify({ product: 'Fluent', deployment: 'oss', deployment_track: 'oss' }),
+      FLUENT_OSS_DEFAULT_TENANT_ID,
+    );
 
   const profileRow = db.sqlite
     .prepare(
@@ -191,14 +184,14 @@ function applyLocalDefaults(db: SqliteD1Database): void {
        FROM fluent_profile
        WHERE tenant_id = ? AND profile_id = ?`,
     )
-    .get(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID) as { metadata_json: string | null } | undefined;
+    .get(FLUENT_OSS_DEFAULT_TENANT_ID, FLUENT_OSS_DEFAULT_PROFILE_ID) as { metadata_json: string | null } | undefined;
   const existingProfileMetadata = profileRow?.metadata_json ? safeParseJson(profileRow.metadata_json) : {};
   const localProfileMetadata = {
     ...(existingProfileMetadata && typeof existingProfileMetadata === 'object' ? existingProfileMetadata : {}),
     backend_mode: 'local',
     deployment: 'oss',
     deployment_track: 'oss',
-    product: 'Fluent OSS',
+    product: 'Fluent',
   };
 
   db.sqlite
@@ -208,7 +201,7 @@ function applyLocalDefaults(db: SqliteD1Database): void {
            updated_at = CURRENT_TIMESTAMP
        WHERE tenant_id = ? AND profile_id = ?`,
     )
-    .run(JSON.stringify(localProfileMetadata), FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID);
+    .run(JSON.stringify(localProfileMetadata), FLUENT_OSS_DEFAULT_TENANT_ID, FLUENT_OSS_DEFAULT_PROFILE_ID);
 }
 
 function findMigrationFiles(): string[] {
@@ -218,18 +211,6 @@ function findMigrationFiles(): string[] {
     .filter((file) => /^\d+_.*\.sql$/i.test(file))
     .sort()
     .map((file) => path.join(migrationsDir, file));
-}
-
-function findBootstrapFile(): string {
-  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(path.join(moduleDir, '..', '..', 'migrations', 'postgres', 'bootstrap.sql'));
-}
-
-function hasTable(db: SqliteD1Database, tableName: string): boolean {
-  const row = db.sqlite
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { name?: string } | undefined;
-  return row?.name === tableName;
 }
 
 function safeParseJson(value: string): unknown {

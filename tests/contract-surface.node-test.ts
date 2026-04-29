@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
+  FLUENT_CONTRACT_FREEZE,
   FLUENT_CONTRACT_VERSION,
   FLUENT_DEV_RESOURCE_URIS,
   FLUENT_DEV_TOOL_NAMES,
@@ -10,11 +11,13 @@ import {
   FLUENT_RESOURCE_URIS,
   FLUENT_TOOL_ALIASES,
   FLUENT_TOOL_NAMES,
+  fluentContractSnapshot,
 } from '../src/contract';
 import { registerCoreMcpSurface } from '../src/mcp-core';
 import { registerHealthMcpSurface } from '../src/mcp-health';
 import { registerMealsMcpSurface } from '../src/mcp-meals';
 import { registerStyleMcpSurface } from '../src/mcp-style';
+import { PREVIEW_RICH_TOOL_GUIDE } from '../scripts/render-public-doc-shared';
 
 type ResourceRegistration = {
   name: string;
@@ -33,6 +36,23 @@ const publicResources = new Set<string>(FLUENT_RESOURCE_URIS);
 const aliasTools = new Set<string>(FLUENT_TOOL_ALIASES.map((entry) => entry.name));
 const devTools = new Set<string>(FLUENT_DEV_TOOL_NAMES);
 const devResources = new Set<string>(FLUENT_DEV_RESOURCE_URIS);
+const previewTools = PREVIEW_RICH_TOOL_GUIDE.map((entry) => entry.name);
+const frozenContractSnapshot = JSON.parse(readRepoFile('contracts/fluent-contract.v1.json')) as {
+  contractVersion: string;
+  freeze: unknown;
+  optionalCapabilities: string[];
+  resources: string[];
+  tools: string[];
+};
+
+assert.deepEqual(
+  frozenContractSnapshot,
+  {
+    ...fluentContractSnapshot(),
+    freeze: FLUENT_CONTRACT_FREEZE,
+  },
+  'contracts/fluent-contract.v1.json must stay in exact parity with src/contract.ts.',
+);
 
 assert.deepEqual(
   runtimeSurface.tools
@@ -113,6 +133,34 @@ assert.equal(
   'The grocery smoke widget resource must stay classified as dev-only.',
 );
 
+assert.deepEqual(
+  previewTools.filter((name) => publicTools.has(name) || aliasTools.has(name) || devTools.has(name)),
+  [],
+  'Preview or planned tools must not be reclassified as public, alias-only, or dev-only until they are intentionally promoted.',
+);
+
+assert.deepEqual(
+  previewTools.filter(
+    (name) =>
+      runtimeSurface.tools.some((entry) => entry.name === name) ||
+      runtimeSurfaceWithDevWidgets.tools.some((entry) => entry.name === name),
+  ),
+  [],
+  'Preview or planned tools must not be registered at runtime until they are intentionally promoted.',
+);
+
+assert.deepEqual(
+  frozenContractSnapshot.tools.filter((name) => aliasTools.has(name) || devTools.has(name)),
+  [],
+  'Alias-only and dev-only tools must stay out of the frozen contract artifact.',
+);
+
+assert.deepEqual(
+  frozenContractSnapshot.resources.filter((uri) => devResources.has(uri)),
+  [],
+  'Dev-only resources must stay out of the frozen contract artifact.',
+);
+
 for (const filePath of [
   'README.md',
   'CHANGELOG.md',
@@ -120,7 +168,6 @@ for (const filePath of [
   'docs/oss/README.md',
   'docs/oss/fluent-oss-github-release-checklist.md',
   'docs/oss/fluent-oss-setup-matrix.md',
-  'docs/oss/openclaw-package-versioning.md',
   'docs/oss/fluent-oss-upgrade-notes.md',
   'plugins/fluent/README.md',
   'claude-plugin/fluent/README.md',
@@ -163,22 +210,6 @@ for (const filePath of [
     `${filePath} must declare the canonical contract version as its minimum contract version.`,
   );
 }
-
-const openclawPackage = JSON.parse(readRepoFile('openclaw-plugin/fluent/package.json')) as {
-  name?: string;
-  private?: boolean;
-  'x-fluent'?: {
-    artifactKind?: string;
-    packagingDecision?: string;
-  };
-};
-assert.equal(openclawPackage.name, 'fluent-openclaw-oss-helper');
-assert.equal(openclawPackage.private, true);
-assert.equal(openclawPackage['x-fluent']?.artifactKind, 'oss-bundled-openclaw-helper');
-assert.equal(
-  openclawPackage['x-fluent']?.packagingDecision,
-  'oss-embedded-openclaw-bundle-is-a-distinct-helper-package',
-);
 
 if (repoFileExists('docs/fluent-hosted-client-testing.md')) {
   const hostedClientTestingDoc = readRepoFile('docs/fluent-hosted-client-testing.md');
@@ -230,7 +261,7 @@ function enumerateRuntimeSurface(options?: {
   };
 
   const origin = 'https://contract-surface.test';
-  registerCoreMcpSurface(fakeServer as never, {} as never, {} as never, origin);
+  registerCoreMcpSurface(fakeServer as never, {} as never, {} as never, {} as never, {} as never, origin);
   registerHealthMcpSurface(fakeServer as never, {} as never, origin);
   registerMealsMcpSurface(fakeServer as never, {} as never, {} as never, origin, options);
   registerStyleMcpSurface(fakeServer as never, {} as never, origin);

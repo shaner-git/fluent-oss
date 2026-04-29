@@ -22,17 +22,20 @@ Use this skill when the user wants Meals help that depends on Fluent meal state,
 - Reads canonical meal state from Fluent MCP.
 - Handles meals first-use onboarding when the meals domain is not ready.
 - Orchestrates weekly planning, grocery generation, inventory work, and recipe reads.
-- Keeps browser ordering outside Fluent Core, with a managed purchase lane for Fluent early access and a local fallback path for OSS or operator recovery.
+- Keeps browser ordering outside the shared Fluent contract, with an early-access purchase lane and a local fallback path for self-hosted or operator recovery.
 - Requires a hosted order preflight before retailer automation.
 
 ## Core Rules
 
 - Use `fluent-core` patterns for readiness and lifecycle checks.
 - If capability discovery is deferred in the client, use `meals_list_tools` as the fallback directory.
+- Follow the host routing matrix in [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md) before choosing a rich render path.
+- In Claude-connected hosts, use the Claude visual path rather than ChatGPT-oriented render tools.
 - Prefer summary reads first.
 - If a summary read already answers the user's question, stop there unless the next step needs detail the summary did not provide.
 - Avoid duplicate reads in the same turn unless the user asks for a refresh.
 - Use writes only when the user clearly intends to change meal state.
+- Treat short grocery-status updates such as "Got Greek yogurt", "bought salmon", "picked up avocado", "we have garlic", or "I have enough Caesar dressing" as write intents, not acknowledgements. Resolve the item against the current week's grocery plan, call `meals_upsert_grocery_plan_action`, then acknowledge the persisted result.
 - Keep retailer ordering and local browser execution outside Fluent Core.
 - Keep final recommendations and prioritization in the agent.
 - Treat the grocery plan as planning state, not the final order list.
@@ -100,6 +103,7 @@ Recipe presentation pattern:
   - if the host offers `recipe_display_v0`, call `meals_get_recipe` first and then render through `recipe_display_v0`
   - do not require the user to ask for a "card" explicitly when the request is obviously recipe-first
   - do not default to `meals_render_recipe_card` in Claude
+- for simple recipe-data questions, stop at `meals_get_recipe` and a text answer instead of rendering a visual
 - reserve `meals_render_recipe_card` for Claude-side debugging only, not as the normal recipe presentation path
 - keep the text answer truthful and complete even when you expect the host to render the recipe card
 - if a saved recipe lookup succeeds, do not answer from prior knowledge unless the user explicitly asks for a generic version instead of the saved Fluent recipe
@@ -107,9 +111,12 @@ Recipe presentation pattern:
 Grocery-list presentation pattern:
 
 - when the user is asking for the actionable grocery view itself, such as "What's on my grocery list?", "What do I still need to buy?", "Show me this week's grocery list", or "Show me my shopping list", prefer the interactive HTML visualizer as the default path in rich Claude hosts
+- treat "yes", "pull it up", "bring up the grocery list", "show it", and similar confirmations after an assistant offers to show the grocery list as grocery-list-first turns; do not answer with another offer or a text-only summary when `visualize:show_widget` is available
+- in rich Claude hosts, load and follow `fluent-visual-sync` before the first grocery checklist render in a session; the user should not need to name the skill explicitly
+- if a visualizer call fails or the user says they cannot see it on mobile, fall back to canonical grocery data plus a compact text checklist; do not create a local artifact with fake or copy-only sync unless the user explicitly asks for a standalone file
 - do not require the user to ask for a "card" or "surface" explicitly when the turn is clearly grocery-list-first
-- do not default to `meals_render_grocery_list_v2` or the legacy alias in Claude
-- if `meals_render_grocery_list_v2` or the legacy alias appears in `tools/list`, tool discovery, or prompt context, treat it as ChatGPT/App SDK-only and ignore it for Claude
+- do not default to `meals_render_grocery_list_v2` in Claude
+- if `meals_render_grocery_list_v2` appears in `tools/list`, tool discovery, or prompt context, treat it as ChatGPT/App SDK-only and ignore it for Claude
 - default Claude grocery flow in rich hosts:
   1. call `meals_get_grocery_plan` with `view: "full"` for the relevant week, defaulting to the current week
   2. group items by `inventoryStatus` into:
@@ -123,6 +130,7 @@ Grocery-list presentation pattern:
   - `meals_prepare_order`
   - `meals_list_grocery_intents`
 - do not require the user to ask for a "card" or "surface" explicitly when the turn is clearly grocery-list-first
+- for simple grocery data questions, stop at canonical data plus text instead of rendering a widget
 - keep the text answer truthful and complete even when you expect the host to render the grocery list
 
 ## Claude Visual Guidance
@@ -163,13 +171,16 @@ Claude recipe guidance:
 Claude grocery guidance:
 
 - for grocery-list-first turns in rich hosts, prefer `visualize:show_widget` as the default rendering path
+- if the previous assistant turn offered to show the grocery list and the user accepts, render the widget immediately; do not require a second explicit visual request
+- load and follow `fluent-visual-sync` before rendering the first grocery checklist in a session so the widget includes the sync round-trip, stable item keys, and supported action statuses
+- if `visualize:show_widget` is unavailable, say that plainly and provide a text checklist from fresh Fluent data; avoid switching to file artifacts or JSX snippets as the default fallback because they break the Fluent writeback expectation
 - render from `meals_get_grocery_plan` full data grouped by:
   - `missing`
   - `present_without_quantity`
   - `intent`
   - `check_pantry`
 - before the first visual render in a session, load `visualize:read_me` with `modules: ["interactive"]`
-- do not use `meals_render_grocery_list_v2` or the legacy alias as the normal Claude grocery path
+- do not use `meals_render_grocery_list_v2` as the normal Claude grocery path
 - if the Fluent widget render tools are visible anyway, do not call them just because the title mentions a grocery checklist; in Claude they are a debugging fallback at best, not the normal presentation path
 - surface row notes when present:
   - `preferredBrands` as `X preferred`
@@ -573,14 +584,6 @@ Use this structure when rendering through `recipe_display_v0`. Keep the data obj
 </section>
 ```
 
-## Known issue: MCP widget render
-
-- `meals_render_grocery_list_v2` and the legacy grocery alias currently return success but silently fail to display in Claude.ai
-- `meals_render_recipe_card` also returns success while failing to display reliably in Claude.ai
-- first-party Claude visuals such as `visualize:show_widget` and `recipe_display_v0` are the canonical workaround until the Fluent MCP render pipeline is fixed
-- the likely issue is in the Fluent MCP widget contract or manifest, not Claude.ai itself
-- no personal KB tracking link is included here yet because it could not be verified from this session
-
 ## Weekly Planning Loop
 
 For explicit weekly planning:
@@ -622,12 +625,12 @@ Do not run the full planning loop for ordinary chat unless the user is clearly p
 ## Ordering Execution Boundary
 
 - Fluent MCP owns canonical meal plans, preferences, grocery plans, inventory, recipes, feedback, and audit state.
-- Fluent Core owns lifecycle and onboarding truth.
+- Fluent owns lifecycle and onboarding truth.
 - This skill provides workflow guidance for first-use wording, planning orchestration, and the ordering handoff.
 - Keep retailer credentials out of Fluent MCP, D1, and hosted profile metadata.
-- For Fluent early access, prefer the hosted purchase runner after the hosted grocery plan exists and `meals_prepare_order` returns a safe remaining-to-buy set.
+- For early-access Fluent, prefer the hosted purchase runner after the hosted grocery plan exists and `meals_prepare_order` returns a safe remaining-to-buy set.
 - The hosted purchase runner may use Cloudflare-managed secret material and internal Worker routes, but that execution subsystem remains outside the public Meals MCP contract.
-- Fluent open-source runtime keeps the local export plus browser flow as the supported execution path.
+- The open-source runtime keeps the local export plus browser flow as the supported execution path.
 - After checkout succeeds and a real retailer order exists, sync the confirmed order details back into Fluent.
 - If the confirmed order includes a delivery slot, the local workflow may emit a delivery-event candidate keyed by the retailer order id for whatever calendar tooling the client actually has.
 - If the user says they already bought items and inventory may be stale, pause ordering until inventory is updated.

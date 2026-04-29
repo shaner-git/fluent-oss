@@ -14,7 +14,10 @@ if (isInvokedDirectly()) {
 }
 
 export async function buildHostedGroceryExport(options = {}) {
-  const baseUrl = String(options.baseUrl || process.env.FLUENT_BASE_URL || 'http://127.0.0.1:8788').replace(/\/$/, '');
+  const baseUrl = String(options.baseUrl || process.env.FLUENT_BASE_URL || '').trim().replace(/\/$/, '');
+  if (!baseUrl) {
+    throw new Error('Hosted grocery export requires FLUENT_BASE_URL or --base-url.');
+  }
   const accessToken = String(options.accessToken || process.env.FLUENT_ACCESS_TOKEN || '').trim();
   if (!accessToken) {
     throw new Error('Hosted grocery export requires FLUENT_ACCESS_TOKEN or --access-token.');

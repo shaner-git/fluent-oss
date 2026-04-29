@@ -1,32 +1,35 @@
-# Fluent open-source runtime
+# Run Fluent Yourself
 
-Fluent open-source runtime is the supported self-hosted open-source runtime for Fluent.
+Fluent is open source. This guide covers the supported self-hosted open-source runtime for Fluent.
 
 Public release references:
 
-- release notes: [../CHANGELOG.md](../CHANGELOG.md)
-- current OSS docs: [./oss/README.md](./oss/README.md)
-- public release guide: [./fluent-release-gate.md](./fluent-release-gate.md)
+- public repo: [shaner-git/fluent-oss](https://github.com/shaner-git/fluent-oss)
+- current open-source runtime docs: [docs/oss/README.md](https://github.com/shaner-git/fluent-oss/blob/main/docs/oss/README.md)
+- release history: [Fluent open-source runtime releases](https://github.com/shaner-git/fluent-oss/releases)
 - changelog: [../CHANGELOG.md](../CHANGELOG.md)
 - known limitations: [./oss/fluent-oss-known-limitations.md](./oss/fluent-oss-known-limitations.md)
 - setup matrix: [./oss/fluent-oss-setup-matrix.md](./oss/fluent-oss-setup-matrix.md)
 - upgrade notes: [./oss/fluent-oss-upgrade-notes.md](./oss/fluent-oss-upgrade-notes.md)
 - Docker notes: [./oss/fluent-oss-docker-notes.md](./oss/fluent-oss-docker-notes.md)
-- public artifact boundary: [./oss/public-artifact-boundary.md](./oss/public-artifact-boundary.md)
 
-## OSS Boundaries
+## Runtime Boundaries
 
 - single-user in v1
 - self-hostable over HTTP
 - bearer-token protected `/mcp`
 - open `GET /health`
 - open `GET /codex-probe`
-- same MCP contract as Fluent early access
-- supported minimum contract version: `2026-04-20.fluent-core-v1.37`
+- same MCP contract as managed Fluent early access
+- supported minimum contract version: `2026-04-26.fluent-core-v1.48`
 - local DB and artifacts stored under `~/.fluent/` by default
 - no OAuth, no `/authorize`, no `/token`
 - direct runtime support is documented for Node.js `22.x`
-- public `--track cloud` scaffolds require an explicit `--base-url` until Fluent early access has a documented public endpoint
+- public `--track cloud` scaffolds are compatibility helpers and require an explicit `--base-url`
+
+## Public Export Boundary
+
+This guide ships in both the canonical source repo and the generated public repo. The detailed export boundary, excluded artifact classes, and scrub gates live in [./oss/fluent-oss-artifact-boundary.md](./oss/fluent-oss-artifact-boundary.md).
 
 ## Local Laptop Usage
 
@@ -66,25 +69,17 @@ Generate an OpenClaw config:
 npm run scaffold:mcp -- --client openclaw --track oss --base-url http://127.0.0.1:8788
 ```
 
-Install the published OpenClaw package first:
+For OpenClaw, this scaffold output is the native `mcp.servers.fluent` JSON block you should register with `openclaw mcp set fluent ...`.
 
-```bash
-openclaw plugins install fluent-openclaw
-```
+OpenClaw package ownership:
 
-Then bind Fluent open-source runtime with:
-
-```bash
-openclaw fluent mcp oss --base-url http://127.0.0.1:8788 --token <oss-token>
-```
-
-For OpenClaw, the scaffold output is still the native `mcp.servers.fluent` JSON block you can register manually with `openclaw mcp set fluent ...`.
-
-The checked-in `openclaw-plugin/fluent/` bundle is the separate helper package `fluent-openclaw-oss-helper`, not the published `fluent-openclaw` package line.
+- the supported public OpenClaw install surface is the standalone `fluent-openclaw` package
+- `openclaw-plugin/fluent` in this public repo is the bundled helper copy with its own metadata and versioning
+- do not describe the bundled helper version as the published `fluent-openclaw` release line
 
 ## Docker Compose Usage
 
-Start Fluent open-source runtime with the bundled defaults:
+Start Fluent with the bundled open-source defaults:
 
 ```bash
 docker compose --env-file .env.oss.example up --build
@@ -112,7 +107,7 @@ The named volume persists:
 
 - SQLite data
 - artifact storage
-- OSS token state
+- local token state
 
 ## LAN / VPS / Self-Hosted Deployment
 
@@ -124,7 +119,7 @@ npm run oss:start -- --host 0.0.0.0 --port 8788
 
 Recommended pattern:
 
-1. Run Fluent open-source runtime on a private interface or internal port.
+1. Run Fluent on a private interface or internal port.
 2. Put TLS and any extra perimeter controls at the reverse proxy layer.
 3. Forward only `/mcp`, `/health`, `/codex-probe`, and any image routes you intend to expose.
 4. Keep the bearer token secret even behind the proxy.

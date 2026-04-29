@@ -8,17 +8,18 @@ First public Fluent open-source runtime release.
 
 ### Highlights
 
-- publishes the supported single-user self-managed Fluent open-source runtime runtime
+- publishes the supported single-user Fluent open-source runtime
 - ships Docker-first and direct Node.js 22.x setup paths
-- supports the shared Fluent MCP contract used by Fluent early access
+- supports the shared Fluent MCP contract used by Fluent managed early access
 - includes Codex, Claude, and OpenClaw scaffold generation for OSS
 - includes snapshot export and import support for OSS operators
 
 ### Supported Contract Version
 
-- minimum supported contract version: `2026-04-20.fluent-core-v1.37`
+- minimum supported contract version: `2026-04-26.fluent-core-v1.48`
 - frozen contract artifact: [contracts/fluent-contract.v1.json](./contracts/fluent-contract.v1.json)
 - contract notes: [docs/fluent-contract-v1.md](./docs/fluent-contract-v1.md)
+- contract change: removes the legacy `meals_render_grocery_list` alias and `grocery_list_widget` capability; `meals_render_grocery_list_v2` remains the supported grocery-list render surface.
 
 ### Supported Setup Matrix
 
@@ -39,4 +40,4 @@ First public Fluent open-source runtime release.
 ### Release Operations
 
 - GitHub release checklist: [docs/oss/fluent-oss-github-release-checklist.md](./docs/oss/fluent-oss-github-release-checklist.md)
-- public release materials: [README.md](./README.md)
+- public release page: [Fluent open-source runtime v0.1.0](https://github.com/shaner-git/fluent-oss/releases/tag/v0.1.0)

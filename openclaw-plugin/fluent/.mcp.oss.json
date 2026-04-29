@@ -1,5 +1,5 @@
 {
-  "url": "http://127.0.0.1:8788/mcp",
+  "url": "http://localhost:8788/mcp",
   "transport": "streamable-http",
   "headers": {
     "Authorization": "Bearer <replace-with-output-of-npm-run-oss:token:print>"

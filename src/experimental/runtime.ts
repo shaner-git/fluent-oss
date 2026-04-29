@@ -262,7 +262,7 @@ export function experimentalProbe(origin: string) {
     },
     contract: fluentContractSnapshot(),
     deploymentTrack: 'oss',
-    display_name: 'Fluent OSS Experimental',
+    display_name: 'Fluent Experimental',
     icon_url: `${origin}/icon.svg`,
     marker: `fluent-oss-postgres-s3-probe-${FLUENT_CONTRACT_VERSION}`,
     legacy_auth_envs: [LOCAL_TOKEN_ENV],

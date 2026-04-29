@@ -25,6 +25,7 @@ import type {
   PreparedOrderRecord,
   UpdateInventoryInput,
 } from './domains/meals/service';
+import type { MealPlanCandidateSummaryRecord } from './domains/meals/types-extra';
 import {
   buildRecipeCardMetadata,
   buildRecipeCardStructuredContent,
@@ -506,6 +507,17 @@ function normalizeMealsTrainingContextInput(
     sessionLoadByDay: input.sessionLoadByDay ?? {},
     nutritionSupportMode: input.nutritionSupportMode,
     weekComplexity: input.weekComplexity,
+  };
+}
+
+function summarizeMealPlanCandidateForToolText(candidate: MealPlanCandidateSummaryRecord) {
+  return {
+    candidateId: candidate.candidateId,
+    dinnerCount: candidate.entries.filter((entry) => entry.mealType === 'dinner').length,
+    entryCount: candidate.entryCount,
+    recipeNamePreview: candidate.recipeNamePreview,
+    warningCount: candidate.warnings.length,
+    warnings: candidate.warnings,
   };
 }
 
@@ -1019,16 +1031,13 @@ export function registerMealsMcpSurface(
   registerRenderRecipeCardTool('meals_render_recipe_card');
   registerRenderRecipeCardTool('meals_show_recipe', { preferredAlias: true });
 
-  const registerRenderGroceryListTool = (toolName: 'meals_render_grocery_list' | 'meals_render_grocery_list_v2', options?: { deprecatedAlias?: boolean }) =>
+  const registerRenderGroceryListTool = () =>
     server.registerTool(
-      toolName,
+      'meals_render_grocery_list_v2',
       {
-        title: options?.deprecatedAlias
-          ? 'Show Grocery Checklist (Legacy ChatGPT/App SDK Alias)'
-          : 'Show Grocery Checklist (ChatGPT/App SDK Widget)',
-        description: options?.deprecatedAlias
-          ? 'Legacy alias for showing the user\'s real Fluent grocery checklist only in hosts that support MCP output templates, such as ChatGPT / MCP Apps-style hosts. Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer meals_get_grocery_plan and either let the host render with its own visualizer or answer in text. Do not use this for standalone smoke tests, host verification, widget debugging, or standalone widget prompts.'
-          : 'Show the user\'s real Fluent grocery checklist for the active week only in hosts that support Fluent MCP output templates, such as ChatGPT / MCP Apps-style hosts. Use this for ordinary grocery-list asks when the user wants a rich checklist with To buy, Verify quantity, and Check pantry sections in those hosts. Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer canonical grocery data from meals_get_grocery_plan and either let the host render with its own visualizer or answer in text. Do not use this for standalone smoke tests, host verification, widget debugging, or standalone widget prompts.',
+        title: 'Show Grocery Checklist (ChatGPT/App SDK Widget)',
+        description:
+          'Show the user\'s real Fluent grocery checklist for the active week only in hosts that support Fluent MCP output templates, such as ChatGPT / MCP Apps-style hosts. Use this for ordinary grocery-list asks when the user wants a rich checklist with To buy, Verify quantity, and Check pantry sections in those hosts. Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer canonical grocery data from meals_get_grocery_plan and either let the host render with its own visualizer or answer in text. Do not use this for standalone smoke tests, host verification, widget debugging, or standalone widget prompts.',
         inputSchema: {
           week_start: z.string().optional(),
           weekStart: z.string().optional(),
@@ -1095,9 +1104,7 @@ export function registerMealsMcpSurface(
       },
     );
 
-  registerRenderGroceryListTool('meals_render_grocery_list_v2');
-
-  registerRenderGroceryListTool('meals_render_grocery_list', { deprecatedAlias: true });
+  registerRenderGroceryListTool();
 
   server.registerTool(
     'meals_render_pantry_dashboard',
@@ -1164,6 +1171,7 @@ export function registerMealsMcpSurface(
         staple_name: z.string().optional(),
         ...provenanceInputSchema,
       },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
@@ -1326,13 +1334,7 @@ export function registerMealsMcpSurface(
         });
         const result = {
           candidateCount: generation.candidates.length,
-          candidatePreview: generation.candidates.slice(0, 3).map((candidate) => ({
-            candidateId: candidate.candidateId,
-            dinnerCount: candidate.entries.filter((entry) => entry.mealType === 'dinner').length,
-            entryCount: candidate.entryCount,
-            recipeNamePreview: candidate.recipeNamePreview,
-            warningCount: candidate.warnings.length,
-          })),
+          candidatePreview: generation.candidates.slice(0, 3).map(summarizeMealPlanCandidateForToolText),
           experience: 'pantry_plan_generation',
           generationId: generation.id,
           seededRecipeIds: suggestions.map((entry) => entry.recipeId),
@@ -1529,6 +1531,7 @@ export function registerMealsMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
@@ -1582,6 +1585,7 @@ export function registerMealsMcpSurface(
           .optional(),
         ...provenanceInputSchema,
       },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
@@ -1599,13 +1603,7 @@ export function registerMealsMcpSurface(
           id: generation.id,
           inputHash: generation.inputHash,
           weekStart: generation.weekStart,
-          candidatePreview: generation.candidates.slice(0, 4).map((candidate) => ({
-            candidateId: candidate.candidateId,
-            dinnerCount: candidate.entries.filter((entry) => entry.mealType === 'dinner').length,
-            entryCount: candidate.entryCount,
-            recipeNamePreview: candidate.recipeNamePreview,
-            warningCount: candidate.warnings.length,
-          })),
+          candidatePreview: generation.candidates.slice(0, 4).map(summarizeMealPlanCandidateForToolText),
         },
       });
     },
@@ -1625,6 +1623,7 @@ export function registerMealsMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
@@ -2101,6 +2100,7 @@ export function registerMealsMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);

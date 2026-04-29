@@ -1,4 +1,4 @@
-import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../fluent-core';
+import { FLUENT_OSS_DEFAULT_PROFILE_ID, FLUENT_OSS_DEFAULT_TENANT_ID } from '../fluent-identity';
 import type { SqliteD1Database } from './sqlite-d1';
 
 export interface HostedSnapshotTables {
@@ -67,9 +67,9 @@ function relabelTenantAsLocal(db: SqliteD1Database): void {
     )
     .run(
       'local',
-      'Fluent OSS',
-      JSON.stringify({ product: 'Fluent OSS', deployment: 'oss', deployment_track: 'oss', imported_from: 'cloud' }),
-      FLUENT_PRIMARY_TENANT_ID,
+      'Fluent',
+      JSON.stringify({ product: 'Fluent', deployment: 'oss', deployment_track: 'oss', imported_from: 'cloud' }),
+      FLUENT_OSS_DEFAULT_TENANT_ID,
     );
 }
 
@@ -80,7 +80,7 @@ function relabelProfileAsLocal(db: SqliteD1Database): Record<string, unknown> {
        FROM fluent_profile
        WHERE tenant_id = ? AND profile_id = ?`,
     )
-    .get(FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID) as { metadata_json: string | null } | undefined;
+    .get(FLUENT_OSS_DEFAULT_TENANT_ID, FLUENT_OSS_DEFAULT_PROFILE_ID) as { metadata_json: string | null } | undefined;
 
   const existingMetadata = row?.metadata_json ? safeParseJson(row.metadata_json) : {};
   const nextMetadata = {
@@ -88,7 +88,7 @@ function relabelProfileAsLocal(db: SqliteD1Database): Record<string, unknown> {
     backend_mode: 'local',
     deployment: 'oss',
     deployment_track: 'oss',
-    product: 'Fluent OSS',
+    product: 'Fluent',
   };
 
   db.sqlite
@@ -97,7 +97,7 @@ function relabelProfileAsLocal(db: SqliteD1Database): Record<string, unknown> {
        SET metadata_json = ?, updated_at = CURRENT_TIMESTAMP
        WHERE tenant_id = ? AND profile_id = ?`,
     )
-    .run(JSON.stringify(nextMetadata), FLUENT_PRIMARY_TENANT_ID, FLUENT_OWNER_PROFILE_ID);
+    .run(JSON.stringify(nextMetadata), FLUENT_OSS_DEFAULT_TENANT_ID, FLUENT_OSS_DEFAULT_PROFILE_ID);
 
   return nextMetadata;
 }

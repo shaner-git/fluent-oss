@@ -1,0 +1,122 @@
+{
+  "productExtractionCases": [
+    {
+      "name": "kith-purple-tee",
+      "requireImages": true,
+      "candidate": {
+        "brand": "Kith",
+        "category": "TOP",
+        "colorFamily": "purple",
+        "name": "Kith Treats Serif Tee Current",
+        "productUrl": "https://ca.kith.com/collections/mens-apparel-tees/products/khm034675-513",
+        "subcategory": "T-Shirt"
+      }
+    },
+    {
+      "name": "footlocker-triple-white-af1",
+      "requireImages": true,
+      "candidate": {
+        "brand": "Nike",
+        "category": "SHOE",
+        "colorFamily": "white",
+        "colorName": "Triple White",
+        "name": "Nike Air Force 1 '07 Men's",
+        "productUrl": "https://www.footlocker.ca/en/product/nike-air-force-1-07-mens/4100960.html",
+        "subcategory": "Sneaker"
+      }
+    }
+  ],
+  "fullFlowCases": [
+    {
+      "name": "nocta-af1-cobalt-direct-image",
+      "candidate": {
+        "brand": "Nike x NOCTA",
+        "category": "SHOE",
+        "colorFamily": "white",
+        "colorName": "White / Cobalt Tint / Metallic Silver",
+        "imageUrl": "https://jdsports.ca/cdn/shop/files/CZ8065-101_nike_air_force_1_low_sp_lyf_white__cobalt_tint___metallic_1.jpg?v=1771396699&width=1100",
+        "name": "Nike Air Force 1 Low SP LYF White Cobalt Tint Metallic",
+        "productUrl": "https://jdsports.ca/products/nike-air-force-1-low-sp-lyf-white-cobalt-tint-metallic",
+        "subcategory": "Sneaker"
+      },
+      "expectedComparatorHints": ["nocta", "air force 1", "af1"]
+    }
+  ],
+  "noImageCandidates": [
+    {
+      "name": "text-only-white-sneaker",
+      "candidate": {
+        "brand": "Nike",
+        "category": "SHOE",
+        "colorFamily": "white",
+        "name": "Text Only White Sneaker",
+        "subcategory": "Sneaker"
+      }
+    },
+    {
+      "name": "text-only-top",
+      "candidate": {
+        "brand": "Kith",
+        "category": "TOP",
+        "colorFamily": "purple",
+        "name": "Text Only Serif Tee",
+        "subcategory": "T-Shirt"
+      }
+    },
+    {
+      "name": "text-only-bottom",
+      "candidate": {
+        "brand": "NN07",
+        "category": "BOTTOM",
+        "colorFamily": "khaki",
+        "name": "Text Only Straight Chino",
+        "subcategory": "Chino"
+      }
+    },
+    {
+      "name": "text-only-outerwear",
+      "candidate": {
+        "brand": "Arc'teryx",
+        "category": "OUTERWEAR",
+        "colorFamily": "black",
+        "name": "Text Only Black Parka",
+        "subcategory": "Parka"
+      }
+    },
+    {
+      "name": "text-only-loafer",
+      "candidate": {
+        "brand": "Alden",
+        "category": "SHOE",
+        "colorFamily": "black",
+        "comparatorKey": "loafer",
+        "name": "Text Only Black Penny Loafer",
+        "subcategory": "Loafer"
+      }
+    }
+  ],
+  "archiveCorrection": {
+    "tempItem": {
+      "brand": "Nike",
+      "category": "SHOE",
+      "color_family": "white",
+      "comparator_key": "sneaker",
+      "formality": 1,
+      "name": "Acceptance Temp Nike Air Force 1 Low Retro Premium",
+      "subcategory": "Sneaker"
+    },
+    "profile": {
+      "itemType": "Air Force 1 low-top sneaker",
+      "styleRole": "duplicate-test",
+      "tags": ["air force 1", "af1", "white sneaker", "acceptance temp"]
+    },
+    "candidate": {
+      "brand": "Nike",
+      "category": "SHOE",
+      "colorFamily": "white",
+      "colorName": "Triple White",
+      "name": "Nike Air Force 1 '07 Triple White",
+      "subcategory": "Sneaker"
+    }
+  }
+}

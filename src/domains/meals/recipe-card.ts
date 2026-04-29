@@ -1,6 +1,7 @@
 import type { MealRecipeRecord } from './types';
 
-export const MEALS_RECIPE_CARD_TEMPLATE_URI = 'ui://widget/fluent-recipe-card-v7.html';
+export const MEALS_RECIPE_CARD_WIDGET_VERSION = 'v7';
+export const MEALS_RECIPE_CARD_TEMPLATE_URI = `ui://widget/fluent-recipe-card-${MEALS_RECIPE_CARD_WIDGET_VERSION}.html`;
 
 export interface RecipeCardIngredientViewModel {
   item: string;
@@ -103,7 +104,7 @@ export function buildRecipeCardMetadata(viewModel: RecipeCardViewModel) {
   return {
     experience: 'recipe_card',
     recipeCard: viewModel,
-    version: 'v6',
+    version: MEALS_RECIPE_CARD_WIDGET_VERSION,
   };
 }
 

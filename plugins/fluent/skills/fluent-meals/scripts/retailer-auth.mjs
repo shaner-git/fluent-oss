@@ -14,8 +14,7 @@ export const DEFAULT_VERIFICATION_PROVIDER = 'gog';
 export const VOILA_BASE_URL = 'https://voila.ca/';
 export const VOILA_LOGIN_URL = 'https://voila.ca/login';
 export const DEFAULT_BROWSER_DATA_DIR = FLUENT_MEALS_BROWSER_DATA_DIR;
-export const BITWARDEN_SCRIPT_PATH =
-  process.env.FLUENT_BITWARDEN_SCRIPT_PATH?.trim() || process.env.BITWARDEN_SCRIPT_PATH?.trim() || null;
+export const BITWARDEN_SCRIPT_PATH = String(process.env.FLUENT_BITWARDEN_SCRIPT_PATH || '').trim() || null;
 export const DEFAULT_VERIFICATION_CODE_LENGTH = 6;
 
 const VOILA_SELECTORS = {
@@ -218,6 +217,9 @@ export async function resolveBitwardenCredentials({
 }) {
   if (!retailerAccount?.trim()) {
     throw new Error('Bitwarden credential provider requires --retailer-account.');
+  }
+  if (!bwScriptPath?.trim()) {
+    throw new Error('Bitwarden credential provider requires FLUENT_BITWARDEN_SCRIPT_PATH or an explicit helper path override.');
   }
 
   await runBitwardenAction({
@@ -1083,11 +1085,6 @@ async function runBitwardenAction({
   query,
   expectJson,
 }) {
-  if (!bwScriptPath?.trim()) {
-    throw new Error(
-      'Bitwarden credential provider requires FLUENT_BITWARDEN_SCRIPT_PATH or BITWARDEN_SCRIPT_PATH to point at the helper script.',
-    );
-  }
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', bwScriptPath, action];
   if (field) {
     args.push('-Field', field);

@@ -2,16 +2,16 @@
 
 ## Summary
 
-Fluent is one product with one MCP contract and two supported deployment tracks:
+Fluent is one product with one MCP contract and two supported runtime paths:
 
-- `Fluent early access`
-- `Fluent open-source runtime`
+- early access
+- open-source runtime
 
 The contract is shared. Runtime-specific auth and infrastructure concerns are not.
 
 ## Shared Core
 
-Shared across Cloud and OSS:
+Shared across both runtime paths:
 
 - the Fluent MCP contract
 - domain lifecycle and onboarding truth
@@ -32,23 +32,23 @@ This pass keeps persistence SQL-heavy and D1-shaped at the callsite while moving
 
 Current storage backends:
 
-- `d1-r2`: Fluent early access on native Cloudflare storage bindings
-- `sqlite-fs`: default Fluent open-source runtime on SQLite plus filesystem artifacts
-- `postgres-s3`: experimental Fluent open-source runtime backend on Postgres plus S3-compatible blobs
+- `d1-r2`: early-access Fluent on native Cloudflare storage bindings
+- `sqlite-fs`: default open-source runtime on SQLite plus filesystem artifacts
+- `postgres-s3`: experimental open-source runtime backend on Postgres plus S3-compatible blobs
 
-Cloud and default OSS remain the supported production tracks. `postgres-s3` is experimental and intentionally additive.
+Early access and the default open-source runtime remain the supported production paths. `postgres-s3` is experimental and intentionally additive.
 
-## Fluent early access
+## Early Access
 
-Cloud owns:
+Early access owns:
 
 - Cloudflare Workers deployment
 - current Cloudflare Access beta auth path
 - Better Auth hosted login and session surface
 - D1 and R2 managed runtime state
-- the default packaged backend path
+- the default packaged runtime path
 
-Cloud is the paid managed offering.
+This is the managed early-access offering.
 
 Public hosted direction:
 
@@ -57,18 +57,18 @@ Public hosted direction:
 - Cloudflare Access is being reduced to an operator or beta-only compatibility path
 - Fluent still needs request-scoped tenant resolution before hosted multi-user is complete
 
-## Fluent open-source runtime
+## Open-Source Runtime
 
-OSS owns:
+The open-source runtime owns:
 
 - single-user self-hosted runtime behavior
 - bearer-token auth on `/mcp`
 - local DB and artifact storage
-- snapshot import/export from Cloud
+- snapshot import/export from early access
 - laptop, LAN, and VPS-style operator workflows
 - optional experimental Postgres + S3 backend
 
-OSS is intentionally single-user in v1. It does not try to replicate the Cloud control plane.
+The open-source runtime is intentionally single-user in v1. It does not try to replicate the early-access control plane.
 
 ## Client Bundles
 
@@ -82,8 +82,7 @@ Client packaging stays platform-specific even though the MCP contract is shared:
 
 - Codex keeps the main bundle with local helper scripts for execution-heavy skills.
 - Claude keeps a parallel bundle tuned to Claude's plugin layout.
-- OpenClaw ships as a native plugin for the shared `skills/` tree, but the checked-in `openclaw-plugin/fluent` copy is a bundled OSS helper package rather than the published standalone `fluent-openclaw` release line.
-- OpenClaw's hosted or OSS MCP connection is applied through native `mcp.servers` profile config rather than package-loaded HTTP MCP state.
+- OpenClaw ships as a native plugin for the shared `skills/` tree, but its hosted or OSS MCP connection is applied through native `mcp.servers` profile config rather than package-loaded HTTP MCP state.
 
 ## Domain Model
 

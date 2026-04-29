@@ -1,7 +1,6 @@
 {
-  "generatedAt": "2026-04-20T03:25:07.730Z",
-  "generatedFromCommit": "public-export",
-  "sourceRepo": "canonical-source",
-  "sourceManifest": "ops/public-oss-overlay/public-artifact-boundary.json",
+  "generatedAt": "2026-04-29T04:08:01.602Z",
+  "generatedFromCommit": "66f578db6335536c2233d2f6c71f6010006046b5",
+  "sourceManifest": "ops/export-oss.manifest.json",
   "strategy": "curated-export"
 }

@@ -1,5 +1,7 @@
-export const MEALS_GROCERY_LIST_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v55.html';
-export const MEALS_GROCERY_SMOKE_TEMPLATE_URI = 'ui://widget/fluent-grocery-smoke-v1.html';
+export const MEALS_GROCERY_LIST_WIDGET_VERSION = 'v55';
+export const MEALS_GROCERY_SMOKE_WIDGET_VERSION = 'v1';
+export const MEALS_GROCERY_LIST_TEMPLATE_URI = `ui://widget/fluent-grocery-list-${MEALS_GROCERY_LIST_WIDGET_VERSION}.html`;
+export const MEALS_GROCERY_SMOKE_TEMPLATE_URI = `ui://widget/fluent-grocery-smoke-${MEALS_GROCERY_SMOKE_WIDGET_VERSION}.html`;
 
 export interface GroceryListRecipeReferenceViewModel {
   recipeId: string;
@@ -508,7 +510,7 @@ export function buildGroceryListMetadata(viewModel: GroceryListViewModel) {
   return {
     experience: 'grocery_list',
     groceryList: buildGroceryListInteractiveViewModel(viewModel),
-    version: 'v55',
+    version: MEALS_GROCERY_LIST_WIDGET_VERSION,
   };
 }
 
@@ -1205,7 +1207,7 @@ export function getGroceryListWidgetHtml(): string {
       root.innerHTML = [
         '<article class="grocery-card">',
         '<p class="grocery-kicker">Fluent grocery list</p>',
-        '<h1 class="grocery-headline">Grocery widget · v55</h1>',
+        '<h1 class="grocery-headline">Grocery widget · ${MEALS_GROCERY_LIST_WIDGET_VERSION}</h1>',
         '<p class="grocery-empty">Waiting for grocery data…</p>',
         '</article>',
       ].join('');
@@ -1388,7 +1390,7 @@ export function getGroceryListWidgetHtml(): string {
         openai.toolResponseMetadata = {
           experience: 'grocery_list',
           groceryList: nextViewModel,
-          version: 'v55',
+          version: '${MEALS_GROCERY_LIST_WIDGET_VERSION}',
         };
         openai.toolOutput = {
           experience: 'grocery_list',
@@ -1801,7 +1803,7 @@ export function getGrocerySmokeWidgetHtml(): string {
   return `
 <div class="fluent-grocery-smoke">
   <p class="fluent-grocery-kicker">Fluent widget smoke test</p>
-  <h1>Standalone grocery smoke widget · v1</h1>
+  <h1>Standalone grocery smoke widget · ${MEALS_GROCERY_SMOKE_WIDGET_VERSION}</h1>
   <p>This is a dedicated smoke widget resource for ChatGPT host verification.</p>
   <p>If this one fails too, the issue is outside the grocery list implementation path.</p>
 </div>

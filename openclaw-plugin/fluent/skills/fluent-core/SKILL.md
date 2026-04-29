@@ -29,6 +29,8 @@ Use this skill when the task depends on Fluent Core state, such as:
 - Skip a fresh capabilities check when the current turn already established readiness, or when the task is a straightforward shared-profile write that does not depend on domain routing.
 - Treat `readyDomains` as the primary readiness signal.
 - Treat `toolDiscovery` and `metadata.fluent` as hints, not commands.
+- Follow the host routing matrix in [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md) before choosing a rich render path.
+- Domain readiness does not imply widget support. In OpenClaw, default to canonical data and text unless an operator has explicitly provided a host-specific visual equivalent.
 - Use core write tools only for explicit enable, onboarding, or shared-profile actions.
 - Once a domain is ready, hand off to the domain skill for domain-specific work.
 

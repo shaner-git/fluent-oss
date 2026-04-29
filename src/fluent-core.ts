@@ -1,12 +1,33 @@
-import type { MutationProvenance } from './auth';
+import { getFluentAuthProps, type MutationProvenance } from './auth';
+import { getFluentCloudOnboardingRecord, type FluentCloudOnboardingRecord } from './cloud-onboarding';
+import { markFluentCloudAccountActive } from './cloud-invites';
+import { FLUENT_SUPPORT_EMAIL } from './cloud-early-access';
 import type { CoreRuntimeBindings, FluentBackendMode, FluentDeploymentTrack } from './config';
-import { FLUENT_CONTRACT_VERSION, FLUENT_OPTIONAL_CAPABILITIES, FLUENT_TOOL_NAMES } from './contract';
+import {
+  FLUENT_CONTRACT_VERSION,
+  FLUENT_GUIDANCE_RESOURCE_URIS,
+  FLUENT_OPTIONAL_CAPABILITIES,
+  FLUENT_TOOL_NAMES,
+  fluentHostProfile,
+  fluentHostProfiles,
+  type FluentHostProfile,
+} from './contract';
 import { isStylePurchaseEvalReady, normalizeStyleProfile } from './domains/style/helpers';
 import { getFluentIdentityContext } from './fluent-identity';
 import type { FluentDatabase } from './storage';
+import {
+  calculateLapsedRetentionDeadline,
+  calculateSubscriptionGraceDeadline,
+  evaluateSubscriptionLifecycle,
+} from './subscription-lifecycle';
 import { torontoTimeZone } from './time';
 
-export { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from './fluent-identity';
+export {
+  FLUENT_OSS_DEFAULT_PROFILE_ID,
+  FLUENT_OSS_DEFAULT_TENANT_ID,
+  FLUENT_OWNER_PROFILE_ID,
+  FLUENT_PRIMARY_TENANT_ID,
+} from './fluent-identity';
 
 export interface FluentTenantRecord {
   backendMode: FluentBackendMode;
@@ -62,17 +83,56 @@ export interface FluentCapabilities {
     displayName: string | null;
     timezone: string;
   };
+  hostProfiles: FluentHostProfile[];
   toolDiscovery: {
     canonicalRegistry: 'mcp_tools_list';
+    guidanceResources: string[];
     note: string;
     groups: FluentToolDiscoveryGroup[];
   };
+}
+
+export type FluentAccountAccessState = 'active' | 'limited' | 'pending' | 'unavailable';
+export type FluentAccountEntitlementState =
+  | 'active'
+  | 'trialing'
+  | 'past_due_grace'
+  | 'limited'
+  | 'canceled_retention'
+  | 'pending'
+  | 'unavailable';
+
+export interface FluentAccountStatus {
+  accessState: FluentAccountAccessState;
+  backendMode: FluentBackendMode;
+  contractVersion: string;
+  enabledDomains: string[];
+  entitlement: {
+    state: FluentAccountEntitlementState;
+    summary: string;
+    graceDeadline: string | null;
+    retentionDeadline: string | null;
+  };
+  instructions: {
+    deletion: string;
+    export: string;
+    manageAccount: string;
+    support: string;
+  };
+  links: {
+    deletion: string | null;
+    export: string | null;
+    manageAccount: string;
+    supportEmail: string;
+  };
+  supportEmail: string;
 }
 
 export interface FluentToolDiscoveryGroup {
   id: 'core' | 'health_fitness' | 'meals_planning' | 'meals_shopping' | 'meals_cooking' | 'style';
   label: string;
   domainId: 'health' | 'meals' | 'style' | null;
+  guidanceResourceUris: string[];
   toolPrefixes: string[];
   starterReadTools: string[];
   starterWriteTools: string[];
@@ -82,9 +142,40 @@ export interface FluentToolDiscoveryGroup {
 
 export interface FluentToolDirectory {
   canonicalRegistry: 'mcp_tools_list';
+  guidanceResources: string[];
   note: string;
   toolNames: string[];
   groups: FluentToolDiscoveryGroup[];
+}
+
+export type FluentHostFamily = 'chatgpt_app' | 'claude' | 'openclaw' | 'codex' | 'generic_mcp' | 'unknown';
+export type FluentIntentKind = 'read' | 'write' | 'render' | 'plan' | 'onboard' | 'unknown';
+export type FluentNextActionDomain = 'core' | 'health' | 'meals' | 'style' | 'unknown';
+
+export interface FluentNextActionsInput {
+  domainHint?: FluentNextActionDomain | null;
+  hostFamily?: FluentHostFamily | null;
+  intent?: FluentIntentKind | null;
+  userGoal?: string | null;
+}
+
+export interface FluentNextActions {
+  domain: FluentNextActionDomain;
+  domainReady: boolean | null;
+  guidanceResources: string[];
+  hostProfile: FluentHostProfile;
+  hostFamily: FluentHostFamily;
+  primaryAction: FluentRecommendedAction;
+  recommendedActions: FluentRecommendedAction[];
+  routingNotes: string[];
+  warnings: string[];
+  writePolicy: string;
+}
+
+export interface FluentRecommendedAction {
+  tool: string;
+  reason: string;
+  kind: 'read' | 'write' | 'render' | 'onboard' | 'host_action';
 }
 
 export class FluentCoreService {
@@ -126,6 +217,9 @@ export class FluentCoreService {
         displayName: profile.displayName,
         timezone: profile.timezone,
       },
+      hostProfiles: fluentHostProfiles({
+        readyDomains: readyDomains.filter(isChatGptAppDomain),
+      }),
       toolDiscovery: buildToolDiscovery(readyDomains),
     };
   }
@@ -134,6 +228,54 @@ export class FluentCoreService {
     const domains = await this.listDomains();
     const readyDomains = domains.filter((domain) => isDomainReady(domain)).map((domain) => domain.domainId);
     return buildToolDirectory(readyDomains);
+  }
+
+  async getNextActions(input: FluentNextActionsInput = {}): Promise<FluentNextActions> {
+    const domains = await this.listDomains();
+    const readyDomains = domains.filter((domain) => isDomainReady(domain)).map((domain) => domain.domainId);
+    return buildNextActions({
+      domains,
+      input,
+      readyDomains,
+    });
+  }
+
+  async getAccountStatus(): Promise<FluentAccountStatus> {
+    const [tenant, domains] = await Promise.all([this.getTenant(), this.listDomains()]);
+    const enabledDomains = domains.filter((domain) => domain.lifecycleState === 'enabled').map((domain) => domain.domainId);
+    const accountBaseUrl = meetFluentAccountBaseUrl(this.runtime.publicBaseUrl);
+    const accountRecord =
+      this.runtime.deploymentTrack === 'cloud'
+        ? await this.getCurrentCloudAccountRecord()
+        : null;
+    const entitlement = buildAccountEntitlement(accountRecord, this.runtime.deploymentTrack);
+
+    return {
+      accessState: buildAccountAccessState(accountRecord, tenant.status, this.runtime.deploymentTrack),
+      backendMode: tenant.backendMode,
+      contractVersion: FLUENT_CONTRACT_VERSION,
+      enabledDomains,
+      entitlement,
+      instructions: {
+        deletion:
+          this.runtime.deploymentTrack === 'cloud'
+            ? 'Open the deletion link to review the deletion policy, request deletion, or confirm a pending request.'
+            : 'Use the self-hosted runtime controls for deletion, then remove the local Fluent data directory or database backups you control.',
+        export:
+          this.runtime.deploymentTrack === 'cloud'
+            ? 'Open the export link to list existing exports or request a new account export.'
+            : 'Use the local OSS snapshot export workflow from the Fluent runtime to export the data stored on this machine.',
+        manageAccount: 'Open the manage account link on meetfluent.app for account, billing, export, and deletion controls.',
+        support: `Email ${FLUENT_SUPPORT_EMAIL} for account help.`,
+      },
+      links: {
+        deletion: `${accountBaseUrl}/account/delete`,
+        export: `${accountBaseUrl}/api/account/exports`,
+        manageAccount: `${accountBaseUrl}/account`,
+        supportEmail: `mailto:${FLUENT_SUPPORT_EMAIL}`,
+      },
+      supportEmail: FLUENT_SUPPORT_EMAIL,
+    };
   }
 
   async getProfile(): Promise<FluentProfileRecord> {
@@ -332,6 +474,15 @@ export class FluentCoreService {
       slug: row.slug,
       status: row.status,
     };
+  }
+
+  private async getCurrentCloudAccountRecord(): Promise<FluentCloudOnboardingRecord | null> {
+    const authProps = getFluentAuthProps();
+    return getFluentCloudOnboardingRecord(this.db, {
+      email: authProps.email ?? null,
+      tenantId: authProps.tenantId ?? this.tenantId,
+      userId: authProps.userId ?? null,
+    });
   }
 
   private async getDomain(domainId: string): Promise<FluentDomainRecord> {
@@ -564,7 +715,73 @@ export class FluentCoreService {
       },
       provenance,
     });
+    await this.syncTenantOnboardingState(provenance);
     return after;
+  }
+
+  private async syncTenantOnboardingState(provenance: MutationProvenance): Promise<void> {
+    if (this.runtime.deploymentTrack !== 'cloud') {
+      return;
+    }
+
+    const before = await this.getTenant();
+    const domains = await this.listDomains();
+    const readyDomainCount = domains.filter((domain) => isDomainReady(domain)).length;
+    const hasOnboardingActivity = domains.some(
+      (domain) => domain.lifecycleState === 'enabled' || domain.onboardingState === 'onboarding_started',
+    );
+    const nextStatus = before.status === 'active' || readyDomainCount > 0 ? 'active' : 'onboarding';
+    const nextOnboardingState =
+      before.onboardingState === 'onboarding_completed' || readyDomainCount > 0
+        ? 'onboarding_completed'
+        : hasOnboardingActivity
+          ? 'onboarding_started'
+          : 'not_started';
+
+    if (before.status === nextStatus && before.onboardingState === nextOnboardingState) {
+      return;
+    }
+
+    await this.db
+      .prepare(
+        `UPDATE fluent_tenants
+         SET status = ?, onboarding_state = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      )
+      .bind(nextStatus, nextOnboardingState, this.tenantId)
+      .run();
+
+    const after = await this.getTenant();
+    await this.recordCoreEvent({
+      after,
+      before,
+      entityId: after.id,
+      entityType: 'fluent_tenant',
+      eventType: 'tenant.onboarding_updated',
+      patch: {
+        onboarding_state: after.onboardingState,
+        status: after.status,
+      },
+      provenance,
+    });
+
+    if (before.status !== 'active' && after.status === 'active') {
+      const waitlistEntryId = asRecord(after.metadata)?.cloudAccess;
+      await markFluentCloudAccountActive(this.db, {
+        actor: {
+          actorEmail: provenance.actorEmail,
+          actorId: provenance.sessionId,
+          actorType: provenance.sourceType === 'operator' ? 'operator' : provenance.sourceType === 'user' ? 'user' : 'system',
+        },
+        tenantId: after.id,
+        waitlistEntryId:
+          waitlistEntryId && typeof waitlistEntryId === 'object' && !Array.isArray(waitlistEntryId)
+            ? typeof (waitlistEntryId as Record<string, unknown>).waitlistEntryId === 'string'
+              ? ((waitlistEntryId as Record<string, unknown>).waitlistEntryId as string)
+              : null
+            : null,
+      });
+    }
   }
 
   private async recordCoreEvent(input: {
@@ -708,14 +925,16 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
 
   return {
     canonicalRegistry: 'mcp_tools_list',
+    guidanceResources: [...FLUENT_GUIDANCE_RESOURCE_URIS],
     note: 'Guidance only. MCP tools/list and contract.tools remain the authoritative full tool registry.',
     groups: [
       {
         id: 'core',
         label: 'Core Routing',
         domainId: null,
+        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities'],
         toolPrefixes: ['fluent_'],
-        starterReadTools: ['fluent_get_capabilities', 'fluent_list_domains'],
+        starterReadTools: ['fluent_get_home', 'fluent_get_capabilities', 'fluent_get_account_status', 'fluent_list_domains'],
         starterWriteTools: ['fluent_enable_domain', 'fluent_begin_domain_onboarding'],
         whenToUse: 'First call in a Fluent session or when domain readiness is unclear.',
         domainReady: true,
@@ -724,6 +943,7 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         id: 'health_fitness',
         label: 'Health Fitness',
         domainId: 'health',
+        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/health-blocks'],
         toolPrefixes: ['health_'],
         starterReadTools: ['health_get_context', 'health_get_active_block', 'health_get_today_context'],
         starterWriteTools: ['health_upsert_block', 'health_record_block_review', 'health_log_workout'],
@@ -734,6 +954,7 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         id: 'meals_planning',
         label: 'Meals Planning',
         domainId: 'meals',
+        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/meals-planning'],
         toolPrefixes: ['meals_'],
         starterReadTools: ['meals_get_preferences', 'meals_get_plan', 'meals_list_plan_history'],
         starterWriteTools: ['meals_generate_plan', 'meals_accept_plan_candidate', 'meals_generate_grocery_plan'],
@@ -744,10 +965,11 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         id: 'meals_shopping',
         label: 'Meals Shopping',
         domainId: 'meals',
+        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/meals-shopping'],
         toolPrefixes: ['meals_'],
         starterReadTools: [
+          'meals_render_pantry_dashboard',
           'meals_render_grocery_list_v2',
-          'meals_render_grocery_list',
           'meals_get_grocery_plan',
           'meals_prepare_order',
           'meals_get_inventory_summary',
@@ -755,13 +977,14 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         ],
         starterWriteTools: ['meals_upsert_grocery_plan_action', 'meals_update_inventory_batch', 'meals_upsert_grocery_intent'],
         whenToUse:
-          'Shopping, pantry checks, substitutions, receipt reconciliation, or the primary grocery-list view for the week. In hosts that support Fluent MCP widgets, start from the render tools for the richer Fluent surface; in Claude-style hosts, start from canonical grocery data first.',
+          'Shopping, pantry checks, substitutions, receipt reconciliation, or the primary grocery-list view for the week. In ChatGPT / MCP Apps-style hosts, start from the Fluent render tools for the richer Fluent surface; in Claude-style hosts, start from canonical grocery data first; in Codex, OpenClaw, and generic plain MCP clients, default to canonical grocery data plus text.',
         domainReady: isReady('meals'),
       },
       {
         id: 'meals_cooking',
         label: 'Meals Cooking',
         domainId: 'meals',
+        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/meals-planning'],
         toolPrefixes: ['meals_'],
         starterReadTools: ['meals_get_today_context', 'meals_get_day_plan'],
         starterWriteTools: ['meals_mark_meal_cooked', 'meals_log_feedback'],
@@ -772,9 +995,17 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         id: 'style',
         label: 'Style',
         domainId: 'style',
+        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/style-purchase-analysis'],
         toolPrefixes: ['style_'],
         starterReadTools: ['style_get_context', 'style_list_descriptor_backlog', 'style_analyze_wardrobe', 'style_get_profile'],
-        starterWriteTools: ['style_update_profile', 'style_upsert_item_profile', 'style_upsert_item', 'style_upsert_item_photos'],
+        starterWriteTools: [
+          'style_update_profile',
+          'style_upsert_item_profile',
+          'style_upsert_item',
+          'style_archive_item',
+          'style_upsert_item_photos',
+          'style_set_item_product_image',
+        ],
         whenToUse: 'Closet reads, wardrobe analysis, purchase analysis, or style calibration.',
         domainReady: isReady('style'),
       },
@@ -786,10 +1017,453 @@ function buildToolDirectory(readyDomains: string[]): FluentToolDirectory {
   const discovery = buildToolDiscovery(readyDomains);
   return {
     canonicalRegistry: discovery.canonicalRegistry,
+    guidanceResources: discovery.guidanceResources,
     note: 'Fallback discovery only. Use this when deferred core tools or keyword search miss the Fluent surface; MCP tools/list remains authoritative.',
     toolNames: [...FLUENT_TOOL_NAMES],
     groups: discovery.groups,
   };
+}
+
+function buildNextActions(input: {
+  domains: FluentDomainRecord[];
+  input: FluentNextActionsInput;
+  readyDomains: string[];
+}): FluentNextActions {
+  const hostFamily = normalizeHostFamily(input.input.hostFamily);
+  const hostProfile = fluentHostProfile(hostFamily, {
+    readyDomains: input.readyDomains.filter(isChatGptAppDomain),
+  });
+  const domain = normalizeNextActionDomain(input.input.domainHint) ?? inferDomainFromGoal(input.input.userGoal);
+  const intent = normalizeIntentKind(input.input.intent);
+  const goal = normalizeNullableText(input.input.userGoal);
+  const domainRecord = domain === 'unknown' || domain === 'core' ? null : input.domains.find((entry) => entry.domainId === domain);
+  const domainReady = domain === 'core' ? true : domain === 'unknown' ? null : Boolean(domainRecord && isDomainReady(domainRecord));
+  const baseWarnings = buildHostWarnings(hostFamily);
+  const writePolicy = 'Use write tools only from explicit user intent, including direct user requests, approved plans, or user-initiated widget actions.';
+
+  if (domainRecord && !domainReady) {
+    const actions: FluentRecommendedAction[] = [];
+    if (domainRecord.lifecycleState === 'available') {
+      actions.push({
+        kind: 'onboard',
+        reason: `${domain} is available but not enabled. Use only when the user wants to start ${domain}.`,
+        tool: 'fluent_enable_domain',
+      });
+    }
+    if (domainRecord.lifecycleState === 'enabled') {
+      actions.push({
+        kind: 'onboard',
+        reason: `${domain} is enabled but onboarding is not complete. Continue the domain-specific first-use flow.`,
+        tool: 'fluent_begin_domain_onboarding',
+      });
+    }
+    actions.push({
+      kind: 'read',
+      reason: 'Read domain lifecycle and onboarding state before deciding whether to continue setup.',
+      tool: 'fluent_list_domains',
+    });
+
+    return {
+      domain,
+      domainReady,
+      guidanceResources: guidanceForDomain(domain),
+      hostProfile,
+      hostFamily,
+      primaryAction: actions[0]!,
+      recommendedActions: actions,
+      routingNotes: [
+        `readyDomains currently contains: ${input.readyDomains.length ? input.readyDomains.join(', ') : 'none'}.`,
+        'Do not infer readiness from previous chat state; use Fluent capability state.',
+      ],
+      warnings: [
+        ...baseWarnings,
+        ...(domainRecord.lifecycleState === 'disabled'
+          ? [`${domain} is disabled. Do not re-enable it unless the user explicitly asks.`]
+          : []),
+      ],
+      writePolicy,
+    };
+  }
+
+  const actions = readyDomainActions({
+    domain,
+    goal,
+    hostFamily,
+    intent,
+  });
+
+  return {
+    domain,
+    domainReady,
+    guidanceResources: guidanceForDomain(domain),
+    hostProfile,
+    hostFamily,
+    primaryAction: actions[0]!,
+    recommendedActions: actions,
+    routingNotes: [
+      'Prefer summary reads before full reads.',
+      'Use fluent_get_capabilities when readiness, host routing, or available domains are unclear.',
+      ...(hostFamily === 'chatgpt_app'
+        ? ['ChatGPT has no packaged Fluent skill, so prefer this next-action output and the guidance resources as the in-band operating manual.']
+        : ['Packaged skills may add host-specific orchestration, but MCP capability and resource state remain canonical.']),
+    ],
+    warnings: baseWarnings,
+    writePolicy,
+  };
+}
+
+function readyDomainActions(input: {
+  domain: FluentNextActionDomain;
+  goal: string | null;
+  hostFamily: FluentHostFamily;
+  intent: FluentIntentKind;
+}): FluentRecommendedAction[] {
+  const goal = input.goal ?? '';
+  const chatgpt = input.hostFamily === 'chatgpt_app';
+
+  if (input.domain === 'meals') {
+    if (/grocery|shopping|shop|buy|pantry|cart|order|receipt|ingredient/i.test(goal)) {
+      return [
+        chatgpt
+          ? {
+              kind: 'render',
+              reason: 'For ChatGPT/App SDK grocery-list-first prompts, open the rich grocery-list surface when available.',
+              tool: 'meals_render_grocery_list_v2',
+            }
+          : {
+              kind: 'read',
+              reason: 'For non-ChatGPT hosts, use canonical grocery data and answer in text.',
+              tool: 'meals_get_grocery_plan',
+            },
+        {
+          kind: 'read',
+          reason: 'Use before any retailer execution or when the user asks what still needs to be bought right now.',
+          tool: 'meals_prepare_order',
+        },
+        {
+          kind: 'read',
+          reason: 'Check current pantry/inventory state before resolving uncertain grocery lines.',
+          tool: 'meals_get_inventory_summary',
+        },
+      ];
+    }
+    if (/recipe|cook|make|ingredients|steps|card/i.test(goal)) {
+      return [
+        {
+          kind: 'read',
+          reason: 'Read the saved Fluent recipe before answering from general cooking knowledge.',
+          tool: 'meals_get_recipe',
+        },
+        chatgpt
+          ? {
+              kind: 'render',
+              reason: 'In ChatGPT/App SDK hosts, render the recipe card when the user is asking for the recipe itself.',
+              tool: 'meals_render_recipe_card',
+            }
+          : {
+              kind: 'read',
+              reason: 'Use text from the canonical recipe read in non-widget hosts.',
+              tool: 'meals_get_recipe',
+            },
+      ];
+    }
+    return [
+      {
+        kind: 'read',
+        reason: 'Start weekly planning from preferences, current plan, and recent plan history.',
+        tool: 'meals_get_preferences',
+      },
+      {
+        kind: 'read',
+        reason: 'Read the current or target week plan before generating or revising.',
+        tool: 'meals_get_plan',
+      },
+      {
+        kind: input.intent === 'plan' || /plan|week|schedule|dinner/i.test(goal) ? 'write' : 'read',
+        reason: 'Generate a candidate only when the user is clearly planning or revising a week.',
+        tool: 'meals_generate_plan',
+      },
+    ];
+  }
+
+  if (input.domain === 'style') {
+    if (/buy|purchase|link|product|return|keep|closet|wardrobe|style|shoe|shirt|pants|jacket|sweater/i.test(goal)) {
+      return [
+        {
+          kind: 'read',
+          reason: 'First hop for purchase questions and product URLs; returns evidence requirements before any widget render.',
+          tool: 'style_prepare_purchase_analysis',
+        },
+        {
+          kind: 'read',
+          reason: 'For product URLs without usable candidate images yet, extract direct public product-page image references before requesting the vision packet.',
+          tool: 'style_extract_purchase_page_evidence',
+        },
+        {
+          kind: 'read',
+          reason: 'Retrieve model-visible candidate and closet-comparator images for host visual inspection after purchase preparation.',
+          tool: 'style_get_purchase_vision_packet',
+        },
+        {
+          kind: 'write',
+          reason: 'Submit concrete host visual observations from inspected images and receive the render-ready evidence receipt.',
+          tool: 'style_submit_purchase_visual_observations',
+        },
+        chatgpt
+          ? {
+              kind: 'render',
+              reason: 'Use as the final ChatGPT/App SDK widget presentation step only after visual observations are accepted.',
+              tool: 'style_show_purchase_analysis_widget',
+            }
+          : {
+              kind: 'read',
+              reason: 'Use structured non-widget presentation data after evidence is ready and answer in text for non-widget hosts.',
+              tool: 'style_render_purchase_analysis',
+            },
+      ];
+    }
+    return [
+      {
+        kind: 'read',
+        reason: 'Start broad Style asks from closet-derived context.',
+        tool: 'style_get_context',
+      },
+      {
+        kind: 'read',
+        reason: 'Use wardrobe-level derived strengths, gaps, replacements, and buy-next guidance.',
+        tool: 'style_analyze_wardrobe',
+      },
+    ];
+  }
+
+  if (input.domain === 'health') {
+    if (/today|now|workout/i.test(goal)) {
+      return [
+        {
+          kind: 'read',
+          reason: 'Resolve today from the active block rather than regenerating a week.',
+          tool: 'health_get_today_context',
+        },
+        {
+          kind: 'read',
+          reason: 'Use the active block for continuity when today needs context.',
+          tool: 'health_get_active_block',
+        },
+        {
+          kind: 'write',
+          reason: 'Log completion only when the user explicitly says they completed, skipped, or partially completed a workout.',
+          tool: 'health_log_workout',
+        },
+      ];
+    }
+    return [
+      {
+        kind: 'read',
+        reason: 'Start Health from current goals, block state, and recent activity.',
+        tool: 'health_get_context',
+      },
+      {
+        kind: 'read',
+        reason: 'Project the current week from the active block.',
+        tool: 'health_get_block_projection',
+      },
+      {
+        kind: input.intent === 'plan' ? 'write' : 'read',
+        reason: 'Create or revise a block only when the user clearly wants training planning.',
+        tool: 'health_upsert_block',
+      },
+    ];
+  }
+
+  return [
+    {
+      kind: 'read',
+      reason: 'Start with Fluent Home when the user asks generally what Fluent knows or what to do next.',
+      tool: 'fluent_get_home',
+    },
+    {
+      kind: 'read',
+      reason: 'Fetch domain readiness, contract version, and discovery groups.',
+      tool: 'fluent_get_capabilities',
+    },
+  ];
+}
+
+function isChatGptAppDomain(value: string): value is 'health' | 'meals' | 'style' {
+  return value === 'health' || value === 'meals' || value === 'style';
+}
+
+function guidanceForDomain(domain: FluentNextActionDomain): string[] {
+  switch (domain) {
+    case 'health':
+      return ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/health-blocks'];
+    case 'meals':
+      return [
+        'fluent://guidance/routing',
+        'fluent://guidance/host-capabilities',
+        'fluent://guidance/meals-planning',
+        'fluent://guidance/meals-shopping',
+      ];
+    case 'style':
+      return ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/style-purchase-analysis'];
+    case 'core':
+    case 'unknown':
+      return ['fluent://guidance/routing', 'fluent://guidance/host-capabilities'];
+  }
+}
+
+function inferDomainFromGoal(goal: string | null | undefined): FluentNextActionDomain {
+  const text = normalizeNullableText(goal)?.toLowerCase() ?? '';
+  if (!text) return 'unknown';
+  if (/\b(meal|dinner|lunch|breakfast|recipe|grocery|pantry|shopping|ingredient|cook|order|cart)\b/.test(text)) {
+    return 'meals';
+  }
+  if (/\b(style|closet|wardrobe|outfit|buy|purchase|shirt|pants|shoe|jacket|sweater|fit)\b/.test(text)) {
+    return 'style';
+  }
+  if (/\b(health|fitness|workout|training|block|goal|weight|lift|run|recovery)\b/.test(text)) {
+    return 'health';
+  }
+  return 'unknown';
+}
+
+function normalizeNextActionDomain(value: FluentNextActionDomain | null | undefined): FluentNextActionDomain | null {
+  return value === 'core' || value === 'health' || value === 'meals' || value === 'style' || value === 'unknown'
+    ? value
+    : null;
+}
+
+function normalizeHostFamily(value: FluentHostFamily | null | undefined): FluentHostFamily {
+  return value === 'chatgpt_app' || value === 'claude' || value === 'openclaw' || value === 'codex' || value === 'generic_mcp'
+    ? value
+    : 'unknown';
+}
+
+function normalizeIntentKind(value: FluentIntentKind | null | undefined): FluentIntentKind {
+  return value === 'read' || value === 'write' || value === 'render' || value === 'plan' || value === 'onboard'
+    ? value
+    : 'unknown';
+}
+
+function buildHostWarnings(hostFamily: FluentHostFamily): string[] {
+  if (hostFamily === 'chatgpt_app') {
+    return [
+      'ChatGPT does not receive packaged Fluent skills, so prefer fluent_get_next_actions, toolDiscovery, and guidance resources when routing is unclear.',
+    ];
+  }
+  if (hostFamily === 'claude') {
+    return ['Claude may have packaged skills or native visuals; prefer canonical Fluent data plus Claude-native rendering over ChatGPT/App SDK render tools.'];
+  }
+  if (hostFamily === 'openclaw' || hostFamily === 'codex' || hostFamily === 'generic_mcp') {
+    return ['Default to canonical data tools and text; do not assume ChatGPT/App SDK widget support.'];
+  }
+  return ['Host capabilities are unknown; prefer canonical data tools and text unless the host proves widget support.'];
+}
+
+function buildAccountAccessState(
+  record: FluentCloudOnboardingRecord | null,
+  tenantStatus: string,
+  deploymentTrack: FluentDeploymentTrack,
+): FluentAccountAccessState {
+  if (deploymentTrack !== 'cloud') {
+    return 'active';
+  }
+  if (!record) {
+    return tenantStatus === 'active' ? 'active' : 'unavailable';
+  }
+  if (isPendingAccountState(record.currentState)) {
+    return 'pending';
+  }
+  const lifecycle = evaluateSubscriptionLifecycle(record);
+  switch (lifecycle.access) {
+    case 'full_access':
+      return 'active';
+    case 'limited_access':
+      return 'limited';
+    case 'blocked':
+      return 'pending';
+    case 'deleted':
+    case 'retention_expired':
+    case 'suspended':
+      return 'unavailable';
+  }
+}
+
+function isPendingAccountState(currentState: FluentCloudOnboardingRecord['currentState']): boolean {
+  return [
+    'account_created',
+    'checkout_required',
+    'invite_accepted',
+    'invited',
+    'waitlisted',
+  ].includes(currentState);
+}
+
+function buildAccountEntitlement(
+  record: FluentCloudOnboardingRecord | null,
+  deploymentTrack: FluentDeploymentTrack,
+): FluentAccountStatus['entitlement'] {
+  if (deploymentTrack !== 'cloud') {
+    return {
+      state: 'unavailable',
+      summary: 'Hosted billing entitlements do not apply to the local OSS runtime.',
+      graceDeadline: null,
+      retentionDeadline: null,
+    };
+  }
+  if (!record) {
+    return {
+      state: 'unavailable',
+      summary: 'Fluent could not find a hosted account entitlement record for this user.',
+      graceDeadline: null,
+      retentionDeadline: null,
+    };
+  }
+
+  const lifecycle = evaluateSubscriptionLifecycle(record);
+  const state = publicEntitlementState(record.currentState);
+  return {
+    state,
+    summary: lifecycle.message,
+    graceDeadline: calculateSubscriptionGraceDeadline(record),
+    retentionDeadline: calculateLapsedRetentionDeadline(record),
+  };
+}
+
+function publicEntitlementState(currentState: FluentCloudOnboardingRecord['currentState']): FluentAccountEntitlementState {
+  switch (currentState) {
+    case 'active':
+      return 'active';
+    case 'trialing':
+      return 'trialing';
+    case 'past_due_grace':
+      return 'past_due_grace';
+    case 'limited_access':
+      return 'limited';
+    case 'canceled_retention':
+      return 'canceled_retention';
+    case 'checkout_required':
+    case 'account_created':
+    case 'invite_accepted':
+    case 'invited':
+    case 'waitlisted':
+      return 'pending';
+    default:
+      return 'unavailable';
+  }
+}
+
+function meetFluentAccountBaseUrl(publicBaseUrl: string | undefined): string {
+  const fallback = 'https://meetfluent.app';
+  if (!publicBaseUrl) {
+    return fallback;
+  }
+  try {
+    const url = new URL(publicBaseUrl);
+    return url.hostname === 'meetfluent.app' ? url.origin : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function safeParse(value: string | null): unknown {

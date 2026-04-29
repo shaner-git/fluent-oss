@@ -1,6 +1,6 @@
 # Shared Docs
 
-Use this bucket for the contract and architecture that apply to both Fluent early access and Fluent open-source runtime.
+Use this bucket for the contract and architecture that apply to Fluent early access and the open-source runtime.
 
 This bucket is part of the public OSS export. Cloud-operator docs live under `docs/cloud`, archived evidence lives under `docs/archive` and `docs/reports`, and private planning lives under `docs/internal`; those buckets are intentionally outside the public OSS reader path.
 

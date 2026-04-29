@@ -290,6 +290,15 @@ export interface StylePurchaseCandidate {
   visualWeight: string | null;
 }
 
+export type StylePurchaseCandidateVisualGrounding = 'none' | 'image_reference_only' | 'host_visual_inspection';
+
+export interface StylePurchaseVisualEvidence {
+  candidateInspected: boolean;
+  candidateObservations: string[];
+  comparatorItemIdsInspected: string[];
+  source: string | null;
+}
+
 export interface StylePurchaseAnalysisItemMatch {
   itemId: string;
   reasons: string[];
@@ -308,10 +317,17 @@ export interface StylePurchasePairwiseComparison {
   summary: string;
 }
 
+export interface StylePurchaseRejectedComparison {
+  itemId: string;
+  rejectedBecause: string;
+  reasons: string[];
+}
+
 export interface StylePurchaseComparatorReasoning {
   framing: StylePurchaseReasoningFraming;
   mode: 'baseline' | 'shoe_pairwise';
   notes: string[];
+  rejectedComparisons: StylePurchaseRejectedComparison[];
   summary: string;
   topComparisons: StylePurchasePairwiseComparison[];
 }
@@ -319,6 +335,7 @@ export interface StylePurchaseComparatorReasoning {
 export interface StylePurchaseAnalysisBuckets {
   exactComparatorItems: StylePurchaseAnalysisItemMatch[];
   nearbyFormalityItems: StylePurchaseAnalysisItemMatch[];
+  nonComparatorItems: StylePurchaseRejectedComparison[];
   pairingCandidates: StylePurchaseAnalysisItemMatch[];
   sameCategoryItems: StylePurchaseAnalysisItemMatch[];
   sameColorFamilyItems: StylePurchaseAnalysisItemMatch[];
@@ -381,10 +398,14 @@ export interface StylePurchaseAnalysis {
     sportUtilityException: boolean;
   };
   evidenceQuality: {
+    candidateVisualGrounding: StylePurchaseCandidateVisualGrounding;
     candidateImageCount: number;
+    candidateVisualObservations: string[];
+    comparatorItemIdsInspected: string[];
     notes: string[];
     primaryPhotoCoverage: number;
     typedProfileCoverage: number;
+    visualEvidenceSource: string | null;
   };
 }
 
@@ -482,6 +503,19 @@ export interface StyleWardrobeAnalysis {
   weakSpots: StyleWardrobeFindingRecord[];
 }
 
+export interface StyleArchiveItemResult {
+  activeExactMatchesAfter: StyleItemSummaryRecord[];
+  activeExactMatchesBefore: StyleItemSummaryRecord[];
+  archivedItemIds: string[];
+  archivedItems: StyleItemSummaryRecord[];
+  matchedItems: StyleItemSummaryRecord[];
+  notes: string[];
+  requestedItemId: string | null;
+  requestedName: string | null;
+  status: 'already_archived' | 'archived' | 'needs_disambiguation' | 'not_found';
+  verifiedNoActiveExactMatch: boolean;
+}
+
 export type StyleVisualBundleDeliveryMode = 'authenticated_only' | 'authenticated_with_signed_fallback';
 
 export type StyleVisualBundleAssetRole =
@@ -492,10 +526,57 @@ export type StyleVisualBundleAssetRole =
   | 'same_category'
   | 'nearby_formality';
 
+export type StyleVisualBundleComparisonBucketRole =
+  | 'top_comparison'
+  | 'exact_comparator'
+  | 'typed_role'
+  | 'same_category'
+  | 'same_color_family'
+  | 'nearby_formality'
+  | 'pairing_candidate'
+  | 'rejected_non_comparator';
+
+export interface StyleVisualBundleItemContext {
+  brand: string | null;
+  category: string | null;
+  colorFamily: string | null;
+  colorName: string | null;
+  comparatorKey: StyleComparatorKey;
+  fabricHand: string | null;
+  formality: number | null;
+  itemType: string | null;
+  name: string | null;
+  pairingNotes: string | null;
+  polishLevel: string | null;
+  qualityTier: string | null;
+  silhouette: string | null;
+  status: StyleItemStatus;
+  styleRole: string | null;
+  subcategory: string | null;
+  tags: string[];
+  texture: string | null;
+  useCases: string[];
+  visualWeight: string | null;
+}
+
+export interface StyleVisualBundleComparisonContext {
+  bucketRoles: StyleVisualBundleComparisonBucketRole[];
+  confidence: StylePurchaseComparisonConfidence | null;
+  descriptorDeltas: string[];
+  notes: string[];
+  overlapScore: number | null;
+  reasons: string[];
+  rejectedBecause: string | null;
+  relation: StylePurchaseComparisonRelation | null;
+  summary: string | null;
+}
+
 export interface StyleVisualBundleAssetRecord {
   authenticatedOriginalUrl: string | null;
+  comparisonContext: StyleVisualBundleComparisonContext | null;
   fallbackExpiresAt: string | null;
   fallbackSignedOriginalUrl: string | null;
+  itemContext: StyleVisualBundleItemContext | null;
   itemId: string | null;
   label: string;
   photoId: string | null;
@@ -509,4 +590,10 @@ export interface StyleVisualBundleRecord {
   deliveryMode: StyleVisualBundleDeliveryMode;
   evidenceWarnings: string[];
   requestedItemIds: string[];
+  visualInspection: {
+    assetCount: number;
+    fetchableAssetCount: number;
+    note: string;
+    state: 'no_images_available' | 'missing_candidate_image' | 'image_references_returned';
+  };
 }

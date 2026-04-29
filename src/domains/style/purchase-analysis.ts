@@ -1,6 +1,12 @@
-import type { StylePurchaseAnalysis, StylePurchaseCandidate } from './types';
+import type { StylePurchaseAnalysis, StylePurchaseCandidate, StylePurchaseComparisonRelation } from './types';
 
-export const STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v2.html';
+export const STYLE_PURCHASE_ANALYSIS_LEGACY_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v2.html';
+export const STYLE_PURCHASE_ANALYSIS_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v3.html';
+export const STYLE_PURCHASE_ANALYSIS_CACHED_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v4.html';
+export const STYLE_PURCHASE_ANALYSIS_IMAGE_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v5.html';
+export const STYLE_PURCHASE_ANALYSIS_HUMAN_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v6.html';
+export const STYLE_PURCHASE_ANALYSIS_COMBINED_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v7.html';
+export const STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v8.html';
 
 export type PurchaseVerdict = 'recommend' | 'skip' | 'consider' | 'wait';
 export type PurchaseConfidence = 'low' | 'medium' | 'high';
@@ -64,6 +70,14 @@ export interface PurchaseAnalysisClosetContextViewModel {
   similarItemsOwned: number | null;
 }
 
+export interface PurchaseAnalysisVisualGroundingViewModel {
+  candidateImageCount: number;
+  candidateVisualGrounding: 'none' | 'image_reference_only' | 'host_visual_inspection';
+  label: string;
+  note: string;
+  tone: 'neutral' | 'warn';
+}
+
 export interface PurchaseAnalysisOverlapViewModel {
   name: string;
   note: string | null;
@@ -74,6 +88,53 @@ export interface PurchaseAnalysisGapViewModel {
   lane: string;
   need: PurchaseGapNeed;
   note: string | null;
+}
+
+export type PurchaseAnalysisShoppingVerdict = 'buy' | 'skip' | 'wait';
+export type PurchaseAnalysisShoppingComparatorRole = 'direct_comparator' | 'adjacent_reference';
+
+export interface PurchaseAnalysisShoppingComparatorViewModel {
+  itemId: string;
+  name: string;
+  brand: string | null;
+  category: string | null;
+  subcategory: string | null;
+  colorFamily: string | null;
+  descriptor: string | null;
+  imageUrl: string | null;
+  imageAlt: string | null;
+  hasImage: boolean;
+  comparatorRole: PurchaseAnalysisShoppingComparatorRole;
+  relation: StylePurchaseComparisonRelation;
+  relationLabel: string;
+  roleLabel: string;
+  overlapScore: number;
+  confidence: PurchaseConfidence;
+  summary: string;
+  reasons: string[];
+}
+
+export interface PurchaseAnalysisShoppingRejectedComparatorViewModel {
+  itemId: string;
+  name: string;
+  rejectedBecause: string;
+  reasons: string[];
+}
+
+export interface PurchaseAnalysisShoppingEvidenceViewModel {
+  used: string[];
+  missing: string[];
+}
+
+export interface PurchaseAnalysisShoppingAnswerViewModel {
+  verdict: PurchaseAnalysisShoppingVerdict;
+  verdictReason: string;
+  closestComparators: PurchaseAnalysisShoppingComparatorViewModel[];
+  directComparators: PurchaseAnalysisShoppingComparatorViewModel[];
+  adjacentReferences: PurchaseAnalysisShoppingComparatorViewModel[];
+  rejectedComparators: PurchaseAnalysisShoppingRejectedComparatorViewModel[];
+  evidence: PurchaseAnalysisShoppingEvidenceViewModel;
+  whatWouldChangeVerdict: string[];
 }
 
 export interface PurchaseAnalysisViewModel {
@@ -92,6 +153,8 @@ export interface PurchaseAnalysisViewModel {
   reasons: string[];
   alternatives: PurchaseAnalysisAlternativeViewModel[];
   context: PurchaseAnalysisClosetContextViewModel;
+  visualGrounding: PurchaseAnalysisVisualGroundingViewModel;
+  shoppingAnswer: PurchaseAnalysisShoppingAnswerViewModel;
   generatedAt: string | null;
   actions: PurchaseAnalysisActionViewModel[];
 }
@@ -100,16 +163,23 @@ export interface PurchaseAnalysisWidgetViewModel extends Omit<PurchaseAnalysisVi
   actions: PurchaseAnalysisWidgetActionViewModel[];
 }
 
+export interface PurchaseAnalysisImageHints {
+  candidateImageUrl?: string | null;
+  comparatorImageUrlsByItemId?: Record<string, string | null | undefined> | null;
+}
+
 export function buildPurchaseAnalysisViewModel(
   analysis: StylePurchaseAnalysis,
   options?: {
     actionToolName?: string;
+    imageHints?: PurchaseAnalysisImageHints;
   },
 ): PurchaseAnalysisViewModel {
   const verdict = deriveVerdict(analysis);
   const confidencePercent = deriveConfidencePercent(analysis);
   const confidence = confidencePercent >= 76 ? 'high' : confidencePercent >= 56 ? 'medium' : 'low';
-  const item = buildItemViewModel(analysis.candidate);
+  const item = buildItemViewModel(analysis.candidate, options?.imageHints);
+  const visualGrounding = buildVisualGroundingViewModel(analysis);
   const overlap = buildOverlapViewModel(analysis);
   const reasons = buildReasons(analysis, verdict);
   const findings = buildFindings(analysis);
@@ -150,9 +220,11 @@ export function buildPurchaseAnalysisViewModel(
     item,
     overlap,
     reasons,
+    shoppingAnswer: buildShoppingAnswerViewModel(analysis, verdict, options?.imageHints),
     verdict,
     verdictEmphasis: null,
-    verdictHeadline: buildVerdictHeadline(analysis, verdict),
+    verdictHeadline: addVisualGroundingToHeadline(analysis, buildVerdictHeadline(analysis, verdict)),
+    visualGrounding,
   };
 }
 
@@ -167,8 +239,10 @@ export function buildPurchaseAnalysisStructuredContent(viewModel: PurchaseAnalys
     gapCount: widget.gaps.length,
     overlapCount: widget.overlap.length,
     purchaseAnalysis: widget,
+    shoppingAnswer: widget.shoppingAnswer,
     title: widget.item.name,
     verdict: widget.verdict,
+    visualGrounding: widget.visualGrounding,
   };
 }
 
@@ -178,9 +252,11 @@ export function buildPurchaseAnalysisMetadata(viewModel: PurchaseAnalysisViewMod
     analysisId: viewModel.id,
     experience: 'purchase_analysis_widget',
     purchaseAnalysis: buildPurchaseAnalysisWidgetViewModel(viewModel),
+    shoppingAnswer: viewModel.shoppingAnswer,
     title: viewModel.item.name,
     verdict: viewModel.verdict,
-    version: 'v2',
+    visualGrounding: viewModel.visualGrounding,
+    version: 'v8',
   };
 }
 
@@ -322,6 +398,139 @@ export function getPurchaseAnalysisWidgetHtml(): string {
   .pa-gap-lane { font-size: 14px; color: var(--pa-ink); font-weight: 500; }
   .pa-gap-note { font-size: 12px; color: var(--pa-muted); margin-left: 8px; }
   .pa-summary { font-size: 14px; line-height: 1.5; color: var(--pa-ink-soft); max-width: 62ch; margin: 0 0 14px; }
+  .pa-stylist-read {
+    border: 1px solid var(--pa-border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin: 0 0 16px;
+    background: var(--pa-surface);
+  }
+  .pa-stylist-kicker {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--pa-style);
+    margin-bottom: 5px;
+  }
+  .pa-stylist-copy {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--pa-ink-soft);
+  }
+  .pa-compare-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    gap: 10px;
+  }
+  .pa-compare-card {
+    min-width: 0;
+    border: 1px solid var(--pa-border);
+    border-radius: 12px;
+    background: var(--pa-surface-alt);
+    padding: 10px;
+  }
+  .pa-compare-card[data-role="candidate"] { background: var(--pa-surface); }
+  .pa-compare-thumb {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    border-radius: 9px;
+    border: 1px solid var(--pa-border);
+    background: linear-gradient(135deg, #f5f2ef, #e7e3df);
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    margin-bottom: 9px;
+  }
+  .pa-compare-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .pa-compare-glyph { color: var(--pa-muted); font-size: 12px; font-weight: 600; text-align: center; padding: 8px; }
+  .pa-compare-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--pa-muted);
+    margin-bottom: 4px;
+  }
+  .pa-compare-name {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--pa-ink);
+  }
+  .pa-compare-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 8px;
+  }
+  .pa-chip {
+    border: 1px solid var(--pa-border);
+    border-radius: 999px;
+    background: var(--pa-surface);
+    color: var(--pa-muted);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 5px 7px;
+  }
+  .pa-compare-note {
+    color: var(--pa-ink-soft);
+    font-size: 12px;
+    line-height: 1.4;
+    margin-top: 8px;
+  }
+  .pa-compare-score {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--pa-border);
+  }
+  .pa-compare-score-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .pa-compare-score-label {
+    color: var(--pa-muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .pa-compare-score-value {
+    color: var(--pa-ink);
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .pa-compare-score-bar {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--pa-border);
+    overflow: hidden;
+  }
+  .pa-compare-score-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: var(--pa-style);
+  }
+  .pa-grounding {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px;
+    padding: 11px 13px; border-radius: 10px; margin: -4px 0 16px;
+    border: 1px solid var(--pa-border); background: var(--pa-surface-alt);
+  }
+  .pa-grounding[data-tone="warn"] { background: var(--pa-warn-bg); color: var(--pa-warn-ink); border-color: rgba(217, 119, 6, 0.22); }
+  .pa-grounding-icon {
+    width: 24px; height: 24px; border-radius: 8px; display: grid; place-items: center;
+    font-size: 13px; font-weight: 700; background: rgba(0, 0, 0, 0.08); color: currentColor;
+  }
+  .pa-grounding-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px;
+  }
+  .pa-grounding-note { font-size: 13px; line-height: 1.4; }
   .pa-context {
     display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 0;
     border-top: 1px solid var(--pa-border); font-size: 11px; font-weight: 500;
@@ -377,6 +586,12 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
+    function displayLabel(value) {
+      return String(value == null ? '' : value)
+        .replace(/_/g, ' ')
+        .toLowerCase()
+        .replace(/\b\w/g, function (letter) { return letter.toUpperCase(); });
+    }
     function toArray(value) { return Array.isArray(value) ? value : []; }
     function getCallTool() {
       var openai = getOpenAI();
@@ -401,6 +616,8 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         overlap: toArray(value.overlap),
         gaps: toArray(value.gaps),
         reasons: toArray(value.reasons).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
+        shoppingAnswer: normalizeShoppingAnswer(value.shoppingAnswer),
+        visualGrounding: normalizeVisualGrounding(value.visualGrounding),
         generatedAt: typeof value.generatedAt === 'string' ? value.generatedAt : null,
         id: typeof value.id === 'string' ? value.id : '',
         item: {
@@ -418,6 +635,55 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         verdict: typeof value.verdict === 'string' ? value.verdict : 'consider',
         verdictEmphasis: typeof value.verdictEmphasis === 'string' ? value.verdictEmphasis : null,
         verdictHeadline: typeof value.verdictHeadline === 'string' ? value.verdictHeadline : 'Consider',
+      };
+    }
+    function normalizeShoppingAnswer(value) {
+      if (!value || typeof value !== 'object') {
+        return {
+          closestComparators: [],
+          evidence: { used: [], missing: [] },
+          verdictReason: '',
+          whatWouldChangeVerdict: [],
+        };
+      }
+      return {
+        closestComparators: toArray(value.closestComparators).map(normalizeComparator).filter(Boolean),
+        evidence: value.evidence && typeof value.evidence === 'object'
+          ? {
+              used: toArray(value.evidence.used).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
+              missing: toArray(value.evidence.missing).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
+            }
+          : { used: [], missing: [] },
+        verdictReason: typeof value.verdictReason === 'string' ? value.verdictReason : '',
+        whatWouldChangeVerdict: toArray(value.whatWouldChangeVerdict).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
+      };
+    }
+    function normalizeComparator(value) {
+      if (!value || typeof value !== 'object') return null;
+      return {
+        brand: typeof value.brand === 'string' ? value.brand : null,
+        category: typeof value.category === 'string' ? value.category : null,
+        colorFamily: typeof value.colorFamily === 'string' ? value.colorFamily : null,
+        descriptor: typeof value.descriptor === 'string' ? value.descriptor : null,
+        hasImage: Boolean(value.hasImage),
+        imageAlt: typeof value.imageAlt === 'string' ? value.imageAlt : null,
+        imageUrl: typeof value.imageUrl === 'string' ? value.imageUrl : null,
+        itemId: typeof value.itemId === 'string' ? value.itemId : '',
+        name: typeof value.name === 'string' ? value.name : 'Saved closet item',
+        overlapScore: typeof value.overlapScore === 'number' ? value.overlapScore : 0,
+        relationLabel: typeof value.relationLabel === 'string' ? value.relationLabel : 'Closest match',
+        roleLabel: typeof value.roleLabel === 'string' ? value.roleLabel : 'Your closet',
+        summary: typeof value.summary === 'string' ? value.summary : '',
+      };
+    }
+    function normalizeVisualGrounding(value) {
+      if (!value || typeof value !== 'object') return null;
+      return {
+        candidateImageCount: typeof value.candidateImageCount === 'number' ? value.candidateImageCount : 0,
+        candidateVisualGrounding: typeof value.candidateVisualGrounding === 'string' ? value.candidateVisualGrounding : 'none',
+        label: typeof value.label === 'string' ? value.label : 'Visual evidence',
+        note: typeof value.note === 'string' ? value.note : '',
+        tone: value.tone === 'warn' ? 'warn' : 'neutral',
       };
     }
     function extract(candidate) {
@@ -459,6 +725,10 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       if (item.imageUrl) return '<img src="' + escapeHtml(item.imageUrl) + '" alt="' + escapeHtml(item.imageAlt || item.name) + '" />';
       return '<svg class="pa-thumb-glyph" viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/></svg>';
     }
+    function renderCompareThumb(imageUrl, alt, fallback) {
+      if (imageUrl) return '<img src="' + escapeHtml(imageUrl) + '" alt="' + escapeHtml(alt || '') + '" />';
+      return '<div class="pa-compare-glyph">' + escapeHtml(fallback || 'No image') + '</div>';
+    }
     function renderVerdictGlyph(verdict) {
       if (verdict === 'recommend') return '↑';
       if (verdict === 'skip') return '↓';
@@ -466,24 +736,51 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       return '…';
     }
     function renderVerdictLabel(verdict) {
-      if (verdict === 'recommend') return 'Recommend';
+      if (verdict === 'recommend') return 'Buy';
       if (verdict === 'skip') return 'Skip';
-      if (verdict === 'consider') return 'Consider';
+      if (verdict === 'consider') return 'Worth considering';
       return 'Wait';
     }
-    function renderOverlap(overlap) {
-      if (!overlap.length) return '';
-      var rows = overlap.map(function (o) {
-        return '<div class="pa-overlap-row"><div><div class="pa-overlap-name">' + escapeHtml(o.name) + '</div>' + (o.note ? '<div class="pa-overlap-note">' + escapeHtml(o.note) + '</div>' : '') + '</div><div class="pa-overlap-bar-wrap"><div class="pa-overlap-bar"><div class="pa-overlap-bar-fill" style="width:' + Math.max(0, Math.min(100, o.pct)) + '%"></div></div><span class="pa-overlap-pct">' + Math.round(o.pct) + '%</span></div></div>';
-      }).join('');
-      return '<section class="pa-section"><h3 class="pa-section-title">Coverage overlap with your closet</h3>' + rows + '</section>';
+    function renderVisualGrounding(grounding) {
+      if (!grounding || !grounding.note) return '';
+      return '<section class="pa-grounding" data-tone="' + escapeHtml(grounding.tone || 'neutral') + '"><div class="pa-grounding-icon">!</div><div><div class="pa-grounding-title">' + escapeHtml(grounding.label || 'Visual evidence') + '</div><div class="pa-grounding-note">' + escapeHtml(grounding.note) + '</div></div></section>';
     }
-    function renderReasons(reasons) {
+    function renderStylistRead(vm) {
+      var read = (vm.shoppingAnswer && vm.shoppingAnswer.verdictReason) || vm.analysisSummary || vm.verdictHeadline;
+      if (!read) return '';
+      return '<section class="pa-stylist-read"><div class="pa-stylist-kicker">Stylist&#39;s read</div><p class="pa-stylist-copy">' + escapeHtml(read) + '</p></section>';
+    }
+    function renderComparisonStrip(vm) {
+      var comparators = vm.shoppingAnswer ? toArray(vm.shoppingAnswer.closestComparators).slice(0, 3) : [];
+      if (!comparators.length && !vm.item.imageUrl) return '';
+      var candidateMeta = [vm.item.colorway, vm.item.category].filter(Boolean).slice(0, 2);
+      var cards = [
+        '<article class="pa-compare-card" data-role="candidate"><div class="pa-compare-thumb">' + renderCompareThumb(vm.item.imageUrl, vm.item.imageAlt || vm.item.name, 'This item') + '</div><div class="pa-compare-label">This piece</div><div class="pa-compare-name">' + escapeHtml(vm.item.name || 'Candidate item') + '</div><div class="pa-compare-meta">' + candidateMeta.map(function (entry) { return '<span class="pa-chip">' + escapeHtml(displayLabel(entry)) + '</span>'; }).join('') + '</div></article>'
+      ];
+      comparators.forEach(function (item) {
+        var meta = [item.relationLabel, item.colorFamily, item.descriptor].filter(Boolean).slice(0, 3);
+        cards.push('<article class="pa-compare-card"><div class="pa-compare-thumb">' + renderCompareThumb(item.imageUrl, item.imageAlt || item.name, item.hasImage ? 'Photo on file' : 'No photo yet') + '</div><div class="pa-compare-label">' + escapeHtml(item.roleLabel || 'Your closet') + '</div><div class="pa-compare-name">' + escapeHtml(item.name) + '</div><div class="pa-compare-meta">' + meta.map(function (entry) { return '<span class="pa-chip">' + escapeHtml(displayLabel(entry)) + '</span>'; }).join('') + '</div>' + renderCompareScore(item) + (item.summary ? '<div class="pa-compare-note">' + escapeHtml(item.summary) + '</div>' : '') + '</article>');
+      });
+      return '<section class="pa-section"><h3 class="pa-section-title">Closest closet comparison</h3><div class="pa-compare-grid">' + cards.join('') + '</div></section>';
+    }
+    function renderCompareScore(item) {
+      if (!item || typeof item.overlapScore !== 'number') return '';
+      var rawScore = item.overlapScore <= 1 ? item.overlapScore * 100 : item.overlapScore;
+      var pct = Math.max(0, Math.min(100, Math.round(rawScore)));
+      return '<div class="pa-compare-score"><div class="pa-compare-score-head"><span class="pa-compare-score-label">How close</span><span class="pa-compare-score-value">' + pct + '%</span></div><div class="pa-compare-score-bar"><div class="pa-compare-score-fill" style="width:' + pct + '%"></div></div></div>';
+    }
+    function renderReasons(reasons, verdict) {
       if (!reasons.length) return '';
       var rows = reasons.map(function (r, i) {
         return '<div class="pa-reason"><span class="pa-reason-num">' + (i + 1) + '.</span><span>' + escapeHtml(r) + '</span></div>';
       }).join('');
-      return '<section class="pa-section"><h3 class="pa-section-title">Why</h3>' + rows + '</section>';
+      return '<section class="pa-section"><h3 class="pa-section-title">' + escapeHtml(reasonSectionTitle(verdict)) + '</h3>' + rows + '</section>';
+    }
+    function reasonSectionTitle(verdict) {
+      if (verdict === 'recommend') return 'Why I’d buy it';
+      if (verdict === 'skip') return 'Why I’d skip it';
+      if (verdict === 'wait') return 'Why I’d wait';
+      return 'Why I’m not fully sold';
     }
     function renderFindings(findings) {
       if (!findings.length) return '';
@@ -493,14 +790,14 @@ export function getPurchaseAnalysisWidgetHtml(): string {
           : '';
         return '<div class="pa-finding" data-tone="' + escapeHtml(f.tone || 'neutral') + '"><div class="pa-finding-tag">' + escapeHtml(f.tag || 'Detail') + '</div><div><div class="pa-finding-body">' + escapeHtml(f.body || '') + '</div>' + (f.bodySecondary ? '<div class="pa-finding-body-secondary">' + escapeHtml(f.bodySecondary) + '</div>' : '') + '</div>' + metric + '</div>';
       }).join('');
-      return '<section class="pa-section"><h3 class="pa-section-title">Details</h3><div class="pa-findings">' + rows + '</div></section>';
+      return '<section class="pa-section"><h3 class="pa-section-title">What I am weighing</h3><div class="pa-findings">' + rows + '</div></section>';
     }
     function renderGaps(gaps) {
       if (!gaps.length) return '';
       var rows = gaps.map(function (g) {
         return '<div class="pa-gap-row"><span class="pa-gap-pill" data-need="' + escapeHtml(g.need) + '">' + escapeHtml(g.need) + '</span><div><span class="pa-gap-lane">' + escapeHtml(g.lane) + '</span>' + (g.note ? '<span class="pa-gap-note">' + escapeHtml(g.note) + '</span>' : '') + '</div></div>';
       }).join('');
-      return '<div class="pa-gap-block"><h3 class="pa-gap-title">What would actually close a gap</h3>' + rows + '</div>';
+      return '<div class="pa-gap-block"><h3 class="pa-gap-title">What would make this a stronger buy</h3>' + rows + '</div>';
     }
     function renderContext(context) {
       var parts = [];
@@ -558,10 +855,12 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       root.innerHTML =
         '<article class="pa-card"><div class="pa-card-inner">'
         + '<div class="pa-head"><div class="pa-thumb">' + renderThumb(vm.item) + '</div><div class="pa-head-body"><div class="pa-eyebrow">Purchase analysis' + (vm.item.brand ? ' · ' + escapeHtml(vm.item.brand) : '') + '</div><h2 class="pa-title">' + escapeHtml(vm.item.name) + '</h2>' + (vm.item.descriptor ? '<div class="pa-descriptor">' + escapeHtml(vm.item.descriptor) + '</div>' : '') + (vm.item.priceDisplay ? '<div class="pa-price">' + escapeHtml(vm.item.priceDisplay) + '</div>' : '') + '</div></div>'
-        + '<div class="pa-verdict" data-verdict="' + escapeHtml(vm.verdict) + '"><div class="pa-verdict-badge">' + renderVerdictGlyph(vm.verdict) + '</div><div><div class="pa-verdict-eyebrow">Recommendation · ' + renderVerdictLabel(vm.verdict) + '</div><div class="pa-verdict-headline">' + escapeHtml(vm.verdictHeadline) + '</div></div><div class="pa-verdict-meta"><div class="pa-verdict-meta-label">Confidence</div><div class="pa-verdict-meta-value">' + (confidencePct !== null ? confidencePct + '%' : escapeHtml(vm.confidence)) + '</div></div></div>'
+        + '<div class="pa-verdict" data-verdict="' + escapeHtml(vm.verdict) + '"><div class="pa-verdict-badge">' + renderVerdictGlyph(vm.verdict) + '</div><div><div class="pa-verdict-eyebrow">My take · ' + renderVerdictLabel(vm.verdict) + '</div><div class="pa-verdict-headline">' + escapeHtml(vm.verdictHeadline) + '</div></div><div class="pa-verdict-meta"><div class="pa-verdict-meta-label">Confidence</div><div class="pa-verdict-meta-value">' + (confidencePct !== null ? confidencePct + '%' : escapeHtml(vm.confidence)) + '</div></div></div>'
+        + renderStylistRead(vm)
+        + renderComparisonStrip(vm)
+        + renderVisualGrounding(vm.visualGrounding)
         + (useSummaryFallback && vm.analysisSummary ? '<p class="pa-summary">' + escapeHtml(vm.analysisSummary) + '</p>' : '')
-        + renderOverlap(vm.overlap)
-        + renderReasons(vm.reasons)
+        + renderReasons(vm.reasons, vm.verdict)
         + renderFindings(vm.findings)
         + renderGaps(vm.gaps)
         + renderContext(vm.context)
@@ -607,13 +906,18 @@ function buildPurchaseAnalysisWidgetViewModel(viewModel: PurchaseAnalysisViewMod
     item: viewModel.item,
     overlap: viewModel.overlap,
     reasons: viewModel.reasons,
+    shoppingAnswer: viewModel.shoppingAnswer,
     verdict: viewModel.verdict,
     verdictEmphasis: viewModel.verdictEmphasis,
     verdictHeadline: viewModel.verdictHeadline,
+    visualGrounding: viewModel.visualGrounding,
   };
 }
 
-function buildItemViewModel(candidate: StylePurchaseCandidate): PurchaseAnalysisItemViewModel {
+function buildItemViewModel(
+  candidate: StylePurchaseCandidate,
+  imageHints?: PurchaseAnalysisImageHints,
+): PurchaseAnalysisItemViewModel {
   const priceCad = candidate.estimatedPrice?.min ?? candidate.estimatedPrice?.max ?? null;
   return {
     brand: candidate.brand,
@@ -621,12 +925,103 @@ function buildItemViewModel(candidate: StylePurchaseCandidate): PurchaseAnalysis
     colorway: candidate.colorName ?? candidate.colorFamily,
     descriptor: buildDescriptor(candidate),
     imageAlt: candidate.name ?? 'Style purchase candidate',
-    imageUrl: candidate.imageUrls[0] ?? null,
+    imageUrl: imageHints?.candidateImageUrl ?? candidate.imageUrls[0] ?? null,
     name: candidate.name ?? titleCase(candidate.subcategory ?? candidate.category ?? 'Candidate'),
     priceCad,
     priceDisplay: formatPrice(candidate.estimatedPrice),
     productUrl: null,
   };
+}
+
+function buildVisualGroundingViewModel(analysis: StylePurchaseAnalysis): PurchaseAnalysisVisualGroundingViewModel {
+  const candidateImageCount = analysis.evidenceQuality.candidateImageCount;
+  if (analysis.evidenceQuality.candidateVisualGrounding === 'host_visual_inspection') {
+    const observation = analysis.evidenceQuality.candidateVisualObservations[0];
+    return {
+      candidateImageCount,
+      candidateVisualGrounding: 'host_visual_inspection',
+      label: 'Photo read',
+      note: observation ? humanizeVisualObservation(observation) : 'I looked at the product photo before making the call.',
+      tone: 'neutral',
+    };
+  }
+  if (analysis.evidenceQuality.candidateVisualGrounding === 'image_reference_only') {
+    return {
+      candidateImageCount,
+      candidateVisualGrounding: 'image_reference_only',
+      label: 'Photo still needs a look',
+      note:
+        'I found a product image, but it has not been visually checked yet. I would treat color, texture, and fine overlap calls as tentative.',
+      tone: 'warn',
+    };
+  }
+
+  return {
+    candidateImageCount,
+    candidateVisualGrounding: 'none',
+    label: 'No photo to judge',
+    note:
+      'I do not have a usable product photo here, so this leans on product text and closet context rather than a true visual read.',
+    tone: 'warn',
+  };
+}
+
+function humanizeVisualObservation(observation: string): string {
+  const color = extractObservationField(observation, 'color');
+  const silhouette = extractObservationField(observation, 'silhouette');
+  const material = extractObservationField(observation, 'material/texture');
+  const details = extractObservationField(observation, 'details');
+  const parts = ['I looked at the product photo.'];
+  if (color || silhouette) {
+    parts.push(`It reads as ${joinSentenceParts([color, silhouette ? `with ${silhouette}` : null])}.`);
+  }
+  if (material) {
+    parts.push(`The material reads as ${material}.`);
+  }
+  if (details) {
+    parts.push(`The useful details are ${details}.`);
+  }
+  if (parts.length === 1) {
+    parts.push(cleanObservationText(observation) ?? 'I looked at the product photo before making the call.');
+  }
+  return parts.join(' ');
+}
+
+function extractObservationField(observation: string, field: string): string | null {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const nextFields = 'color|silhouette|material\\/texture|details';
+  const match = new RegExp(`${escaped}:\\s*([\\s\\S]*?)(?:\\.\\s*(?:${nextFields}):|$)`, 'i').exec(observation);
+  return cleanObservationText(match?.[1] ?? null);
+}
+
+function cleanObservationText(value: string | null): string | null {
+  const cleaned = (value ?? '')
+    .replace(/^image\s+[^.]+\.\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.;,\s]+$/g, '');
+  return cleaned || null;
+}
+
+function joinSentenceParts(parts: Array<string | null>): string {
+  const cleanParts = parts.filter((part): part is string => Boolean(part));
+  if (cleanParts.length <= 1) return cleanParts[0] ?? '';
+  return `${cleanParts.slice(0, -1).join(', ')} ${cleanParts[cleanParts.length - 1]}`;
+}
+
+function addVisualGroundingToHeadline(analysis: StylePurchaseAnalysis, headline: string): string {
+  if (analysis.evidenceQuality.candidateVisualGrounding === 'host_visual_inspection') {
+    return headline;
+  }
+  if (analysis.evidenceQuality.candidateVisualGrounding === 'image_reference_only') {
+    return `Image not inspected; ${lowercaseFirst(headline)}`;
+  }
+  return `No product image inspected; ${lowercaseFirst(headline)}`;
+}
+
+function lowercaseFirst(value: string): string {
+  if (!value) return value;
+  return value.charAt(0).toLowerCase() + value.slice(1);
 }
 
 function buildDescriptor(candidate: StylePurchaseCandidate): string | null {
@@ -769,20 +1164,175 @@ function buildOverlapViewModel(analysis: StylePurchaseAnalysis): PurchaseAnalysi
     }));
 }
 
+function buildShoppingAnswerViewModel(
+  analysis: StylePurchaseAnalysis,
+  verdict: PurchaseVerdict,
+  imageHints?: PurchaseAnalysisImageHints,
+): PurchaseAnalysisShoppingAnswerViewModel {
+  const closestComparators = buildShoppingClosestComparators(analysis, imageHints);
+  return {
+    adjacentReferences: buildShoppingAdjacentReferences(analysis, imageHints),
+    closestComparators,
+    directComparators: closestComparators.filter((entry) => entry.comparatorRole === 'direct_comparator'),
+    evidence: buildShoppingEvidence(analysis),
+    rejectedComparators: buildShoppingRejectedComparators(analysis),
+    verdict: mapShoppingVerdict(verdict),
+    verdictReason: buildSummary(analysis, verdict),
+    whatWouldChangeVerdict: buildShoppingVerdictChangers(analysis, verdict),
+  };
+}
+
+function buildShoppingClosestComparators(
+  analysis: StylePurchaseAnalysis,
+  imageHints?: PurchaseAnalysisImageHints,
+): PurchaseAnalysisShoppingComparatorViewModel[] {
+  return selectVisibleComparisons(analysis)
+    .slice(0, 4)
+    .map((entry) => buildShoppingComparatorViewModel(analysis, entry, imageHints));
+}
+
+function buildShoppingAdjacentReferences(
+  analysis: StylePurchaseAnalysis,
+  imageHints?: PurchaseAnalysisImageHints,
+): PurchaseAnalysisShoppingComparatorViewModel[] {
+  const closestIds = new Set(selectVisibleComparisons(analysis).map((entry) => entry.itemId));
+  const adjacentReferences = analysis.comparatorReasoning.topComparisons.filter(
+    (entry) => mapShoppingComparatorRole(entry.relation) === 'adjacent_reference',
+  );
+  return [
+    ...selectVisibleComparisons(analysis).filter((entry) => mapShoppingComparatorRole(entry.relation) === 'adjacent_reference'),
+    ...adjacentReferences.filter((entry) => !closestIds.has(entry.itemId)),
+  ]
+    .slice(0, 4)
+    .map((entry) => buildShoppingComparatorViewModel(analysis, entry, imageHints));
+}
+
+function buildShoppingComparatorViewModel(
+  analysis: StylePurchaseAnalysis,
+  entry: StylePurchaseAnalysis['comparatorReasoning']['topComparisons'][number],
+  imageHints?: PurchaseAnalysisImageHints,
+): PurchaseAnalysisShoppingComparatorViewModel {
+  const item = analysis.itemsById[entry.itemId];
+  const hintedImageUrl = imageHints?.comparatorImageUrlsByItemId?.[entry.itemId] ?? null;
+  return {
+    brand: item?.brand ?? null,
+    category: item?.category ?? null,
+    colorFamily: item?.colorFamily ?? null,
+    comparatorRole: mapShoppingComparatorRole(entry.relation),
+    confidence: entry.confidence,
+    descriptor: buildOwnedComparatorDescriptor(item),
+    hasImage: Boolean(item?.primaryPhotoDelivery),
+    imageAlt: item?.name ?? 'Saved closet item',
+    imageUrl: hintedImageUrl,
+    itemId: entry.itemId,
+    name: formatOwnedOverlapName(item),
+    overlapScore: entry.overlapScore,
+    reasons: entry.notes.slice(0, 3),
+    relation: entry.relation,
+    relationLabel: formatRelationLabel(entry.relation),
+    roleLabel: mapShoppingComparatorRole(entry.relation) === 'direct_comparator' ? 'Closest in your closet' : 'Adjacent reference',
+    summary: entry.summary,
+    subcategory: item?.subcategory ?? null,
+  };
+}
+
+function mapShoppingComparatorRole(relation: StylePurchaseComparisonRelation): PurchaseAnalysisShoppingComparatorRole {
+  if (relation === 'duplicate' || relation === 'replacement' || relation === 'upgrade') {
+    return 'direct_comparator';
+  }
+  return 'adjacent_reference';
+}
+
+function buildShoppingRejectedComparators(analysis: StylePurchaseAnalysis): PurchaseAnalysisShoppingRejectedComparatorViewModel[] {
+  return analysis.comparatorReasoning.rejectedComparisons.slice(0, 6).map((entry) => ({
+    itemId: entry.itemId,
+    name: formatOwnedOverlapName(analysis.itemsById[entry.itemId]),
+    reasons: entry.reasons.slice(0, 3),
+    rejectedBecause: entry.rejectedBecause,
+  }));
+}
+
+function buildShoppingEvidence(analysis: StylePurchaseAnalysis): PurchaseAnalysisShoppingEvidenceViewModel {
+  const used: string[] = [
+    'active closet item state',
+    'closet item category, subcategory, color, formality, and comparator metadata',
+  ];
+  const missing: string[] = [];
+
+  if (analysis.comparatorReasoning.topComparisons.length > 0) {
+    used.push('ranked closest closet comparators');
+  }
+  if (analysis.comparatorReasoning.rejectedComparisons.length > 0) {
+    used.push('non-comparator rejections for same-color or adjacent items');
+  }
+  if (analysis.evidenceQuality.candidateVisualGrounding === 'host_visual_inspection') {
+    used.push('host-inspected candidate image observations');
+  } else if (analysis.evidenceQuality.candidateVisualGrounding === 'image_reference_only') {
+    used.push('candidate image URL presence');
+    missing.push('candidate image pixels have not been inspected by Fluent');
+  } else {
+    missing.push('no candidate image was available to inspect');
+  }
+
+  if (analysis.evidenceQuality.comparatorItemIdsInspected.length > 0) {
+    used.push('host-inspected closet comparator images');
+  } else {
+    missing.push('closest closet comparator images have not been pixel-inspected in this result');
+  }
+
+  if (analysis.evidenceQuality.primaryPhotoCoverage < 0.5) {
+    missing.push('some closet items lack primary photos');
+  }
+  for (const note of analysis.evidenceQuality.notes.slice(0, 2)) {
+    missing.push(note);
+  }
+
+  return {
+    missing: uniqueStrings(missing).slice(0, 5),
+    used: uniqueStrings(used).slice(0, 6),
+  };
+}
+
+function buildShoppingVerdictChangers(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict): string[] {
+  const changes: string[] = [];
+  if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
+    changes.push('A host-inspected candidate image showing a materially different silhouette, material, colorway, or role.');
+  }
+  if (analysis.evidenceQuality.comparatorItemIdsInspected.length === 0 && analysis.comparatorReasoning.topComparisons.length > 0) {
+    changes.push('Images for the closest closet comparators confirming they are less visually similar than the metadata suggests.');
+  }
+  if (verdict === 'skip') {
+    changes.push('A clear reason this would replace a worn-out closet item rather than add another near-duplicate.');
+  } else if (verdict === 'recommend') {
+    changes.push('Finding an active closet item in the same category, silhouette, color role, and use case.');
+  } else {
+    changes.push('Better visual evidence resolving whether the closest comparator is a true duplicate or only adjacent.');
+  }
+  return uniqueStrings(changes).slice(0, 4);
+}
+
+function mapShoppingVerdict(verdict: PurchaseVerdict): PurchaseAnalysisShoppingVerdict {
+  if (verdict === 'recommend') return 'buy';
+  if (verdict === 'skip') return 'skip';
+  return 'wait';
+}
+
 function buildReasons(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict): string[] {
   const reasons: string[] = [];
   const overlapNames = buildNamedOverlapList(analysis);
-  if (analysis.comparatorReasoning.notes.length > 0) {
+  if (verdict === 'skip' && overlapNames.length > 0) {
+    reasons.push(`Your closet already covers this lane, especially with ${overlapNames.slice(0, 2).join(' and ')}.`);
+  } else if (analysis.comparatorReasoning.notes.length > 0) {
     reasons.push(...analysis.comparatorReasoning.notes.slice(0, 2));
   }
-  if (verdict === 'skip' && overlapNames.length > 0) {
-    reasons.push(`You already own close versions like ${overlapNames.join(' and ')}.`);
+  if (verdict === 'skip' && analysis.evidenceQuality.candidateVisualObservations.length > 0) {
+    reasons.push(`The photo does not show enough new color, shape, or material to separate it from those close matches.`);
   }
   if (verdict === 'recommend' && analysis.coverageImpact.strengthensWeakArea) {
     reasons.push('It adds something you do not already have much of instead of piling into a well-covered part of your closet.');
   }
   if (verdict === 'skip' && analysis.coverageImpact.pilesIntoCoveredLane) {
-    reasons.push(`You already own close versions of this kind of ${describeCandidateItemKind(analysis)}, so the gain looks limited.`);
+    reasons.push(`The practical gain looks limited unless this is replacing a pair you have worn out.`);
   }
   if (analysis.comparatorReasoning.framing === 'replacement') {
     reasons.push('The closest overlap looks more like something to replace than a genuinely new addition.');
@@ -950,6 +1500,13 @@ function selectVisibleComparisons(analysis: StylePurchaseAnalysis) {
   const comparisons = analysis.comparatorReasoning.topComparisons;
   if (comparisons.length === 0) return comparisons;
 
+  const directFamilyComparisons = comparisons.filter((entry) =>
+    entry.notes.some((note) => /same family/i.test(note)),
+  );
+  if (directFamilyComparisons.length > 0) {
+    return directFamilyComparisons.slice(0, 3);
+  }
+
   const strongRelations = comparisons.filter(
     (entry) => entry.relation === 'duplicate' || entry.relation === 'replacement' || entry.relation === 'upgrade',
   );
@@ -970,6 +1527,23 @@ function formatOwnedOverlapName(item: StylePurchaseAnalysis['itemsById'][string]
     return name;
   }
   return `${brand} ${name}`;
+}
+
+function buildOwnedComparatorDescriptor(item: StylePurchaseAnalysis['itemsById'][string] | undefined): string | null {
+  if (!item) return null;
+  const bits = [item.subcategory, item.colorFamily, item.comparatorKey && item.comparatorKey !== 'unknown' ? item.comparatorKey : null]
+    .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    .slice(0, 2);
+  return bits.length ? bits.map((entry) => titleCase(entry.replace(/_/g, ' '))).join(' · ') : null;
+}
+
+function formatRelationLabel(relation: StylePurchaseComparisonRelation): string {
+  if (relation === 'duplicate') return 'Very close';
+  if (relation === 'replacement') return 'Replacement';
+  if (relation === 'upgrade') return 'Upgrade lane';
+  if (relation === 'adjacent') return 'Similar role';
+  if (relation === 'distinct') return 'Different enough';
+  return 'Needs a closer look';
 }
 
 function describeCandidateItemKind(analysis: StylePurchaseAnalysis): string {

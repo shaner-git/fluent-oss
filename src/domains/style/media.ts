@@ -22,8 +22,9 @@ export async function signStyleImagePath(params: {
   expiresAt: string;
   path: string;
   secret: string;
+  tenantId?: string | null;
 }): Promise<string> {
-  const payload = `${params.path}:${params.expiresAt}`;
+  const payload = buildStyleImageSignaturePayload(params);
   return signData(payload, params.secret);
 }
 
@@ -32,8 +33,9 @@ export async function verifyStyleImagePathSignature(params: {
   path: string;
   secret: string;
   signatureHex: string;
+  tenantId?: string | null;
 }): Promise<boolean> {
-  const payload = `${params.path}:${params.expiresAt}`;
+  const payload = buildStyleImageSignaturePayload(params);
   return verifySignature(params.signatureHex, payload, params.secret);
 }
 
@@ -41,19 +43,25 @@ export async function buildSignedStyleImageUrl(params: {
   origin: string;
   photoId: string;
   secret: string;
+  tenantId?: string | null;
   ttlMs?: number;
   variant?: 'original';
 }): Promise<{ expiresAt: string; originalUrl: string }> {
   const variant = params.variant ?? 'original';
   const expiresAt = new Date(Date.now() + (params.ttlMs ?? STYLE_SIGNED_FALLBACK_TTL_MS)).toISOString();
   const pathname = buildStyleImagePath(params.photoId, variant);
+  const tenantId = params.tenantId?.trim() || null;
   const sig = await signStyleImagePath({
     expiresAt,
     path: pathname,
     secret: params.secret,
+    tenantId,
   });
   const url = new URL(pathname, params.origin);
   url.searchParams.set('exp', expiresAt);
+  if (tenantId) {
+    url.searchParams.set('tid', tenantId);
+  }
   url.searchParams.set('sig', sig);
   return {
     expiresAt,
@@ -216,6 +224,17 @@ export function extensionFromMimeType(mimeType: string, fallbackUrl?: string): s
 
 function sanitizeSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-');
+}
+
+function buildStyleImageSignaturePayload(params: {
+  expiresAt: string;
+  path: string;
+  tenantId?: string | null;
+}): string {
+  const tenantId = params.tenantId?.trim();
+  return tenantId
+    ? `${params.path}:${params.expiresAt}:${tenantId}`
+    : `${params.path}:${params.expiresAt}`;
 }
 
 function buildStyleImagePath(photoId: string, variant: 'original'): string {

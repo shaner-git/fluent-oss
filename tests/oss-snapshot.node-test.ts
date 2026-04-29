@@ -4,6 +4,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createOssSnapshot } from '../scripts/export-oss-snapshot';
 import { importSnapshotIntoOss } from '../scripts/import-snapshot-support';
+import { FLUENT_OSS_DEFAULT_PROFILE_ID, FLUENT_OSS_DEFAULT_TENANT_ID } from '../src/fluent-identity';
 import { createLocalRuntime } from '../src/local/runtime';
 
 const tempRoots: string[] = [];
@@ -62,7 +63,7 @@ async function roundTripsOssSnapshotIntoFreshRoot() {
          SET display_name = ?, updated_at = CURRENT_TIMESTAMP
          WHERE tenant_id = ? AND profile_id = ?`,
       )
-      .run('OSS Snapshot Owner', 'primary', 'owner');
+      .run('OSS Snapshot Owner', FLUENT_OSS_DEFAULT_TENANT_ID, FLUENT_OSS_DEFAULT_PROFILE_ID);
   } finally {
     sourceRuntime.sqliteDb.close();
   }
@@ -86,7 +87,7 @@ async function roundTripsOssSnapshotIntoFreshRoot() {
   try {
     const row = importedRuntime.sqliteDb.sqlite
       .prepare('SELECT display_name FROM fluent_profile WHERE tenant_id = ? AND profile_id = ?')
-      .get('primary', 'owner') as { display_name: string } | undefined;
+      .get(FLUENT_OSS_DEFAULT_TENANT_ID, FLUENT_OSS_DEFAULT_PROFILE_ID) as { display_name: string } | undefined;
     assert.equal(row?.display_name, 'OSS Snapshot Owner');
   } finally {
     importedRuntime.sqliteDb.close();

@@ -1,21 +1,21 @@
 # Fluent open-source runtime
 
-Fluent open-source runtime is a self-hosted MCP server for:
+Fluent is open source. This repo runs Fluent yourself as a self-hosted MCP server for:
 
 - meal planning and grocery workflows
 - health planning and workout logging
 - closet-aware style decisions
 
-It is the open-source runtime for Fluent. If you want Fluent without running infrastructure yourself, request early access. Both paths share the same MCP contract.
+Use this repo when you want Fluent running on infrastructure you control. If you want managed onboarding, request Fluent early access on meetfluent.app. Both paths share the same MCP contract.
 
 ## Public Release
 
-- release notes: [CHANGELOG.md](./CHANGELOG.md)
-- quickstart: [docs/fluent-oss.md](./docs/fluent-oss.md)
-- OSS docs bucket: [docs/oss/README.md](./docs/oss/README.md)
-- public release guide: [docs/fluent-release-gate.md](./docs/fluent-release-gate.md)
+- public repo: [shaner-git/fluent-oss](https://github.com/shaner-git/fluent-oss)
+- current quickstart: [docs/fluent-oss.md](https://github.com/shaner-git/fluent-oss/blob/main/docs/fluent-oss.md)
+- current docs bucket: [docs/oss](https://github.com/shaner-git/fluent-oss/tree/main/docs/oss)
+- release history: [Fluent open-source runtime releases](https://github.com/shaner-git/fluent-oss/releases)
 - supported direct runtime: Node.js `22.x`
-- supported minimum contract version: `2026-04-20.fluent-core-v1.37`
+- supported minimum contract version: `2026-04-26.fluent-core-v1.48`
 
 ## Who This Is For
 
@@ -23,11 +23,11 @@ It is the open-source runtime for Fluent. If you want Fluent without running inf
 - Codex, Claude, and OpenClaw users who want an MCP server they control
 - power users who are comfortable with a local token, local storage, and a small amount of setup
 
-If you want the easiest managed path, request early access. If you want control, local data, and self-hosting flexibility, start here.
+If you want the easiest path, managed early access is the simpler choice. If you want control, local data, and self-hosting flexibility, start here.
 
 ## What You Get
 
-- a supported single-user OSS runtime
+- a supported single-user open-source runtime
 - Docker and direct Node.js runtime options
 - MCP config generation for Codex, Claude, and OpenClaw
 - snapshot backup and restore tooling
@@ -40,13 +40,13 @@ If you want the easiest managed path, request early access. If you want control,
 - bearer-token auth instead of OAuth
 - Postgres + S3 is experimental
 - this repo focuses on self-hosting, not managed billing or onboarding
-- `npm run scaffold:mcp -- --track cloud` requires an explicit `--base-url` in this public repo while Fluent early access remains invite-based early access
+- `npm run scaffold:mcp -- --track cloud` remains a compatibility scaffold and requires an explicit `--base-url` in this public repo
 
-## Early Access And Open Source
+## Managed Early Access And Running Fluent Yourself
 
 | Option | Best for | Auth | Ops model |
 | --- | --- | --- | --- |
-| Fluent early access | people who want managed setup | OAuth | Fluent runs it for you |
+| managed early access | people who want managed setup | OAuth | Fluent runs it for you |
 | Fluent open-source runtime | self-hosters and power users | bearer token | you run it yourself |
 
 ## Prerequisites
@@ -114,15 +114,7 @@ For OpenClaw:
 npm run scaffold:mcp -- --client openclaw --track oss --base-url http://127.0.0.1:8788
 ```
 
-For OpenClaw, install the published package first:
-
-```bash
-openclaw plugins install fluent-openclaw
-```
-
-Then either run `openclaw fluent mcp oss --base-url http://127.0.0.1:8788 --token <oss-token>` or register the scaffold output as the native `mcp.servers.fluent` JSON block in your OpenClaw profile.
-
-The checked-in `openclaw-plugin/fluent/` directory is the bundled helper package `fluent-openclaw-oss-helper`, not the published `fluent-openclaw` package.
+For OpenClaw, the scaffold output is the native `mcp.servers.fluent` JSON block you should register with `openclaw mcp set fluent ...`.
 
 The scaffold command automatically uses your local OSS token unless you override it with `--token` or `--root`.
 
@@ -183,18 +175,19 @@ Then see the operator guide:
 ## Docs
 
 - changelog: [CHANGELOG.md](./CHANGELOG.md)
-- OSS operator docs: [docs/oss/README.md](./docs/oss/README.md)
-- OSS operator guide: [docs/fluent-oss.md](./docs/fluent-oss.md)
+- open-source runtime operator docs: [docs/oss/README.md](./docs/oss/README.md)
+- open-source runtime operator guide: [docs/fluent-oss.md](./docs/fluent-oss.md)
+- open-source runtime artifact boundary: [docs/oss/fluent-oss-artifact-boundary.md](./docs/oss/fluent-oss-artifact-boundary.md)
 - known limitations: [docs/oss/fluent-oss-known-limitations.md](./docs/oss/fluent-oss-known-limitations.md)
 - setup matrix: [docs/oss/fluent-oss-setup-matrix.md](./docs/oss/fluent-oss-setup-matrix.md)
 - upgrade notes: [docs/oss/fluent-oss-upgrade-notes.md](./docs/oss/fluent-oss-upgrade-notes.md)
 - Docker notes: [docs/oss/fluent-oss-docker-notes.md](./docs/oss/fluent-oss-docker-notes.md)
 - GitHub release checklist: [docs/oss/fluent-oss-github-release-checklist.md](./docs/oss/fluent-oss-github-release-checklist.md)
-- OpenClaw package versioning: [docs/oss/openclaw-package-versioning.md](./docs/oss/openclaw-package-versioning.md)
-- public artifact boundary: [docs/oss/public-artifact-boundary.md](./docs/oss/public-artifact-boundary.md)
 - shared contract and architecture docs: [docs/shared/README.md](./docs/shared/README.md)
 - release gate: [docs/fluent-release-gate.md](./docs/fluent-release-gate.md)
 
 ## About This Repo
 
-This public repo is generated from Fluent's canonical private source repo so early access and the open-source runtime stay aligned. Public contributions are welcome, but the source of truth remains the canonical repo and changes are re-exported here.
+This public repo is generated from Fluent's canonical private source repo so managed and open-source paths stay aligned. Public contributions are welcome, but the source of truth remains the canonical repo and changes are re-exported here.
+
+The export boundary is documented in [docs/oss/fluent-oss-artifact-boundary.md](./docs/oss/fluent-oss-artifact-boundary.md), including what ships publicly, what stays private, and which scrub gates block unsafe exports.

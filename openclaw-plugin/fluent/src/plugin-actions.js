@@ -150,7 +150,7 @@ export async function doctorFluentPlugin(options = {}) {
     if (!state) {
       issues.push('Hosted Fluent auth has not been initialized.');
     } else if (tokenExpiresSoon(state, settings.warnBeforeExpiryMinutes)) {
-      issues.push('Hosted Fluent access token is expired or nearing expiry.');
+      issues.push('Hosted Fluent access token is expired or nearing expiry. Run `openclaw fluent auth refresh` or sign in again.');
     }
   } else if (!resolveOssToken({ ...options, optional: true })) {
     issues.push('OSS Fluent token is missing. Pass --token or set FLUENT_OSS_TOKEN.');

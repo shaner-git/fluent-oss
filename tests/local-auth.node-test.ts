@@ -64,7 +64,7 @@ function exposesBearerAuthModelThroughProbeAndHealth() {
     assert.equal(probe.recommended_auth_env, OSS_TOKEN_ENV);
     assert.deepEqual(probe.supported_auth_envs, [...LOCAL_TOKEN_ENV_ALIASES]);
     assert.deepEqual(probe.legacy_auth_envs, [LOCAL_TOKEN_ENV]);
-    assert.equal(probe.display_name, 'Fluent OSS');
+    assert.equal(probe.display_name, 'Fluent');
     assert.deepEqual(health.authorization_required_paths, ['/mcp']);
     assert.equal(health.auth_model, LOCAL_AUTH_MODEL);
     assert.equal(health.deploymentTrack, 'oss');

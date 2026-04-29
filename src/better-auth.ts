@@ -18,11 +18,51 @@ import {
   FLUENT_STYLE_WRITE_SCOPE,
   FLUENT_SUPPORTED_SCOPES,
 } from './auth';
+import {
+  applyOperatorAccountDeletionAction,
+  buildAccountDeletionPolicy,
+  cancelAccountDeletion,
+  confirmAccountDeletion,
+  getAccountDeletionFlow,
+  getAccountDeletionSupportLinks,
+  requestAccountDeletion,
+  type AccountDeletionActor,
+  type AccountDeletionFlow,
+  type AccountDeletionOperatorAction,
+  type AccountDeletionRequestRecord,
+} from './account-deletion';
 import { coreBindingsFromCloudEnv, readConfig, type CloudRuntimeEnv, type OAuthAppEnv } from './config';
+import {
+  buildFluentCloudEarlyAccessMessage,
+  buildFluentCloudAccessFailureDetails,
+  createFluentCloudAccessFailurePayload,
+  renderFluentCloudEarlyAccessPage,
+  renderFluentCloudAccessFailurePage,
+  FLUENT_CLOUD_WAITLIST_URL,
+  FLUENT_OSS_AVAILABLE_URL,
+  FLUENT_SUPPORT_EMAIL,
+} from './cloud-early-access';
+import {
+  applyFluentCloudOperatorAction,
+  fluentCloudOnboardingDescriptor,
+  listFluentCloudOnboardingEvents,
+  listFluentCloudOnboardingRecords,
+  markFluentCloudClientConnected,
+  markFluentCloudEmailVerified,
+  recordFluentCloudOnboardingFailure,
+  renderFluentCloudOnboardingOpsPage,
+  type FluentCloudOnboardingState,
+} from './cloud-onboarding';
 import { hasHostedEmailDelivery, sendHostedMagicLinkEmail } from './hosted-email';
+import { resolveHostedCloudAccess, resolveHostedCloudClientDecision } from './hosted-access-state';
+import { escapeHeaderQuotedString } from './http-header';
 import { createFluentMcpServer } from './mcp';
 import { wrapCloudflareDatabase } from './storage';
-import { ensureHostedUserProvisioned, getHostedUserMembership } from './hosted-identity';
+import { ensureHostedUserProvisioned } from './hosted-identity';
+import {
+  createBillingPortalResponseForCurrentUser,
+  reactivateCurrentUserAccount,
+} from './subscription-lifecycle';
 
 type BetterAuthSessionPayload = {
   session?: {
@@ -48,8 +88,15 @@ export async function maybeHandleBetterAuthRequest(
   env: CloudRuntimeEnv,
 ): Promise<Response | null> {
   const url = new URL(request.url);
+  if (url.pathname === '/ops/cloud-onboarding') {
+    return handleCloudOnboardingOpsRequest(request, env);
+  }
   if (request.method === 'POST' && url.pathname === '/ops/better-auth/migrate') {
     return handleBetterAuthMigration(request, env);
+  }
+
+  if (request.method === 'POST' && url.pathname.startsWith('/ops/account-deletion/requests/')) {
+    return handleAccountDeletionOpsRequest(request, env);
   }
 
   if (url.pathname === '/api/auth' || url.pathname.startsWith('/api/auth/')) {
@@ -64,6 +111,34 @@ export async function maybeHandleBetterAuthRequest(
     return handleConsentPage(request, env);
   }
 
+  if (request.method === 'GET' && url.pathname === '/account/delete') {
+    return handleAccountDeletionPage(request, env);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/account/billing') {
+    return handleAccountBillingPage(request, env);
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/account/billing/portal') {
+    return handleAccountBillingPortalRequest(request, env);
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/account/reactivate') {
+    return handleAccountReactivateRequest(request, env);
+  }
+
+  if (request.method === 'POST' && url.pathname === '/account/delete/request') {
+    return handleAccountDeletionAction(request, env, 'request');
+  }
+
+  if (request.method === 'POST' && url.pathname === '/account/delete/confirm') {
+    return handleAccountDeletionAction(request, env, 'confirm');
+  }
+
+  if (request.method === 'POST' && url.pathname === '/account/delete/cancel') {
+    return handleAccountDeletionAction(request, env, 'cancel');
+  }
+
   return null;
 }
 
@@ -74,13 +149,13 @@ export async function maybeHandleBetterAuthCompatibilityRequest(
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const compatibilityRoute = normalizeCompatibilityRoute(url.pathname);
-  if (url.pathname === '/mcp' || compatibilityRoute) {
+  if (url.pathname === '/mcp' || url.pathname === '/mcp/chatgpt' || compatibilityRoute) {
     if (!hasBetterAuthConfig(env)) {
       return betterAuthConfigErrorResponse(new Error('Better Auth is not configured.'));
     }
   }
 
-  if (url.pathname === '/mcp') {
+  if (url.pathname === '/mcp' || url.pathname === '/mcp/chatgpt') {
     return handleBetterAuthMcpRequest(request, env, ctx);
   }
 
@@ -138,7 +213,11 @@ async function handleBetterAuthApiRequest(request: Request, env: CloudRuntimeEnv
     return oauthProviderOpenIdConfigMetadata(auth)(request);
   }
 
-  return auth.handler(request);
+  try {
+    return await auth.handler(request);
+  } catch (error) {
+    return betterAuthRuntimeErrorResponse(request, error);
+  }
 }
 
 async function handleBetterAuthMigration(request: Request, env: CloudRuntimeEnv): Promise<Response> {
@@ -197,6 +276,10 @@ async function handleSignInPage(request: Request, env: CloudRuntimeEnv): Promise
   }
 
   const session = await getBetterAuthSession(auth, request);
+  const earlyAccessResponse = await maybeCreateFluentCloudEarlyAccessPage(request, env, session, 'Sign in');
+  if (earlyAccessResponse) {
+    return earlyAccessResponse;
+  }
   const provisioning = await maybeProvisionHostedSession(env, session);
   const postSignInRedirectUrl = derivePostSignInRedirectUrl(request.url, Boolean(session?.user));
   if (postSignInRedirectUrl) {
@@ -230,6 +313,10 @@ async function handleConsentPage(request: Request, env: CloudRuntimeEnv): Promis
     return Response.redirect(`${url.origin}/sign-in${url.search}`, 302);
   }
 
+  const earlyAccessResponse = await maybeCreateFluentCloudEarlyAccessPage(request, env, session, 'Authorize');
+  if (earlyAccessResponse) {
+    return earlyAccessResponse;
+  }
   const provisioning = await maybeProvisionHostedSession(env, session);
   const consentInfo = await getConsentClientSummary(auth, request);
   return html(
@@ -242,6 +329,285 @@ async function handleConsentPage(request: Request, env: CloudRuntimeEnv): Promis
       session,
     }),
   );
+}
+
+async function handleAccountDeletionPage(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  let auth;
+  try {
+    auth = createBetterAuth(request, env);
+  } catch {
+    return html(renderAuthUnavailablePage(env, 'Account deletion'), 503);
+  }
+
+  const session = await getBetterAuthSession(auth, request);
+  if (!session?.user?.id) {
+    return Response.redirect(buildSignInRedirectUrl(request.url), 302);
+  }
+
+  const db = wrapCloudflareDatabase(env.DB);
+  const actor = accountDeletionActorFromSession(session);
+  const flow = await getAccountDeletionFlow(db, actor);
+  const accessResponse = await maybeDenyAccountDeletionForHostedAccount(request, env, session, flow, 'Account deletion');
+  if (accessResponse) {
+    return accessResponse;
+  }
+  return html(
+    renderAccountDeletionPage({
+      actionMessage: null,
+      flow,
+      origin: new URL(request.url).origin,
+      session,
+      support: getAccountDeletionSupportLinks(),
+    }),
+  );
+}
+
+async function handleAccountDeletionAction(
+  request: Request,
+  env: CloudRuntimeEnv,
+  action: 'request' | 'confirm' | 'cancel',
+): Promise<Response> {
+  let auth;
+  try {
+    auth = createBetterAuth(request, env);
+  } catch {
+    return html(renderAuthUnavailablePage(env, 'Account deletion'), 503);
+  }
+
+  const session = await getBetterAuthSession(auth, request);
+  if (!session?.user?.id) {
+    return Response.redirect(buildSignInRedirectUrl(new URL(request.url).origin + '/account/delete'), 302);
+  }
+
+  const db = wrapCloudflareDatabase(env.DB);
+  const actor = accountDeletionActorFromSession(session);
+  const initialFlow = await getAccountDeletionFlow(db, actor);
+  const accessResponse = await maybeDenyAccountDeletionForHostedAccount(request, env, session, initialFlow, 'Account deletion');
+  if (accessResponse) {
+    return accessResponse;
+  }
+  let flow: AccountDeletionFlow;
+  let actionMessage: string;
+
+  switch (action) {
+    case 'request':
+      flow = await requestAccountDeletion(db, actor);
+      actionMessage =
+        'Deletion requested. Review the summary below, then confirm if you want Fluent to continue with deletion.';
+      break;
+    case 'confirm':
+      flow = await confirmAccountDeletion(db, actor);
+      actionMessage =
+        flow.currentRequest?.status === 'deletion_completed'
+          ? 'Deletion completed. This account can no longer sign in to Fluent.'
+          : flow.currentRequest?.status === 'manual_review_required'
+            ? 'Deletion confirmed. Fluent has queued this account for operator review and manual completion.'
+            : 'Deletion confirmed.';
+      break;
+    case 'cancel':
+      flow = await cancelAccountDeletion(db, actor);
+      actionMessage = 'Deletion cancelled. Fluent will keep the account active unless a new deletion request is submitted.';
+      break;
+  }
+
+  return html(
+    renderAccountDeletionPage({
+      actionMessage,
+      flow,
+      origin: new URL(request.url).origin,
+      session,
+      support: getAccountDeletionSupportLinks(),
+    }),
+  );
+}
+
+async function handleAccountBillingPage(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  let auth;
+  try {
+    auth = createBetterAuth(request, env);
+  } catch {
+    return html(renderAuthUnavailablePage(env, 'Billing'), 503);
+  }
+
+  const session = await getBetterAuthSession(auth, request);
+  if (!session?.user?.id) {
+    return Response.redirect(buildSignInRedirectUrl(request.url), 302);
+  }
+
+  const accessResponse = await maybeDenyBillingForHostedAccount(request, env, session, 'Billing');
+  if (accessResponse) {
+    return accessResponse;
+  }
+
+  const portalUrl = env.FLUENT_BILLING_PORTAL_URL?.trim() || null;
+  return html(
+    renderAuthShell({
+      title: 'Billing | Fluent',
+      body: `
+<h1 class="display">Manage Fluent billing</h1>
+<p class="lede">You can update payment details, reactivate Fluent, or manage a canceled subscription during the retention window.</p>
+<div class="actions">
+  ${
+    portalUrl
+      ? `<a class="btn-primary" href="${escapeHtml(portalUrl)}">Open billing portal <span class="btn-arrow">→</span></a>`
+      : '<p class="notice">Billing portal access is enabled for this account, but FLUENT_BILLING_PORTAL_URL is not configured yet. Contact support to reactivate or update billing.</p>'
+  }
+</div>`,
+    }),
+  );
+}
+
+async function handleAccountBillingPortalRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  let auth;
+  try {
+    auth = createBetterAuth(request, env);
+  } catch {
+    return json({ error: 'Hosted auth is unavailable.' }, 503);
+  }
+
+  const session = await getBetterAuthSession(auth, request);
+  if (!session?.user?.id) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  return createBillingPortalResponseForCurrentUser(request, env, wrapCloudflareDatabase(env.DB), {
+    email: session.user.email ?? null,
+    id: session.user.id,
+  });
+}
+
+async function handleAccountReactivateRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  let auth;
+  try {
+    auth = createBetterAuth(request, env);
+  } catch {
+    return json({ error: 'Hosted auth is unavailable.' }, 503);
+  }
+
+  const session = await getBetterAuthSession(auth, request);
+  if (!session?.user?.id) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  try {
+    const result = await reactivateCurrentUserAccount(wrapCloudflareDatabase(env.DB), {
+      email: session.user.email ?? null,
+      id: session.user.id,
+    });
+    return json(result);
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : 'Unable to reactivate this account.' }, 403);
+  }
+}
+
+async function maybeDenyAccountDeletionForHostedAccount(
+  request: Request,
+  env: CloudRuntimeEnv,
+  session: BetterAuthSessionPayload,
+  flow: AccountDeletionFlow,
+  title: string,
+): Promise<Response | null> {
+  const user = session?.user;
+  if (!user?.id || flow.subjectType !== 'cloud_account') {
+    return null;
+  }
+
+  const accessDecision = await resolveHostedCloudAccess(wrapCloudflareDatabase(env.DB), env, {
+    email: user.email ?? null,
+    userId: user.id,
+  });
+  if (accessDecision.allowed) {
+    return null;
+  }
+
+  const code = accessDecision.code ?? 'not_on_waitlist';
+  const details = buildFluentCloudAccessFailureDetails(code, {
+    email: user.email ?? null,
+    title: `${title} | Fluent`,
+  });
+  return html(
+    renderFluentCloudAccessFailurePage(code, {
+      email: user.email ?? null,
+      title: `${title} | Fluent`,
+    }),
+    details.status,
+  );
+}
+
+async function maybeDenyBillingForHostedAccount(
+  request: Request,
+  env: CloudRuntimeEnv,
+  session: BetterAuthSessionPayload,
+  title: string,
+): Promise<Response | null> {
+  const user = session?.user;
+  if (!user?.id) {
+    return null;
+  }
+
+  const accessDecision = await resolveHostedCloudAccess(wrapCloudflareDatabase(env.DB), env, {
+    email: user.email ?? null,
+    userId: user.id,
+  });
+  if (accessDecision.allowed) {
+    return null;
+  }
+
+  const code = accessDecision.code ?? 'not_on_waitlist';
+  const details = buildFluentCloudAccessFailureDetails(code, {
+    email: user.email ?? null,
+    title: `${title} | Fluent`,
+  });
+  return html(
+    renderFluentCloudAccessFailurePage(code, {
+      email: user.email ?? null,
+      title: `${title} | Fluent`,
+    }),
+    details.status,
+  );
+}
+
+async function handleAccountDeletionOpsRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  const token = env.ACCOUNT_DELETION_OPS_TOKEN?.trim();
+  if (!token) {
+    return json(
+      {
+        error:
+          'Account deletion ops are disabled until ACCOUNT_DELETION_OPS_TOKEN is configured.',
+      },
+      503,
+    );
+  }
+
+  if (parseBearerToken(request.headers.get('authorization')) !== token) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  const match = /^\/ops\/account-deletion\/requests\/([^/]+)$/.exec(new URL(request.url).pathname);
+  if (!match?.[1]) {
+    return json({ error: 'Invalid account deletion request path.' }, 404);
+  }
+
+  const payload = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const rawAction = typeof payload.action === 'string' ? payload.action.trim().toLowerCase() : '';
+  if (!['complete', 'fail', 'cancel'].includes(rawAction)) {
+    return json({ error: 'Expected action to be one of complete, fail, or cancel.' }, 400);
+  }
+
+  const db = wrapCloudflareDatabase(env.DB);
+  const updated = await applyOperatorAccountDeletionAction(db, {
+    action: rawAction as AccountDeletionOperatorAction,
+    failureReason: typeof payload.failure_reason === 'string' ? payload.failure_reason : null,
+    operatorName: typeof payload.operator_name === 'string' ? payload.operator_name : null,
+    requestId: decodeURIComponent(match[1]),
+  });
+  if (!updated) {
+    return json({ error: 'Account deletion request not found.' }, 404);
+  }
+
+  return json({
+    request: updated,
+  });
 }
 
 export function createBetterAuth(request: Request, env: CloudRuntimeEnv) {
@@ -283,7 +649,7 @@ export function createBetterAuthConfig(request: Request, env: CloudRuntimeEnv) {
         'openid',
         'profile',
       ],
-      validAudiences: [baseURL, `${baseURL}/`, `${baseURL}/mcp`, `${baseURL}/mcp/`],
+      validAudiences: [baseURL, `${baseURL}/`, `${baseURL}/mcp`, `${baseURL}/mcp/`, `${baseURL}/mcp/chatgpt`, `${baseURL}/mcp/chatgpt/`],
     }),
     ...(env.BETTER_AUTH_API_KEY?.trim()
       ? [
@@ -326,16 +692,51 @@ async function maybeProvisionHostedSession(
   }
 
   try {
-    const result = await ensureHostedUserProvisioned(wrapCloudflareDatabase(env.DB), {
+    const db = wrapCloudflareDatabase(env.DB);
+    const deletionCode = await maybeResolveAccountDeletionFailureCode(db, {
       email: user.email ?? null,
       id: user.id,
       name: user.name ?? null,
+      sessionId: typeof session?.session?.id === 'string' ? session.session.id : null,
+    });
+    if (deletionCode) {
+      return { error: null, result: null };
+    }
+
+    const accessDecision = await resolveHostedCloudAccess(db, env, {
+      email: user.email ?? null,
+      userId: user.id,
+    });
+    if (!accessDecision.allowed) {
+      return { error: null, result: null };
+    }
+
+    const result = await ensureHostedUserProvisioned(db, {
+      email: user.email ?? null,
+      id: user.id,
+      name: user.name ?? null,
+    }, {
+      cloudAccess: accessDecision.provisioningSource,
+    });
+    await markFluentCloudEmailVerified(db, {
+      email: user.email ?? null,
+      note: 'Hosted Better Auth session established.',
+      tenantId: result.tenantId,
+      userId: user.id,
     });
     return {
       error: null,
       result,
     };
   } catch (error) {
+    await recordFluentCloudOnboardingFailure(wrapCloudflareDatabase(env.DB), {
+      code: 'hosted_provisioning_failed',
+      email: user.email ?? null,
+      message: error instanceof Error ? error.message : String(error),
+      note: 'Hosted provisioning failed during sign-in.',
+      stage: 'account_creation',
+      userId: user.id,
+    });
     return {
       error: error instanceof Error ? error.message : String(error),
       result: null,
@@ -419,11 +820,15 @@ async function handleBetterAuthMcpRequest(
     );
   }
 
-  const server = createFluentMcpServer(coreBindingsFromCloudEnv(env), new URL(request.url).origin);
+  const url = new URL(request.url);
+  const route = url.pathname === '/mcp/chatgpt' ? '/mcp/chatgpt' : '/mcp';
+  const server = createFluentMcpServer(coreBindingsFromCloudEnv(env), url.origin, {
+    profile: route === '/mcp/chatgpt' ? 'chatgpt_app' : 'full',
+  });
   const { createMcpHandler } = await import('agents/mcp');
   const handler = createMcpHandler(server, {
     authContext: { props: authResult as Record<string, unknown> },
-    route: '/mcp',
+    route,
   });
   return handler(request, env, ctx);
 }
@@ -459,15 +864,166 @@ export async function authenticateBetterAuthBearerRequest(
 
   try {
     const payload = await verifyHostedAccessToken(env, request, presented, resourceOrigin);
-    return jwtPayloadToAuthProps(payload, presented);
+    const authProps = jwtPayloadToAuthProps(payload, presented);
+    const db = wrapCloudflareDatabase(env.DB);
+    const clientDecision = await resolveHostedCloudClientDecision(db, request, authProps.oauthClientId);
+    if (clientDecision.code) {
+      return createFluentCloudEarlyAccessBearerResponse(request, resourceOrigin, clientDecision.code, {
+        clientName: clientDecision.clientName ?? authProps.oauthClientName ?? authProps.oauthClientId,
+        contractVersion: clientDecision.contractVersion,
+        email: authProps.email,
+      });
+    }
+
+    const accessDecision = await resolveHostedCloudAccess(db, env, {
+      email: authProps.email,
+      userId: authProps.userId,
+    });
+    if (!accessDecision.allowed && accessDecision.code) {
+      return createFluentCloudEarlyAccessBearerResponse(request, resourceOrigin, accessDecision.code, {
+        email: authProps.email,
+      });
+    }
+    await markFluentCloudClientConnected(db, {
+      clientId: authProps.oauthClientId,
+      clientName: authProps.oauthClientName,
+      email: authProps.email,
+      note: 'Hosted client authenticated against Fluent MCP.',
+      tenantId: authProps.tenantId,
+      userId: authProps.userId,
+    });
+
+    const deletionCode = await maybeResolveAccountDeletionFailureCode(db, {
+      email: authProps.email ?? null,
+      id: authProps.userId ?? '',
+      name: authProps.name ?? null,
+      sessionId: null,
+    });
+    if (deletionCode) {
+      return createFluentCloudEarlyAccessBearerResponse(request, resourceOrigin, deletionCode, {
+        email: authProps.email,
+      });
+    }
+
+    return authProps;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error ?? 'Invalid access token');
+    if (message.toLowerCase().includes('token inactive') || message.toLowerCase().includes('token has expired')) {
+      return createFluentCloudEarlyAccessBearerResponse(request, resourceOrigin, 'auth_expired');
+    }
     return createBearerAuthErrorResponse(
       request,
-      error instanceof Error ? error.message : 'Invalid access token',
+      message,
       resourceOrigin,
       FLUENT_SUPPORTED_SCOPES,
     );
   }
+}
+
+async function handleCloudOnboardingOpsRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  const migrationToken = env.BETTER_AUTH_MIGRATION_TOKEN?.trim();
+  if (!migrationToken) {
+    return json(
+      {
+        error: 'Fluent onboarding ops are disabled until BETTER_AUTH_MIGRATION_TOKEN is configured.',
+      },
+      503,
+    );
+  }
+
+  const presented = parseBearerToken(request.headers.get('authorization'));
+  if (presented !== migrationToken) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  const db = wrapCloudflareDatabase(env.DB);
+  const url = new URL(request.url);
+  if (request.method === 'GET') {
+    const stateParam = url.searchParams.get('state');
+    const state = isCloudOnboardingState(stateParam) ? stateParam : null;
+    const records = await listFluentCloudOnboardingRecords(db, {
+      email: url.searchParams.get('email'),
+      limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
+      state,
+    });
+    const eventsByEmail = Object.fromEntries(
+      await Promise.all(
+        records.map(async (record) => [
+          record.emailNormalized,
+          await listFluentCloudOnboardingEvents(db, { email: record.emailNormalized }, 12),
+        ]),
+      ),
+    ) as Record<string, Awaited<ReturnType<typeof listFluentCloudOnboardingEvents>>>;
+    const wantsHtml = request.headers.get('accept')?.includes('text/html') ?? false;
+    if (wantsHtml) {
+      return html(
+        renderFluentCloudOnboardingOpsPage({
+          descriptor: fluentCloudOnboardingDescriptor(),
+          eventsByEmail,
+          records,
+        }),
+      );
+    }
+    return json({
+      descriptor: fluentCloudOnboardingDescriptor(),
+      eventsByEmail,
+      records,
+    });
+  }
+
+  if (request.method === 'POST') {
+    const payload = (await request.json().catch(() => ({}))) as {
+      action?: string;
+      actor_id?: string;
+      actor_label?: string;
+      actor_type?: 'operator' | 'support';
+      code?: string;
+      email?: string;
+      message?: string;
+      metadata?: unknown;
+      note?: string;
+      retry_after?: string;
+      stage?: string;
+      account_kind?: string;
+      stripe_customer_id?: string;
+      stripe_subscription_id?: string;
+      support_tags?: string[] | string;
+      ticket_ref?: string;
+    };
+    if (!payload.email?.trim()) {
+      return json({ error: 'email is required.' }, 400);
+    }
+    if (!isCloudOnboardingAction(payload.action)) {
+      return json({ error: 'Unsupported or missing action.' }, 400);
+    }
+
+    const record = await applyFluentCloudOperatorAction(db, {
+      action: payload.action,
+      actorId: payload.actor_id,
+      actorLabel: payload.actor_label,
+      actorType: payload.actor_type,
+      accountKind: payload.account_kind,
+      code: payload.code,
+      email: payload.email,
+      message: payload.message,
+      metadata: payload.metadata,
+      note: payload.note,
+      retryAfter: payload.retry_after,
+      stage: payload.stage,
+      stripeCustomerId: payload.stripe_customer_id,
+      stripeSubscriptionId: payload.stripe_subscription_id,
+      supportTags: payload.support_tags,
+      ticketRef: payload.ticket_ref,
+    });
+    const events = await listFluentCloudOnboardingEvents(db, { email: payload.email }, 12);
+    return json({
+      descriptor: fluentCloudOnboardingDescriptor(),
+      events,
+      record,
+    });
+  }
+
+  return json({ error: 'Method not allowed' }, 405);
 }
 
 async function verifyHostedAccessToken(
@@ -602,6 +1158,11 @@ export function derivePostSignInRedirectUrl(requestUrl: string, signedIn: boolea
     return null;
   }
 
+  const next = normalizeInternalRedirectTarget(url.searchParams.get('next'));
+  if (next) {
+    return new URL(next, url.origin).toString();
+  }
+
   if (!url.searchParams.get('client_id') || !url.searchParams.get('redirect_uri')) {
     return null;
   }
@@ -620,6 +1181,46 @@ export function deriveMagicLinkCallbackUrl(requestUrl: string): string {
   }
   const query = callbackSearch.toString();
   return query ? `${parsed.pathname}?${query}` : parsed.pathname;
+}
+
+function buildSignInRedirectUrl(requestUrl: string): string {
+  const url = new URL(requestUrl);
+  const next = `${url.pathname}${url.search}`;
+  return `${url.origin}/sign-in?next=${encodeURIComponent(next)}`;
+}
+
+function accountDeletionActorFromSession(session: BetterAuthSessionPayload): AccountDeletionActor {
+  if (!session?.user?.id) {
+    throw new Error('Cannot build an account deletion actor without a signed-in Better Auth user.');
+  }
+  return {
+    email: typeof session.user.email === 'string' ? session.user.email : null,
+    id: session.user.id,
+    name: typeof session.user.name === 'string' ? session.user.name : null,
+    sessionId: typeof session.session?.id === 'string' ? session.session.id : null,
+  };
+}
+
+function normalizeInternalRedirectTarget(value: string | null): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || !trimmed.startsWith('/')) {
+    return null;
+  }
+  if (trimmed.startsWith('//')) {
+    return null;
+  }
+  return trimmed;
+}
+
+async function maybeResolveAccountDeletionFailureCode(
+  db: ReturnType<typeof wrapCloudflareDatabase>,
+  actor: AccountDeletionActor,
+): Promise<'account_deleted' | null> {
+  if (!actor.id) {
+    return null;
+  }
+  const flow = await getAccountDeletionFlow(db, actor);
+  return flow.currentRequest?.status === 'deletion_completed' ? 'account_deleted' : null;
 }
 
 async function sha256Base64Url(value: string | null): Promise<string> {
@@ -646,11 +1247,33 @@ async function buildHostedAccessTokenClaims(
   }
 
   const db = wrapCloudflareDatabase(env.DB);
-  const provisioning = await ensureHostedUserProvisioned(db, {
+  const accessDecision = await resolveHostedCloudAccess(db, env, {
     email: typeof user.email === 'string' ? user.email : null,
-    id: user.id,
-    name: typeof user.name === 'string' ? user.name : null,
+    userId: user.id,
   });
+  if (!accessDecision.allowed) {
+    return {
+      ...(typeof user.email === 'string' ? { email: user.email, login: user.email } : {}),
+      ...(typeof user.name === 'string' ? { name: user.name } : {}),
+      userId: user.id,
+    };
+  }
+
+  const provisioning = accessDecision.needsProvisioning
+    ? await ensureHostedUserProvisioned(db, {
+        email: typeof user.email === 'string' ? user.email : null,
+        id: user.id,
+        name: typeof user.name === 'string' ? user.name : null,
+      }, {
+        cloudAccess: accessDecision.provisioningSource,
+      })
+    : {
+        created: false,
+        inviteId: null,
+        profileId: accessDecision.profileId ?? 'owner',
+        tenantId: accessDecision.tenantId ?? `tenant:better-auth:${user.id}`,
+        waitlistEntryId: null,
+      };
 
   return {
     ...(typeof user.email === 'string' ? { email: user.email, login: user.email } : {}),
@@ -676,11 +1299,32 @@ function parseJsonStringArray(value: string | null | undefined): string[] {
 }
 
 function betterAuthConfigErrorResponse(error: unknown): Response {
+  const payload = createFluentCloudAccessFailurePayload('temporarily_unavailable');
   return json(
     {
-      error: error instanceof Error ? error.message : 'Better Auth is not configured.',
+      ...payload,
+      detail: error instanceof Error ? error.message : 'Better Auth is not configured.',
     },
     503,
+  );
+}
+
+function betterAuthRuntimeErrorResponse(request: Request, error: unknown): Response {
+  const url = new URL(request.url);
+  console.error('Better Auth request failed', {
+    message: error instanceof Error ? error.message : String(error),
+    method: request.method,
+    pathname: url.pathname,
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+
+  return json(
+    {
+      error: 'hosted_auth_failed',
+      error_description: 'Hosted authorization is temporarily unavailable.',
+      detail: error instanceof Error ? error.message : String(error),
+    },
+    500,
   );
 }
 
@@ -735,7 +1379,7 @@ function renderSignInPage(input: {
   const signedOutBody = `
 <p class="eyebrow">⟩ Fluent sign-in</p>
 <h1 class="display">Sign in with <span class="accent">email</span></h1>
-<p class="lede">We'll send you a one-time sign-in link. If this is your first time, your Fluent account is created after you verify.</p>
+<p class="lede">Fluent is in early access and open source. Approved accounts can sign in here today, and everyone else can request early access or explore the open-source runtime.</p>
 <div class="auth-card">
   <form id="magic-link-form" class="stack">
     <label>
@@ -751,8 +1395,12 @@ function renderSignInPage(input: {
 </div>
 <ul class="support-list">
   <li>No password required.</li>
-  <li>Open the sign-in link in this same browser.</li>
-  <li>Links expire in 15 minutes.</li>
+  <li>Only approved early-access accounts can finish sign-in right now.</li>
+  <li>Request early access at <a href="${escapeHtml(FLUENT_CLOUD_WAITLIST_URL)}">${escapeHtml(FLUENT_CLOUD_WAITLIST_URL)}</a>.</li>
+  <li>Explore the open-source runtime at <a href="${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}">${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}</a>.</li>
+  <li>Contact <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a> if you expected access.</li>
+  <li>Open the sign-in link in this same browser. Links expire in 15 minutes.</li>
+  <li>Need to delete a Fluent account later? Sign in first, then open <code>/account/delete</code>.</li>
 </ul>`;
 
   return renderAuthShell({
@@ -828,6 +1476,12 @@ function renderConsentPage(input: {
   <ul class="scope-list">${scopeItems}</ul>
   <p class="meta">Client ID <code>${escapeHtml(input.clientId ?? 'unknown')}</code></p>
 </div>
+<div class="notice soft">
+  <p class="notice-title">What approving means</p>
+  <p>Fluent stores your account, OAuth consent, and the Meals, Style, and Health data this client is allowed to read or update.</p>
+  <p>Self-serve user exports are JSON files retained for 7 days. Provisioned-account deletion is user-initiated but operator-assisted today.</p>
+  <p class="meta">Policy: <a href="https://meetfluent.app/privacy/">meetfluent.app/privacy</a></p>
+</div>
 <div class="actions">
   <button id="approve" class="btn-primary">Approve <span class="btn-arrow">→</span></button>
   <button id="deny" class="btn-secondary">Deny</button>
@@ -861,6 +1515,169 @@ document.getElementById('deny')?.addEventListener('click', () => submitConsent(f
 </script>`,
     title: 'Authorize | Fluent',
   });
+}
+
+function renderAccountDeletionPage(input: {
+  actionMessage: string | null;
+  flow: AccountDeletionFlow;
+  origin: string;
+  session: BetterAuthSessionPayload;
+  support: ReturnType<typeof getAccountDeletionSupportLinks>;
+}): string {
+  const policy = buildAccountDeletionPolicy(input.flow.subjectType);
+  const request = input.flow.currentRequest;
+  const requestStatus = request?.status ?? 'no_request';
+  const statusTone =
+    requestStatus === 'deletion_completed'
+      ? 'success'
+      : requestStatus === 'deletion_cancelled'
+        ? 'soft'
+        : requestStatus === 'deletion_failed'
+          ? 'warn'
+          : requestStatus === 'manual_review_required'
+            ? 'warn'
+            : 'soft';
+  const statusLabel = humanizeAccountDeletionStatus(request?.status ?? null);
+  const signedInAs = escapeHtml(input.session?.user?.email ?? input.session?.user?.id ?? 'your account');
+  const actionNotice = input.actionMessage
+    ? `<div class="notice ${statusTone}"><p class="notice-title">${escapeHtml(statusLabel)}</p><p>${escapeHtml(input.actionMessage)}</p></div>`
+    : '';
+  const subjectLabel = input.flow.subjectType === 'waitlist_only' ? 'Early-access request account' : 'Provisioned Fluent account';
+  const statusCard = `
+<div class="client-card">
+  <div class="client-logo client-logo-fallback">${input.flow.subjectType === 'waitlist_only' ? 'W' : 'C'}</div>
+  <div class="client-meta">
+    <p class="client-name">${escapeHtml(subjectLabel)}</p>
+    <p class="client-sub">Signed in as <strong>${signedInAs}</strong></p>
+    <p class="meta">Current status: <code>${escapeHtml(statusLabel)}</code></p>
+  </div>
+</div>`;
+
+  const requestMeta = request
+    ? `<div class="status-list">
+  <div class="status-row"><span class="status-key">Request ID</span><code class="status-val">${escapeHtml(request.id)}</code></div>
+  <div class="status-row"><span class="status-key">Timeline</span><span class="status-val">${escapeHtml(request.timelineSummary ?? policy.expectedTimeline)}</span></div>
+  <div class="status-row"><span class="status-key">Self-serve ready</span><code class="status-val">${String(input.flow.selfServeReady)}</code></div>
+  <div class="status-row"><span class="status-key">Latest update</span><span class="status-val">${escapeHtml(request.updatedAt ?? 'pending')}</span></div>
+  ${
+    request.manualReviewReason
+      ? `<div class="status-row"><span class="status-key">Manual review</span><span class="status-val">${escapeHtml(request.manualReviewReason)}</span></div>`
+      : ''
+  }
+  ${
+    request.lastError
+      ? `<div class="status-row"><span class="status-key">Last error</span><span class="status-val">${escapeHtml(request.lastError)}</span></div>`
+      : ''
+  }
+</div>`
+    : '';
+
+  const deletedDataList = policy.deletedData.map((entry) => `<li>${escapeHtml(entry)}</li>`).join('');
+  const retentionList = policy.retentionExceptions.map((entry) => `<li>${escapeHtml(entry)}</li>`).join('');
+  const clientEffectsList = policy.connectedClients.map((entry) => `<li>${escapeHtml(entry)}</li>`).join('');
+
+  const actions = renderAccountDeletionActions(input.flow);
+  const returnToSignIn = `${input.origin}/sign-in`;
+
+  return renderAuthShell({
+    body: `${actionNotice}
+<p class="eyebrow">⟩ Fluent account deletion</p>
+<h1 class="display">Delete your <span class="accent">Fluent</span> account</h1>
+<p class="lede">This page handles both provisioned Fluent accounts and signed-in early-access request accounts. Fluent always records an audit entry, shows an explicit completion state, and calls out any retention exception before the request is done.</p>
+${statusCard}
+${requestMeta}
+<div class="scope-card">
+  <p class="eyebrow-sm">What gets deleted</p>
+  <ul class="scope-list">${deletedDataList}</ul>
+</div>
+<div class="scope-card">
+  <p class="eyebrow-sm">What may be retained</p>
+  <ul class="scope-list">${retentionList}</ul>
+</div>
+<div class="scope-card">
+  <p class="eyebrow-sm">Connected clients</p>
+  <ul class="scope-list">${clientEffectsList}</ul>
+  <p class="meta">Expected timeline: ${escapeHtml(policy.expectedTimeline)}</p>
+</div>
+${actions}
+<ul class="support-list">
+  <li>Waitlist-only deletions attempt to finish immediately after confirmation.</li>
+  <li>Provisioned Fluent accounts fall back to operator review until the full self-serve data purge is ready.</li>
+  <li>If deletion completes, connected clients lose OAuth access and must not expect Fluent to reconnect.</li>
+  <li>Need Fluent access instead of deletion? Request early access at <a href="${escapeHtml(input.support.waitlistUrl)}">${escapeHtml(input.support.waitlistUrl)}</a>.</li>
+  <li>Need a local alternative? Run Fluent yourself with the open-source runtime at <a href="${escapeHtml(input.support.ossUrl)}">${escapeHtml(input.support.ossUrl)}</a>.</li>
+  <li>Questions or retention exceptions: <a href="mailto:${escapeHtml(input.support.supportEmail)}">${escapeHtml(input.support.supportEmail)}</a>.</li>
+  <li>Sign-in page: <a href="${escapeHtml(returnToSignIn)}">${escapeHtml(returnToSignIn)}</a>.</li>
+</ul>`,
+    title: 'Account deletion | Fluent',
+  });
+}
+
+function renderAccountDeletionActions(flow: AccountDeletionFlow): string {
+  const request = flow.currentRequest;
+  if (!request) {
+    return `
+<div class="actions">
+  <form method="post" action="/account/delete/request">
+    <button class="btn-primary" type="submit">Start deletion request <span class="btn-arrow">→</span></button>
+  </form>
+</div>`;
+  }
+
+  if (request.status === 'deletion_requested') {
+    return `
+<div class="actions actions-stack">
+  <form method="post" action="/account/delete/confirm">
+    <button class="btn-primary" type="submit">Confirm deletion <span class="btn-arrow">→</span></button>
+  </form>
+  <form method="post" action="/account/delete/cancel">
+    <button class="btn-secondary" type="submit">Cancel request</button>
+  </form>
+</div>`;
+  }
+
+  if (request.status === 'deletion_pending' || request.status === 'manual_review_required') {
+    return `
+<div class="actions actions-stack">
+  <form method="post" action="/account/delete/cancel">
+    <button class="btn-secondary" type="submit">Cancel deletion</button>
+  </form>
+</div>`;
+  }
+
+  if (request.status === 'deletion_cancelled' || request.status === 'deletion_failed') {
+    return `
+<div class="actions">
+  <form method="post" action="/account/delete/request">
+    <button class="btn-primary" type="submit">Submit a new deletion request <span class="btn-arrow">→</span></button>
+  </form>
+</div>`;
+  }
+
+  return `
+<div class="notice success">
+  <p class="notice-title">Deletion completed</p>
+  <p>Fluent recorded the final completion state for this request.</p>
+</div>`;
+}
+
+function humanizeAccountDeletionStatus(status: AccountDeletionRequestRecord['status'] | null): string {
+  switch (status) {
+    case 'deletion_requested':
+      return 'Deletion requested';
+    case 'deletion_pending':
+      return 'Deletion pending';
+    case 'deletion_completed':
+      return 'Deletion completed';
+    case 'deletion_cancelled':
+      return 'Deletion cancelled';
+    case 'manual_review_required':
+      return 'Manual review required';
+    case 'deletion_failed':
+      return 'Deletion failed';
+    default:
+      return 'No deletion request yet';
+  }
 }
 
 function humanizeScope(scope: string): string {
@@ -1039,6 +1856,8 @@ function renderAuthShell(input: { body: string; title: string }): string {
     .notice p { margin: 0 0 4px; font-size: 14px; color: var(--muted); }
     .notice.success { border-color: rgba(163,176,148,0.28); }
     .notice.success .notice-title { color: var(--success); }
+    .notice.soft { border-color: rgba(212,196,168,0.2); }
+    .notice.soft .notice-title { color: var(--accent); }
     .notice.warn { border-color: rgba(224,155,125,0.3); }
     .notice.warn .notice-title { color: var(--warn); }
     .client-card {
@@ -1077,6 +1896,7 @@ function renderAuthShell(input: { body: string; title: string }): string {
     }
     .scope-human { color: var(--ink); font-size: 14px; }
     .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
+    .actions form { display: flex; flex: 1; margin: 0; }
     .actions .btn-primary, .actions .btn-secondary { flex: 1; min-width: 140px; }
     .status-list { margin-top: 20px; display: grid; gap: 10px; }
     .status-row {
@@ -1213,6 +2033,7 @@ function jwtPayloadToAuthProps(payload: JWTPayload, accessToken: string): Fluent
   return {
     accessToken,
     email: typeof record.email === 'string' ? record.email : undefined,
+    identityRequired: true,
     login: typeof record.login === 'string' ? record.login : undefined,
     name: typeof record.name === 'string' ? record.name : undefined,
     oauthClientId:
@@ -1243,12 +2064,12 @@ function createBearerAuthErrorResponse(
   const resourceMetadataUrl = `${resourceOrigin}/.well-known/oauth-protected-resource`;
   const headerParts = [
     'Bearer realm="OAuth"',
-    `resource_metadata="${escapeHtml(resourceMetadataUrl)}"`,
+    `resource_metadata="${escapeHeaderQuotedString(resourceMetadataUrl)}"`,
     'error="invalid_token"',
-    `error_description="${escapeHtml(description)}"`,
+    `error_description="${escapeHeaderQuotedString(description)}"`,
   ];
   if (requiredScopes.length) {
-    headerParts.push(`scope="${escapeHtml(requiredScopes.join(' '))}"`);
+    headerParts.push(`scope="${escapeHeaderQuotedString(requiredScopes.join(' '))}"`);
   }
   return new Response(
     JSON.stringify({
@@ -1265,12 +2086,154 @@ function createBearerAuthErrorResponse(
   );
 }
 
+async function maybeCreateFluentCloudEarlyAccessPage(
+  request: Request,
+  env: CloudRuntimeEnv,
+  session: BetterAuthSessionPayload,
+  title: string,
+): Promise<Response | null> {
+  const user = session?.user;
+  if (!user) {
+    return null;
+  }
+
+  const db = wrapCloudflareDatabase(env.DB);
+  const clientDecision = await resolveHostedCloudClientDecision(db, request, new URL(request.url).searchParams.get('client_id'));
+  if (clientDecision.code) {
+    const details = buildFluentCloudAccessFailureDetails(clientDecision.code, {
+      clientName: clientDecision.clientName ?? new URL(request.url).searchParams.get('client_id'),
+      contractVersion: clientDecision.contractVersion,
+      title: `${title} | Fluent`,
+    });
+    return html(
+      renderFluentCloudAccessFailurePage(clientDecision.code, {
+        clientName: clientDecision.clientName ?? new URL(request.url).searchParams.get('client_id'),
+        contractVersion: clientDecision.contractVersion,
+        title: `${title} | Fluent`,
+      }),
+      details.status,
+    );
+  }
+
+  const accessDecision = await resolveHostedCloudAccess(db, env, {
+    email: user.email ?? null,
+    userId: user.id,
+  });
+  if (accessDecision.allowed || !accessDecision.code) {
+    const deletionCode = await maybeResolveAccountDeletionFailureCode(db, {
+      email: user.email ?? null,
+      id: user.id,
+      name: user.name ?? null,
+      sessionId: typeof session.session?.id === 'string' ? session.session.id : null,
+    });
+    if (!deletionCode) {
+      return null;
+    }
+
+    const deletedDetails = buildFluentCloudAccessFailureDetails(deletionCode, {
+      email: user.email ?? null,
+      title: `${title} | Fluent`,
+    });
+    return html(
+      renderFluentCloudAccessFailurePage(deletionCode, {
+        email: user.email ?? null,
+        title: `${title} | Fluent`,
+      }),
+      deletedDetails.status,
+    );
+  }
+
+  const details = buildFluentCloudAccessFailureDetails(accessDecision.code, {
+    email: user.email ?? null,
+    title: `${title} | Fluent`,
+  });
+  return html(
+    renderFluentCloudAccessFailurePage(accessDecision.code, {
+      email: user.email ?? null,
+      title: `${title} | Fluent`,
+    }),
+    details.status,
+  );
+}
+
+function createFluentCloudEarlyAccessBearerResponse(
+  request: Request,
+  resourceOrigin: string,
+  code: Parameters<typeof buildFluentCloudAccessFailureDetails>[0],
+  context: Parameters<typeof buildFluentCloudAccessFailureDetails>[1] = {},
+): Response {
+  const resourceMetadataUrl = `${resourceOrigin}/.well-known/oauth-protected-resource`;
+  const details = buildFluentCloudAccessFailureDetails(code, context);
+  const headerParts = [
+    'Bearer realm="OAuth"',
+    `resource_metadata="${escapeHeaderQuotedString(resourceMetadataUrl)}"`,
+    `error="${details.oauthError}"`,
+    `error_description="${escapeHeaderQuotedString(details.message)}"`,
+  ];
+  if (FLUENT_SUPPORTED_SCOPES.length) {
+    headerParts.push(`scope="${escapeHeaderQuotedString(FLUENT_SUPPORTED_SCOPES.join(' '))}"`);
+  }
+  const payload = createFluentCloudAccessFailurePayload(code, context);
+  return new Response(
+    JSON.stringify(payload),
+    {
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'WWW-Authenticate': headerParts.join(', '),
+      },
+      status: details.status,
+    },
+  );
+}
+
 function parseBearerToken(headerValue: string | null): string | null {
   if (!headerValue) {
     return null;
   }
   const match = /^Bearer\s+(.+)$/i.exec(headerValue.trim());
   return match?.[1]?.trim() || null;
+}
+
+function isCloudOnboardingState(value: string | null): value is FluentCloudOnboardingState {
+  return (
+    value === 'waitlisted' ||
+    value === 'invited' ||
+    value === 'invite_accepted' ||
+    value === 'account_created' ||
+    value === 'checkout_required' ||
+    value === 'trialing' ||
+    value === 'active' ||
+    value === 'past_due_grace' ||
+    value === 'limited_access' ||
+    value === 'canceled_retention' ||
+    value === 'suspended' ||
+    value === 'deletion_requested' ||
+    value === 'deleted'
+  );
+}
+
+function isCloudOnboardingAction(value: string | undefined): value is Parameters<typeof applyFluentCloudOperatorAction>[1]['action'] {
+  return (
+    value === 'waitlist' ||
+    value === 'invite' ||
+    value === 'accept_invite' ||
+    value === 'provision_reviewer_demo' ||
+    value === 'mark_checkout_required' ||
+    value === 'mark_trialing' ||
+    value === 'mark_active' ||
+    value === 'mark_past_due_grace' ||
+    value === 'mark_limited_access' ||
+    value === 'mark_canceled_retention' ||
+    value === 'suspend' ||
+    value === 'resume' ||
+    value === 'request_deletion' ||
+    value === 'cancel_deletion' ||
+    value === 'delete' ||
+    value === 'record_failure' ||
+    value === 'clear_failure' ||
+    value === 'escalate_support' ||
+    value === 'resolve_support'
+  );
 }
 
 function escapeHtml(value: string): string {

@@ -1,3 +1,9 @@
+import {
+  acceptFluentCloudInviteForHostedUser,
+  type HostedCloudProvisioningSource,
+  markFluentCloudAccountOnboarding,
+} from './cloud-invites';
+import { markFluentCloudAccountCreated, markFluentCloudInviteAccepted } from './cloud-onboarding';
 import type { FluentDatabase } from './storage';
 
 const DEFAULT_PROFILE_ID = 'owner';
@@ -31,8 +37,10 @@ export interface HostedAuthUser {
 
 export interface HostedProvisioningResult {
   created: boolean;
+  inviteId: string | null;
   profileId: string;
   tenantId: string;
+  waitlistEntryId: string | null;
 }
 
 export interface HostedIdentityMembership {
@@ -43,24 +51,72 @@ export interface HostedIdentityMembership {
 export async function ensureHostedUserProvisioned(
   db: FluentDatabase,
   user: HostedAuthUser,
+  options: {
+    cloudAccess?: HostedCloudProvisioningSource | null;
+  } = {},
 ): Promise<HostedProvisioningResult> {
   const existing = await getHostedUserMembership(db, user.id);
 
   if (existing) {
     await syncHostedIdentityRecord(db, user, existing.tenantId, existing.profileId);
+    await markFluentCloudAccountCreated(db, {
+      email: user.email ?? null,
+      metadata: {
+        accessSource: options.cloudAccess?.accessSource ?? 'existing_membership',
+      },
+      note: 'Hosted provisioning reused an existing active membership.',
+      tenantId: existing.tenantId,
+      userId: user.id,
+    });
     return {
       created: false,
+      inviteId: null,
       profileId: existing.profileId,
       tenantId: existing.tenantId,
+      waitlistEntryId: null,
     };
   }
 
+  if (!options.cloudAccess) {
+    throw new Error('Hosted user provisioning requires a prior Fluent Cloud access decision.');
+  }
+
+  const inviteAcceptance =
+    options.cloudAccess?.accessSource === 'cloud_invite'
+      ? await acceptFluentCloudInviteForHostedUser(db, {
+          email: user.email ?? null,
+          id: user.id,
+        })
+      : null;
+  if (inviteAcceptance) {
+    await markFluentCloudInviteAccepted(db, {
+      email: user.email ?? null,
+      metadata: {
+        inviteId: inviteAcceptance.invite.id,
+        waitlistEntryId: inviteAcceptance.waitlistEntry.id,
+      },
+      tenantId: `tenant:better-auth:${user.id}`,
+      userId: user.id,
+    });
+  }
   const tenantId = `tenant:better-auth:${user.id}`;
   const profileId = DEFAULT_PROFILE_ID;
   const displayName = normalizeDisplayName(user.name, user.email);
   const email = normalizeNullableText(user.email);
+  const cloudAccessMetadata = {
+    accessSource: options.cloudAccess?.accessSource ?? 'hosted_auth_bootstrap',
+    ...(inviteAcceptance
+      ? {
+          inviteAcceptedAt: inviteAcceptance.invite.acceptedAt,
+          inviteId: inviteAcceptance.invite.id,
+          publicState: 'account_onboarding',
+          waitlistEntryId: inviteAcceptance.waitlistEntry.id,
+        }
+      : {}),
+  };
   const metadataJson = JSON.stringify({
     authProvider: 'better-auth',
+    cloudAccess: cloudAccessMetadata,
     seedSource: 'hosted-auth-bootstrap',
     userId: user.id,
   });
@@ -70,7 +126,7 @@ export async function ensureHostedUserProvisioned(
       .prepare(
         `INSERT OR IGNORE INTO fluent_tenants (
           id, slug, display_name, backend_mode, status, onboarding_state, onboarding_version, metadata_json
-        ) VALUES (?, ?, ?, 'hosted', 'active', 'not_started', '1', ?)`,
+        ) VALUES (?, ?, ?, 'hosted', 'onboarding', 'not_started', '1', ?)`,
       )
       .bind(tenantId, buildTenantSlug(user), displayName, metadataJson),
     db
@@ -85,6 +141,7 @@ export async function ensureHostedUserProvisioned(
         displayName,
         JSON.stringify({
           authProvider: 'better-auth',
+          cloudAccess: cloudAccessMetadata,
           email,
           seededBy: 'hosted-auth-bootstrap',
         }),
@@ -117,6 +174,7 @@ export async function ensureHostedUserProvisioned(
         displayName,
         JSON.stringify({
           authProvider: 'better-auth',
+          cloudAccess: cloudAccessMetadata,
           seedSource: 'hosted-auth-bootstrap',
         }),
       ),
@@ -127,16 +185,44 @@ export async function ensureHostedUserProvisioned(
         ) VALUES (?, ?, ?, 'owner', 'active')
         ON CONFLICT(user_id, tenant_id, profile_id) DO UPDATE SET
           role = excluded.role,
-          status = excluded.status,
           updated_at = CURRENT_TIMESTAMP`,
       )
       .bind(user.id, tenantId, profileId),
   ]);
 
+  if (inviteAcceptance) {
+    await db
+      .prepare(
+        `UPDATE fluent_cloud_invites
+         SET accepted_tenant_id = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      )
+      .bind(tenantId, inviteAcceptance.invite.id)
+      .run();
+    await markFluentCloudAccountOnboarding(db, {
+      tenantId,
+      waitlistEntryId: inviteAcceptance.waitlistEntry.id,
+    });
+  }
+  await markFluentCloudAccountCreated(db, {
+    email: user.email ?? null,
+    metadata: {
+      accessSource: options.cloudAccess?.accessSource ?? 'hosted_auth_bootstrap',
+      inviteId: inviteAcceptance?.invite.id ?? null,
+      waitlistEntryId: inviteAcceptance?.waitlistEntry.id ?? null,
+    },
+    note: 'Hosted tenant and profile provisioned.',
+    tenantId,
+    userId: user.id,
+  });
+
   return {
     created: true,
+    inviteId: inviteAcceptance?.invite.id ?? null,
     profileId,
     tenantId,
+    waitlistEntryId: inviteAcceptance?.waitlistEntry.id ?? null,
   };
 }
 

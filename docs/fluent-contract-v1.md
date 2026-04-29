@@ -1,18 +1,26 @@
 # Fluent MCP Contract v1 Freeze
 
-This document records the current Fluent MCP `v1.37` freeze for the shared Fluent early access and Fluent open-source runtime contract.
+This document records the current Fluent MCP `v1.48` freeze for the shared Fluent contract.
 
 Current freeze note:
 
-- Phase 20 keeps the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; preserves the Meals recipe-card, pantry-dashboard, and grocery-list render surfaces plus their widget template resources for hosts that support MCP output templates; and keeps Health on the block-first coaching surface instead of the pre-production weekly-plan contract.
+- Phase 27 keeps the v2, v3, v4, v5, v6, and v7 Style purchase-analysis widget resources for compatibility and adds the v8 widget resource so ChatGPT/App SDK hosts refetch the corrected inline closeness score renderer without clamping already-percent comparator scores to 100%. Phase 26 kept the v2, v3, v4, v5, and v6 Style purchase-analysis widget resources for compatibility and added the v7 widget resource so ChatGPT/App SDK hosts refetched the combined closet-comparison cards with inline closeness scores instead of rendering a redundant separate closeness section. Phase 25 kept the v2, v3, v4, and v5 Style purchase-analysis widget resources for compatibility and added the v6 widget resource so ChatGPT/App SDK hosts refetched the more human stylist copy for photo reads and verdict reasons instead of reusing cached v5 markup. Phase 24 kept the v2, v3, and v4 Style purchase-analysis widget resources for compatibility and added the v5 widget resource so ChatGPT/App SDK hosts refetched the image-CSP and closet-comparator-photo improvements instead of reusing cached v4 markup. Phase 23 kept the v2 and v3 Style purchase-analysis widget resources for compatibility and added the v4 widget resource so ChatGPT/App SDK hosts refetched the polished stylist-analysis HTML instead of reusing cached v3 markup. Phase 22 makes host profiles first-class MCP metadata so ChatGPT, Claude, OpenClaw, Codex, and generic MCP clients can share one canonical Fluent tool vocabulary while using host-aware routing, render-adapter policy, and packaged-skill expectations. Phase 21 added MCP-native runtime guidance resources and fluent_get_next_actions as the in-band skill substitute for ChatGPT and generic MCP hosts, while preserving the full canonical tool surface for Claude, OpenClaw, Codex, OSS, and operator workflows. Phase 20 kept the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; removed the legacy meals_render_grocery_list alias and grocery_list_widget capability while preserving meals_render_grocery_list_v2 as the canonical ChatGPT/App SDK grocery-list render surface; added the v3 Style purchase-analysis widget resource while keeping the v2 widget resource for compatibility; added style_prepare_purchase_analysis as the first-hop purchase-analysis routing tool, keeps style_render_purchase_analysis as non-widget structured output, and gates the actual style_show_purchase_analysis_widget surface behind host visual evidence; and kept Health on the block-first coaching surface instead of the pre-production weekly-plan contract.
 
 ## Frozen Surface
 
-- contract version: `2026-04-20.fluent-core-v1.37`
+- contract version: `2026-04-26.fluent-core-v1.48`
 - resources:
   - `fluent://core/capabilities`
+  - `fluent://core/account-status`
   - `fluent://core/profile`
   - `fluent://core/domains`
+  - `fluent://guidance/routing`
+  - `fluent://guidance/host-capabilities`
+  - `fluent://guidance/meals-planning`
+  - `fluent://guidance/meals-shopping`
+  - `fluent://guidance/style-purchase-analysis`
+  - `fluent://guidance/health-blocks`
+  - `ui://widget/fluent-home-v1.html`
   - `fluent://health/preferences`
   - `fluent://health/context`
   - `fluent://health/today`
@@ -38,8 +46,17 @@ Current freeze note:
   - `fluent://style/item-profiles/{item_id}`
   - `fluent://style/item-provenance/{item_id}`
   - `ui://widget/fluent-purchase-analysis-v2.html`
+  - `ui://widget/fluent-purchase-analysis-v3.html`
+  - `ui://widget/fluent-purchase-analysis-v4.html`
+  - `ui://widget/fluent-purchase-analysis-v5.html`
+  - `ui://widget/fluent-purchase-analysis-v6.html`
+  - `ui://widget/fluent-purchase-analysis-v7.html`
+  - `ui://widget/fluent-purchase-analysis-v8.html`
 - tools:
   - `fluent_get_capabilities`
+  - `fluent_get_account_status`
+  - `fluent_get_home`
+  - `fluent_get_next_actions`
   - `fluent_get_profile`
   - `fluent_update_profile`
   - `fluent_list_domains`
@@ -72,7 +89,6 @@ Current freeze note:
   - `meals_render_recipe_card`
   - `meals_render_pantry_dashboard`
   - `meals_render_grocery_list_v2`
-  - `meals_render_grocery_list`
   - `meals_create_recipe`
   - `meals_list_recipes`
   - `meals_get_preferences`
@@ -113,10 +129,17 @@ Current freeze note:
   - `style_get_item_profile`
   - `style_get_item_provenance`
   - `style_upsert_item`
+  - `style_archive_item`
   - `style_upsert_item_profile`
   - `style_upsert_item_photos`
+  - `style_set_item_product_image`
+  - `style_extract_purchase_page_evidence`
+  - `style_prepare_purchase_analysis`
+  - `style_get_purchase_vision_packet`
+  - `style_submit_purchase_visual_observations`
   - `style_analyze_purchase`
   - `style_render_purchase_analysis`
+  - `style_show_purchase_analysis_widget`
   - `style_apply_purchase_analysis_action`
   - `style_get_visual_bundle`
 - optional capabilities:
@@ -137,11 +160,15 @@ Current freeze note:
   - `grocery_purchase_carry_forward`
   - `confirmed_order_sync`
   - `tool_discovery_hints`
+  - `runtime_guidance_resources`
+  - `next_action_routing`
+  - `host_profiles`
   - `tool_list_fallback`
+  - `fluent_home`
+  - `fluent_home_widget`
   - `ingredient_form_groups`
   - `recipe_card_widget`
   - `pantry_dashboard_widget`
-  - `grocery_list_widget`
   - `grocery_list_widget_v2`
   - `style_profile`
   - `style_context`
@@ -166,6 +193,7 @@ Current freeze note:
   - `health_block_reviews`
   - `health_workout_logging`
   - `health_body_metrics`
+  - `account_status_surface`
 
 ## Runtime Notes
 
@@ -211,19 +239,20 @@ Health tools prefer health:read and health:write. Style tools prefer style:read 
 
 ## Local Parity Rule
 
-Fluent open-source runtime must use the same public tool names, resource names, payload shapes, provenance fields, and onboarding writes as managed Fluent. The legacy `backendMode = "local"` bridge value may remain, but differences in transport or auth are allowed only when they do not change the MCP contract itself.
+The open-source runtime must use the same public tool names, resource names, payload shapes, provenance fields, and onboarding writes as early-access Fluent. The legacy `backendMode = "local"` bridge value may remain, but differences in transport or auth are allowed only when they do not change the MCP contract itself.
 
 The Meals rich render tools stay in the public contract only because the runtime really registers them in both deployment tracks. Hosts without MCP output-template support should still fall back to the portable data tools.
 
 ## Phase 20 Additive Guidance
 
-Phase 20 keeps the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; preserves the Meals recipe-card, pantry-dashboard, and grocery-list render surfaces plus their widget template resources for hosts that support MCP output templates; and keeps Health on the block-first coaching surface instead of the pre-production weekly-plan contract.
+Phase 27 keeps the v2, v3, v4, v5, v6, and v7 Style purchase-analysis widget resources for compatibility and adds the v8 widget resource so ChatGPT/App SDK hosts refetch the corrected inline closeness score renderer without clamping already-percent comparator scores to 100%. Phase 26 kept the v2, v3, v4, v5, and v6 Style purchase-analysis widget resources for compatibility and added the v7 widget resource so ChatGPT/App SDK hosts refetched the combined closet-comparison cards with inline closeness scores instead of rendering a redundant separate closeness section. Phase 25 kept the v2, v3, v4, and v5 Style purchase-analysis widget resources for compatibility and added the v6 widget resource so ChatGPT/App SDK hosts refetched the more human stylist copy for photo reads and verdict reasons instead of reusing cached v5 markup. Phase 24 kept the v2, v3, and v4 Style purchase-analysis widget resources for compatibility and added the v5 widget resource so ChatGPT/App SDK hosts refetched the image-CSP and closet-comparator-photo improvements instead of reusing cached v4 markup. Phase 23 kept the v2 and v3 Style purchase-analysis widget resources for compatibility and added the v4 widget resource so ChatGPT/App SDK hosts refetched the polished stylist-analysis HTML instead of reusing cached v3 markup. Phase 22 makes host profiles first-class MCP metadata so ChatGPT, Claude, OpenClaw, Codex, and generic MCP clients can share one canonical Fluent tool vocabulary while using host-aware routing, render-adapter policy, and packaged-skill expectations. Phase 21 added MCP-native runtime guidance resources and fluent_get_next_actions as the in-band skill substitute for ChatGPT and generic MCP hosts, while preserving the full canonical tool surface for Claude, OpenClaw, Codex, OSS, and operator workflows. Phase 20 kept the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; removed the legacy meals_render_grocery_list alias and grocery_list_widget capability while preserving meals_render_grocery_list_v2 as the canonical ChatGPT/App SDK grocery-list render surface; added the v3 Style purchase-analysis widget resource while keeping the v2 widget resource for compatibility; added style_prepare_purchase_analysis as the first-hop purchase-analysis routing tool, keeps style_render_purchase_analysis as non-widget structured output, and gates the actual style_show_purchase_analysis_widget surface behind host visual evidence; and kept Health on the block-first coaching surface instead of the pre-production weekly-plan contract.
 
 Current additive guidance:
 
 - `readyDomains` is now a required readiness field and the primary package routing primitive
 - `toolDiscovery` may provide workflow-oriented starter tool hints, but MCP `tools/list` and `contract.tools` remain the authoritative full registry
 - `meals_list_tools` may expose a fallback directory with full tool names and workflow groups when `fluent_get_capabilities` is deferred in a client surface
+- `fluent_get_home` may expose a one-product Fluent Home overview with domain readiness, sanitized Meals/Style/Health memory snapshots, account/access state, text fallback, and optional ChatGPT/App SDK widget metadata
 - `meals_delete_inventory_item` permanently removes a stale or incorrect inventory row when the user explicitly asks for hard deletion
 - `meals_prepare_order` distinguishes the raw grocery plan from an order-ready remaining-to-buy artifact after reconciling current inventory and optional retailer cart state
 - `meals_upsert_grocery_plan_action` may persist pantry-first sufficiency confirmations (`have_enough`, `have_some_need_to_buy`, `dont_have_it`) that affect `meals_prepare_order` without changing canonical inventory truth
@@ -241,7 +270,7 @@ Current additive guidance:
 - Meal plans, planning-critical preferences, recipes, grocery-plan outputs, inventory, feedback, and audit history are MCP-native
 - Meals may consume Health's derived `trainingSupportSummary`, but Health remains the only canonical owner of training structure
 - Style now exposes a narrow closet-derived domain surface with import-seeded items, canonical comparator keys, typed media roles, item status, minimal onboarding/calibration state, typed item profiles, and coverage-aware wardrobe-context purchase analysis
-- The Meals render tools stay in the frozen public contract because Fluent early access and Fluent open-source runtime both register the output-template resources required to serve them
+- The Meals render tools stay in the frozen public contract because Fluent early access and the open-source runtime both register the output-template resources required to serve them
 - `meals_show_recipe` stays registered as a runtime alias for `meals_render_recipe_card`, but the frozen contract keeps the canonical tool name only
 - `meals_render_grocery_widget_smoke` and its standalone widget resource stay dev-only for host verification and are intentionally excluded from the frozen public contract
 - Hosts that do not support MCP output templates should still prefer `meals_get_recipe` and `meals_get_grocery_plan` as the portable data-first fallback

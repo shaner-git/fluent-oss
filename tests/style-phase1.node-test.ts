@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { runWithFluentAuthProps, type FluentAuthProps } from '../src/auth';
 import { StyleService } from '../src/domains/style/service';
 import { createLocalRuntime } from '../src/local/runtime';
 import { maybeHandleStyleImageRequest } from '../src/style-image-handler';
+import type { FluentDatabase } from '../src/storage';
 
 const tempRoots: string[] = [];
+const TEST_STYLE_ACTOR_NAME = 'Test User';
 
 main()
   .catch((error) => {
@@ -41,6 +44,8 @@ async function main() {
   await subclustersRedundancyByRoleIntent();
   await bootstrapsProfilesForNewItems();
   await analyzesPurchasesFromClosetAndCalibration();
+  await ranksActiveWhiteSneakerComparatorsByStyleSimilarity();
+  await keepsPurchaseComparatorVisualBundlesInsideCandidateCategory();
   await doesNotMarkGapFillPurchaseAsCoveredLane();
   await enrichesPurchaseAnalysisWithDescriptorEvidence();
   await infersComparatorKeysForNewEdgeCategoryItems();
@@ -1319,6 +1324,256 @@ async function analyzesPurchasesFromClosetAndCalibration() {
   }
 }
 
+async function ranksActiveWhiteSneakerComparatorsByStyleSimilarity() {
+  const runtime = createTempRuntime();
+  try {
+    const service = new StyleService(runtime.env.db);
+    const provenance = testProvenance();
+
+    for (const item of [
+      {
+        id: 'style-item:test-nocta-af1-triple-white',
+        brand: 'Nike x NOCTA',
+        color_family: 'white',
+        formality: 1,
+        name: 'Nike x NOCTA Air Force 1 Triple White',
+        profile: {
+          itemType: 'Air Force 1 sneaker',
+          styleRole: 'workhorse',
+          tags: ['air force 1', 'af1', 'nocta', 'triple white', 'casual sneaker'],
+        },
+      },
+      {
+        id: 'style-item:test-nocta-af1-lyf-cobalt',
+        brand: 'Nike x NOCTA',
+        color_family: 'white',
+        formality: 1,
+        name: 'Nike NOCTA Air Force 1 Low SP "LYF" White / Cobalt Tint - Metallic Silver',
+        profile: {
+          itemType: 'Air Force 1 sneaker',
+          styleRole: 'statement',
+          tags: ['air force 1', 'af1', 'nocta', 'lyf', 'white', 'cobalt tint', 'metallic silver', 'casual sneaker'],
+        },
+      },
+      {
+        id: 'style-item:test-kobe-af1-khaki',
+        brand: 'Nike',
+        color_family: 'green',
+        formality: 1,
+        name: "Nike Kobe Air Force 1 Low Men's Shoes",
+        profile: {
+          itemType: 'Air Force 1 sneaker',
+          styleRole: 'statement',
+          tags: ['air force 1', 'af1', 'kobe', 'khaki', 'casual sneaker'],
+        },
+      },
+      {
+        id: 'style-item:test-allen-edmonds-alpha',
+        brand: 'Allen Edmonds',
+        color_family: 'white',
+        formality: 3,
+        name: 'Allen Edmonds Alpha Leather Low-Top Sneakers',
+        profile: {
+          itemType: 'leather low-top sneaker',
+          styleRole: 'bridge',
+          tags: ['white sneaker', 'smart casual', 'low top'],
+        },
+      },
+    ] as const) {
+      await service.upsertItem({
+        item: {
+          id: item.id,
+          brand: item.brand,
+          category: 'SHOE',
+          color_family: item.color_family,
+          comparator_key: 'sneaker',
+          formality: item.formality,
+          name: item.name,
+          subcategory: 'Sneaker',
+        },
+        provenance,
+      });
+      await service.upsertItemProfile({
+        itemId: item.id,
+        profile: item.profile,
+        provenance,
+        source: 'test',
+      });
+    }
+
+    await service.upsertItem({
+      item: {
+        id: 'style-item:test-archived-af1-retro-premium',
+        brand: 'Nike',
+        category: 'SHOE',
+        color_family: 'white',
+        comparator_key: 'sneaker',
+        formality: 1,
+        name: 'Nike Air Force 1 Low Retro Premium',
+        status: 'archived',
+        subcategory: 'Sneaker',
+      },
+      provenance,
+    });
+
+    const analysis = await service.analyzePurchase({
+      candidate: {
+        brand: 'Nike',
+        category: 'SHOE',
+        colorName: 'Triple White',
+        imageUrl: 'https://example.com/af1-07.jpg',
+        name: "Nike Air Force 1 '07",
+        subcategory: 'Sneaker',
+      },
+    });
+
+    const exactComparatorIds = analysis.contextBuckets.exactComparatorItems.map((entry) => entry.itemId);
+    assert.equal(exactComparatorIds[0], 'style-item:test-nocta-af1-triple-white');
+    assert.equal(exactComparatorIds.includes('style-item:test-archived-af1-retro-premium'), false);
+    assert.equal(Object.hasOwn(analysis.itemsById, 'style-item:test-archived-af1-retro-premium'), false);
+
+    const topComparisonIds = analysis.comparatorReasoning.topComparisons.map((entry) => entry.itemId);
+    assert.equal(topComparisonIds[0], 'style-item:test-nocta-af1-triple-white');
+    assert.equal(topComparisonIds[1], 'style-item:test-nocta-af1-lyf-cobalt');
+    assert.equal(topComparisonIds[2], 'style-item:test-kobe-af1-khaki');
+    assert.equal(topComparisonIds.slice(0, 3).includes('style-item:test-allen-edmonds-alpha'), false);
+    assert.equal(topComparisonIds.includes('style-item:test-archived-af1-retro-premium'), false);
+    assert.equal(
+      analysis.comparatorReasoning.topComparisons[0]?.notes.some((note) => /triple white/i.test(note)),
+      true,
+    );
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function keepsPurchaseComparatorVisualBundlesInsideCandidateCategory() {
+  const runtime = createTempRuntime();
+  try {
+    const service = new StyleService(runtime.env.db);
+    const provenance = testProvenance();
+
+    for (const item of [
+      {
+        id: 'style-item:test-black-trouser',
+        brand: 'Rag & Bone',
+        category: 'BOTTOM',
+        color_family: 'black',
+        formality: 4,
+        name: 'Rag & Bone Trousers with pockets',
+        subcategory: 'Trouser',
+      },
+      {
+        id: 'style-item:test-fifth-avenue-oxford',
+        brand: 'Allen Edmonds',
+        category: 'SHOE',
+        color_family: 'black',
+        formality: 5,
+        name: 'Allen Edmonds Fifth Avenue Cap-Toe Oxford with Dainite Rubber Sole',
+        subcategory: 'Cap Toe Oxford',
+      },
+      {
+        id: 'style-item:test-duke-chelsea',
+        brand: 'Thursday Boots',
+        category: 'SHOE',
+        color_family: 'black',
+        formality: 4,
+        name: 'Thursday Boots Duke Chelsea Boot',
+        subcategory: 'Chelsea Boot',
+      },
+    ] as const) {
+      await service.upsertItem({
+        item,
+        provenance,
+      });
+      await service.upsertItemPhotos({
+        itemId: item.id,
+        photos: [
+          {
+            id: `${item.id}:photo`,
+            is_primary: true,
+            source_url: `https://example.com/${item.id}.jpg`,
+            url: `https://example.com/${item.id}.jpg`,
+            view: 'front',
+          },
+        ],
+        provenance,
+      });
+    }
+    await service.upsertItemProfile({
+      itemId: 'style-item:test-fifth-avenue-oxford',
+      profile: {
+        itemType: 'cap-toe oxford',
+        polishLevel: 'dressy',
+        silhouette: 'structured oxford',
+        styleRole: 'formal black dress shoe',
+        tags: ['oxford', 'dress shoe', 'black leather'],
+        useCases: ['formal outfits', 'office dress'],
+        visualWeight: 'sleek',
+      },
+      provenance,
+      source: 'test',
+    });
+
+    const candidate = {
+      brand: 'Allen Edmonds',
+      category: 'SHOE',
+      colorFamily: 'black',
+      formality: 5,
+      name: 'Allen Edmonds Park Avenue Black Cap-Toe Oxford',
+      subcategory: 'Oxford',
+    };
+    const analysis = await service.analyzePurchase({ candidate });
+
+    assert.equal(
+      analysis.contextBuckets.sameColorFamilyItems.some((entry) => entry.itemId === 'style-item:test-black-trouser'),
+      false,
+      'same-color comparator bucket should stay inside the candidate category',
+    );
+    assert.equal(
+      analysis.contextBuckets.nonComparatorItems.some((entry) => entry.itemId === 'style-item:test-black-trouser'),
+      true,
+      'same-color cross-category matches should be exposed as rejected non-comparators',
+    );
+    assert.match(
+      analysis.contextBuckets.nonComparatorItems.find((entry) => entry.itemId === 'style-item:test-black-trouser')?.rejectedBecause ?? '',
+      /not a shoe/i,
+    );
+    assert.equal(
+      analysis.comparatorReasoning.rejectedComparisons.some((entry) => entry.itemId === 'style-item:test-black-trouser'),
+      true,
+      'assistant-facing comparator reasoning should explain tempting rejected matches',
+    );
+    assert.equal(
+      analysis.comparatorReasoning.topComparisons.some((entry) => entry.itemId === 'style-item:test-black-trouser'),
+      false,
+      'cross-category items should not appear as primary purchase comparators',
+    );
+    assert.equal(analysis.comparatorReasoning.topComparisons[0]?.itemId, 'style-item:test-fifth-avenue-oxford');
+
+    const bundle = await service.getVisualBundle({
+      candidate,
+      includeComparators: true,
+      maxImages: 8,
+    });
+    const bundledItemIds = bundle.assets.map((asset) => asset.itemId).filter(Boolean);
+    assert.equal(
+      bundledItemIds.includes('style-item:test-black-trouser'),
+      false,
+      'visual bundles should return comparator images, not same-color cross-category context',
+    );
+    assert.equal(bundledItemIds.includes('style-item:test-fifth-avenue-oxford'), true);
+    const oxfordAsset = bundle.assets.find((asset) => asset.itemId === 'style-item:test-fifth-avenue-oxford');
+    assert.equal(oxfordAsset?.itemContext?.itemType, 'cap-toe oxford');
+    assert.equal(oxfordAsset?.itemContext?.silhouette, 'structured oxford');
+    assert.equal(oxfordAsset?.comparisonContext?.bucketRoles.includes('top_comparison'), true);
+    assert.equal(typeof oxfordAsset?.comparisonContext?.relation, 'string');
+    assert.equal(oxfordAsset?.comparisonContext?.rejectedBecause, null);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
 async function filtersActionableEvidenceGaps() {
   const runtime = createTempRuntime();
   try {
@@ -1780,10 +2035,15 @@ async function acceptsCandidateImageUrlsInPurchaseAnalysis() {
     });
     assert.deepEqual(analysis.candidate.imageUrls, [candidateImageUrl]);
     assert.equal(analysis.candidateSummary.hasCandidateImages, true);
+    assert.equal(analysis.evidenceQuality.candidateVisualGrounding, 'image_reference_only');
     assert.equal(analysis.evidenceQuality.candidateImageCount, 1);
     assert.equal(
       analysis.evidenceQuality.notes.includes('no candidate image provided; analysis relies on text attributes and closet state'),
       false,
+    );
+    assert.equal(
+      analysis.evidenceQuality.notes.includes('candidate image reference is present, but purchase analysis has not inspected pixels; use style_get_visual_bundle and direct image reading before making color or material claims'),
+      true,
     );
 
     const bundle = await service.getVisualBundle({
@@ -1803,6 +2063,10 @@ async function acceptsCandidateImageUrlsInPurchaseAnalysis() {
     assert.equal(bundle.assets[0]?.sourceUrl, candidateImageUrl);
     assert.equal(bundle.assets[0]?.authenticatedOriginalUrl, null);
     assert.equal(bundle.assets[0]?.fallbackSignedOriginalUrl, null);
+    assert.equal(bundle.visualInspection.state, 'image_references_returned');
+    assert.equal(bundle.visualInspection.assetCount, 1);
+    assert.equal(bundle.visualInspection.fetchableAssetCount, 1);
+    assert.match(bundle.visualInspection.note, /item and comparator context/i);
     assert.equal(
       bundle.evidenceWarnings.includes('Candidate did not include an image, so the visual bundle cannot inspect it directly.'),
       false,
@@ -1976,6 +2240,8 @@ async function authenticatesHostedStyleImages() {
   const runtime = createTempRuntime();
   try {
     const hostedEnv = createHostedStyleEnv(runtime, 'https://cloud.example.test');
+    const hostedAuthProps = hostedStyleAuthProps();
+    await seedHostedStyleIdentity(hostedEnv.DB, hostedAuthProps);
     const service = new StyleService(hostedEnv.DB, {
       artifacts: hostedEnv.ARTIFACTS,
       imageDeliverySecret: hostedEnv.IMAGE_DELIVERY_SECRET,
@@ -1983,33 +2249,35 @@ async function authenticatesHostedStyleImages() {
     });
     const provenance = testProvenance();
 
-    await service.upsertItem({
-      item: {
-        id: 'style-item:test-hosted-photo',
-        brand: 'Test Brand',
-        category: 'TOP',
-        name: 'Hosted Photo Tee',
-        subcategory: 'T-Shirt',
-        color_family: 'white',
-        formality: 1,
-      },
-      provenance,
-    });
-    await service.upsertItemPhotos({
-      itemId: 'style-item:test-hosted-photo',
-      photos: [
-        {
-          data_url:
-            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
-          id: 'style-photo:test-hosted-photo-1',
-          is_primary: true,
-          view: 'front',
+    await runWithFluentAuthProps(hostedAuthProps, async () => {
+      await service.upsertItem({
+        item: {
+          id: 'style-item:test-hosted-photo',
+          brand: 'Test Brand',
+          category: 'TOP',
+          name: 'Hosted Photo Tee',
+          subcategory: 'T-Shirt',
+          color_family: 'white',
+          formality: 1,
         },
-      ],
-      provenance,
+        provenance,
+      });
+      await service.upsertItemPhotos({
+        itemId: 'style-item:test-hosted-photo',
+        photos: [
+          {
+            data_url:
+              'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+            id: 'style-photo:test-hosted-photo-1',
+            is_primary: true,
+            view: 'front',
+          },
+        ],
+        provenance,
+      });
     });
 
-    const item = await service.getItem('style-item:test-hosted-photo');
+    const item = await runWithFluentAuthProps(hostedAuthProps, () => service.getItem('style-item:test-hosted-photo'));
     assert(item?.photos[0]?.delivery?.originalUrl);
     assert.equal(item.photos[0]?.delivery?.auth, 'oauth_bearer');
 
@@ -2044,17 +2312,25 @@ async function authenticatesHostedStyleImages() {
     assert(insufficientScope);
     assert.equal(insufficientScope.status, 403);
 
-    const visualBundle = await service.getVisualBundle({
-      deliveryMode: 'authenticated_with_signed_fallback',
-      itemIds: ['style-item:test-hosted-photo'],
-      maxImages: 1,
-    });
+    const visualBundle = await runWithFluentAuthProps(hostedAuthProps, () =>
+      service.getVisualBundle({
+        deliveryMode: 'authenticated_with_signed_fallback',
+        itemIds: ['style-item:test-hosted-photo'],
+        maxImages: 1,
+      }),
+    );
     assert.equal(visualBundle.assets.length, 1);
     assert(visualBundle.assets[0]?.fallbackSignedOriginalUrl);
+    const signedUrl = new URL(visualBundle.assets[0]!.fallbackSignedOriginalUrl!);
+    assert.equal(signedUrl.searchParams.get('tid'), hostedAuthProps.tenantId);
 
-    const signedOk = await maybeHandleStyleImageRequest(
-      new Request(visualBundle.assets[0]!.fallbackSignedOriginalUrl!),
-      hostedEnv,
+    const signedOk = await runWithFluentAuthProps(
+      { profileId: 'owner', tenantId: 'primary' },
+      () =>
+        maybeHandleStyleImageRequest(
+          new Request(visualBundle.assets[0]!.fallbackSignedOriginalUrl!),
+          hostedEnv,
+        ),
     );
     assert(signedOk);
     assert.equal(signedOk.status, 200);
@@ -2070,6 +2346,12 @@ async function authenticatesHostedStyleImages() {
     const tamperedResponse = await maybeHandleStyleImageRequest(new Request(tamperedSigned.toString()), hostedEnv);
     assert(tamperedResponse);
     assert.equal(tamperedResponse.status, 403);
+
+    const wrongTenantSigned = new URL(visualBundle.assets[0]!.fallbackSignedOriginalUrl!);
+    wrongTenantSigned.searchParams.set('tid', 'tenant:other');
+    const wrongTenantResponse = await maybeHandleStyleImageRequest(new Request(wrongTenantSigned.toString()), hostedEnv);
+    assert(wrongTenantResponse);
+    assert.equal(wrongTenantResponse.status, 403);
   } finally {
     runtime.sqliteDb.close();
   }
@@ -2140,6 +2422,8 @@ async function prefersDeliverablePhotosInVisualBundles() {
     assert.equal(bundle.assets[0]?.photoId, 'style-photo:test-bundle-photo-choice-fit');
     assert.equal(bundle.assets[0]?.authenticatedOriginalUrl?.includes('/images/style/style-photo%3Atest-bundle-photo-choice-fit/original'), true);
     assert.equal(bundle.assets[0]?.fallbackSignedOriginalUrl?.includes('sig='), true);
+    assert.equal(bundle.visualInspection.state, 'image_references_returned');
+    assert.equal(bundle.visualInspection.fetchableAssetCount, 1);
     assert.equal(bundle.evidenceWarnings.includes('Bundle Photo Choice Sneaker does not have an owned Fluent image delivery route yet.'), false);
   } finally {
     runtime.sqliteDb.close();
@@ -2238,10 +2522,10 @@ async function respectsVisualBundleComparatorToggleAndRequestedItemUnion() {
       itemIds: ['style-item:bundle-requested-loafer'],
       maxImages: 4,
     });
-    assert.equal(withComparators.assets.length, 3);
+    assert.equal(withComparators.assets.length, 2);
     assert.deepEqual(
       withComparators.assets.map((asset) => asset.role),
-      ['candidate', 'requested_item', 'exact_comparator'],
+      ['candidate', 'requested_item'],
     );
     assert.equal(
       withComparators.assets.filter((asset) => asset.itemId === 'style-item:bundle-requested-loafer').length,
@@ -2249,7 +2533,7 @@ async function respectsVisualBundleComparatorToggleAndRequestedItemUnion() {
     );
     assert.equal(
       withComparators.assets.some((asset) => asset.itemId === 'style-item:bundle-comparator-loafer'),
-      true,
+      false,
     );
   } finally {
     runtime.sqliteDb.close();
@@ -2399,9 +2683,9 @@ async function prioritizesRequestedItemsBeforeComparatorAssetsWhenBundlesAreCapp
     });
     assert.deepEqual(
       expanded.assets.map((asset) => asset.role),
-      ['candidate', 'requested_item', 'exact_comparator'],
+      ['candidate', 'requested_item'],
     );
-    assert.equal(expanded.assets[2]?.itemId, 'style-item:capped-comparator-loafer');
+    assert.equal(expanded.assets.some((asset) => asset.itemId === 'style-item:capped-comparator-loafer'), false);
   } finally {
     runtime.sqliteDb.close();
   }
@@ -2449,14 +2733,14 @@ async function dedupesVisualBundleWarningsAcrossMissingCandidateAndMissingItems(
       bundle.evidenceWarnings.includes('Item style-item:missing-bundle-item is not present in the current closet state.'),
       true,
     );
-    assert.equal(bundle.evidenceWarnings.includes('No Photo Loafer has no saved Style photo.'), true);
+    assert.equal(bundle.evidenceWarnings.includes('No Photo Loafer has no saved Style photo.'), false);
     assert.equal(
       bundle.evidenceWarnings.filter((warning) => warning === 'Item style-item:missing-bundle-item is not present in the current closet state.').length,
       1,
     );
     assert.equal(
       bundle.evidenceWarnings.filter((warning) => warning === 'No Photo Loafer has no saved Style photo.').length,
-      1,
+      0,
     );
   } finally {
     runtime.sqliteDb.close();
@@ -2756,6 +3040,39 @@ function createStyleService(runtime: ReturnType<typeof createTempRuntime>) {
   });
 }
 
+function hostedStyleAuthProps(): FluentAuthProps {
+  return {
+    identityRequired: true,
+    oauthClientId: 'test-client',
+    oauthClientName: 'Test Client',
+    profileId: 'profile:test-user',
+    scope: ['style:read'],
+    tenantId: 'tenant:better-auth:test-user',
+    userId: 'test-user',
+  };
+}
+
+async function seedHostedStyleIdentity(db: FluentDatabase, props: FluentAuthProps) {
+  assert(props.tenantId);
+  assert(props.profileId);
+  await db.batch([
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO fluent_tenants (
+          id, slug, display_name, backend_mode, status, onboarding_state, onboarding_version, metadata_json
+        ) VALUES (?, ?, 'Test Hosted Tenant', 'hosted', 'active', 'onboarding_completed', '1', ?)`,
+      )
+      .bind(props.tenantId, 'test-hosted-tenant', JSON.stringify({ seedSource: 'style-image-test' })),
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO fluent_profile (
+          tenant_id, profile_id, display_name, timezone, metadata_json
+        ) VALUES (?, ?, 'Test Hosted Profile', 'America/Toronto', ?)`,
+      )
+      .bind(props.tenantId, props.profileId, JSON.stringify({ seedSource: 'style-image-test' })),
+  ]);
+}
+
 function createHostedStyleEnv(runtime: ReturnType<typeof createTempRuntime>, origin: string) {
   return {
     ...runtime.env,
@@ -2763,42 +3080,36 @@ function createHostedStyleEnv(runtime: ReturnType<typeof createTempRuntime>, ori
     OAUTH_PROVIDER: {
       async unwrapToken(token: string) {
         if (token === 'good-token') {
+          const props = hostedStyleAuthProps();
           return {
             audience: origin,
             grant: {
-              props: {
-                oauthClientId: 'test-client',
-                oauthClientName: 'Test Client',
-                scope: ['style:read'],
-              },
+              props,
             },
-            scope: ['style:read'],
+            scope: props.scope,
           };
         }
         if (token === 'wrong-audience-token') {
+          const props = hostedStyleAuthProps();
           return {
             audience: 'https://other.example.com',
             grant: {
-              props: {
-                oauthClientId: 'test-client',
-                oauthClientName: 'Test Client',
-                scope: ['style:read'],
-              },
+              props,
             },
-            scope: ['style:read'],
+            scope: props.scope,
           };
         }
         if (token === 'no-style-scope-token') {
+          const props = {
+            ...hostedStyleAuthProps(),
+            scope: ['health:read'],
+          };
           return {
             audience: origin,
             grant: {
-              props: {
-                oauthClientId: 'test-client',
-                oauthClientName: 'Test Client',
-                scope: ['health:read'],
-              },
+              props,
             },
-            scope: ['health:read'],
+            scope: props.scope,
           };
         }
         return null;
@@ -2810,8 +3121,8 @@ function createHostedStyleEnv(runtime: ReturnType<typeof createTempRuntime>, ori
 
 function testProvenance() {
   return {
-    actorEmail: 'jordan@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: 'tester@example.com',
+    actorName: TEST_STYLE_ACTOR_NAME,
     confidence: 1,
     scopes: ['style:write'],
     sessionId: 'style-phase2-test',

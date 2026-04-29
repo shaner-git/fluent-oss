@@ -2,7 +2,7 @@
 
 This page is generated from `contracts/fluent-contract.v1.json` plus an explicit preview list for rich surfaces that are not yet in the public contract.
 
-Current contract version: `2026-04-20.fluent-core-v1.37`
+Current contract version: `2026-04-26.fluent-core-v1.48`
 
 ## Meals
 
@@ -51,7 +51,6 @@ Meals currently ships a broad canonical planning and execution surface, plus a n
 - `meals_render_recipe_card`
 - `meals_render_pantry_dashboard`
 - `meals_render_grocery_list_v2`
-- `meals_render_grocery_list`
 <!-- current-tools:end -->
 
 Current host guidance:
@@ -117,29 +116,36 @@ Style currently ships canonical closet and purchase-analysis data tools, plus on
 - `style_get_item_profile`
 - `style_get_item_provenance`
 - `style_upsert_item`
+- `style_archive_item`
 - `style_upsert_item_profile`
 - `style_upsert_item_photos`
+- `style_set_item_product_image`
+- `style_extract_purchase_page_evidence`
+- `style_prepare_purchase_analysis`
+- `style_get_purchase_vision_packet`
+- `style_submit_purchase_visual_observations`
 - `style_analyze_purchase`
+- `style_render_purchase_analysis`
 - `style_apply_purchase_analysis_action`
 - `style_get_visual_bundle`
 
 ### Current Style Render Tools
 
-- `style_render_purchase_analysis`
+- `style_show_purchase_analysis_widget`
 <!-- current-tools:end -->
 
 Current host guidance:
 
-- ChatGPT/App-SDK-style hosts can use `style_render_purchase_analysis`.
-- Claude should prefer `style_analyze_purchase` plus `style_get_visual_bundle` when visual evidence is needed.
-- OpenClaw should use the plain-MCP Style data tools rather than depending on Fluent widget rendering.
+- ChatGPT/App-SDK-style hosts should use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations`, then `style_show_purchase_analysis_widget`; `style_render_purchase_analysis` returns structured data without opening a widget.
+- Claude should use the same staged evidence flow, then answer from `style_render_purchase_analysis` or host-native visuals instead of calling the ChatGPT widget.
+- OpenClaw and generic MCP clients should use the plain-MCP Style data tools, `style_get_purchase_vision_packet` when the host can inspect images, and `style_render_purchase_analysis` after concrete `host_vision` evidence.
 
 Preview only: none right now.
 
 
 ## Render Host Summary
 
-- Current ChatGPT/App-SDK-style render tools: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `meals_render_grocery_list`, `style_render_purchase_analysis`
+- Current ChatGPT/App-SDK-style render tools: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `style_show_purchase_analysis_widget`
 - Current Claude-specific render tools: none.
 - Current OpenClaw-specific render tools: none.
 - Plain-MCP fallbacks remain the canonical cross-host path for every domain.

@@ -12,6 +12,8 @@ import {
 } from '../src/domains/meals/service';
 
 const tempRoots: string[] = [];
+const TEST_ACTOR_EMAIL = 'planner@example.com';
+const TEST_ACTOR_NAME = 'Test User';
 
 main().catch((error) => {
   console.error(error);
@@ -51,8 +53,8 @@ async function reschedulesFutureMealWhenCookedEarly() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-early-cook-reschedule-test',
@@ -187,8 +189,8 @@ async function doesNotBindFutureMealWhenLoggingFeedbackEarly() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-early-feedback-test',
@@ -269,8 +271,8 @@ async function honorsPinnedMealAssignmentsDuringGeneration() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-pinned-meals-test',
@@ -360,8 +362,8 @@ async function deprioritizesRecipesWithRecentShoppingSubstitutionFriction() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-shopping-friction-test',
@@ -494,8 +496,8 @@ async function verifiesHostedPlannerBrainFlows() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-node-test',
@@ -554,7 +556,7 @@ async function verifiesHostedPlannerBrainFlows() {
     const updatedPreferences = await service.updatePreferences({
       preferences: {
         version: '1.3-imported',
-        profile_owner: 'Alex Example',
+        profile_owner: TEST_ACTOR_NAME,
         core_rules: {
           hard_avoids: ['anchovy'],
         },
@@ -580,7 +582,7 @@ async function verifiesHostedPlannerBrainFlows() {
     });
 
     assert.equal(updatedPreferences.version, '1.3-imported');
-    assert.equal(updatedPreferences.raw.profile_owner, 'Alex Example');
+    assert.equal(updatedPreferences.raw.profile_owner, TEST_ACTOR_NAME);
 
     const weekStart = '2026-04-06';
     const generation = await service.generatePlan({
@@ -686,8 +688,8 @@ async function rejectsPlanningWithoutRequiredCalendarContext() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-required-calendar-test',
@@ -763,8 +765,8 @@ async function rejectsInvalidCalendarContextPayloads() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-invalid-calendar-context-test',
@@ -841,8 +843,8 @@ async function appliesCalendarAwareSlotConstraints() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-calendar-slot-test',
@@ -983,8 +985,8 @@ async function surfacesOptionalCalendarWarnings() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-calendar-warning-test',
@@ -1030,8 +1032,8 @@ async function rejectsStalePlanCandidateAcceptance() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-stale-test',
@@ -1078,8 +1080,8 @@ async function rejectsStalePlanCandidateAcceptanceWhenCalendarContextChanges() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-stale-calendar-test',
@@ -1130,8 +1132,8 @@ async function scalesRepeatedWeekdayMealPrepToDailyServes() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-repeated-weekday-scale-test',
@@ -1233,8 +1235,8 @@ async function appliesTrainingAwarePlanningBiases() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-training-aware-test',
@@ -1429,8 +1431,8 @@ async function acceptsCandidateAfterUnrelatedHistoryChanges() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-history-stability-test',
@@ -1523,8 +1525,8 @@ async function acceptsStringifiedPreferencesPayload() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-stringified-preferences-test',
@@ -1536,7 +1538,7 @@ async function acceptsStringifiedPreferencesPayload() {
   try {
     const payload = JSON.stringify({
       version: '1.3-imported',
-      profile_owner: 'Alex Example',
+      profile_owner: TEST_ACTOR_NAME,
       core_rules: {
         hard_avoids: ['anchovy', 'mussels'],
         preferred_cuisines: ['mediterranean'],
@@ -1563,7 +1565,7 @@ async function acceptsStringifiedPreferencesPayload() {
       provenance,
     });
 
-    assert.equal(updated.raw.profile_owner, 'Alex Example');
+    assert.equal(updated.raw.profile_owner, TEST_ACTOR_NAME);
     assert.deepEqual(updated.raw.core_rules?.hard_avoids, ['anchovy', 'mussels']);
     assert.equal(updated.raw.shopping?.budget?.price_cap_per_meal_cad, 12);
 
@@ -1584,8 +1586,8 @@ async function acceptsStringifiedRecipePayload() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-stringified-recipe-test',
@@ -1627,8 +1629,8 @@ async function acceptsStringifiedPlanPayload() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
   const provenance = {
-    actorEmail: 'alex@example.invalid',
-    actorName: 'Alex Example',
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
     confidence: 1,
     scopes: ['meals:write'],
     sessionId: 'planner-brain-stringified-plan-test',
@@ -1665,7 +1667,7 @@ async function acceptsStringifiedPlanPayload() {
         week_start: weekStart,
         week_end: '2026-04-26',
         status: 'approved',
-        profile_owner: 'Alex Example',
+        profile_owner: TEST_ACTOR_NAME,
         summary: { budget_estimate_cad: 9.5 },
         meals: [
           {

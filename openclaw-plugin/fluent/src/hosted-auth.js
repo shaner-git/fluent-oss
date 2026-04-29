@@ -146,7 +146,7 @@ async function waitForAuthorizationCode(input) {
         res.setHeader('content-type', 'text/html; charset=utf-8');
         res.end(
           earlyAccess
-            ? '<h1>Fluent Cloud early access</h1><p>You can return to OpenClaw.</p>'
+            ? renderEarlyAccessCallbackPage('OpenClaw', message)
             : '<h1>Fluent authorization failed</h1><p>You can return to OpenClaw.</p>',
         );
         server.close();
@@ -253,13 +253,17 @@ function safeParseJson(value) {
 }
 
 function formatFluentHostedError(source, fallback) {
+  const detail = extractFluentHostedErrorDescription(source);
+  if (detail) {
+    return detail;
+  }
   if (isFluentCloudEarlyAccessDenial(source)) {
     return [
-      'Fluent Cloud is still in early access and is not generally available yet.',
-      'This account does not have Fluent Cloud access yet.',
-      `Join the waitlist: ${FLUENT_CLOUD_WAITLIST_URL}`,
-      `Fluent OSS is available today: ${FLUENT_OSS_AVAILABLE_URL}`,
-      `If you expected Cloud access, contact ${FLUENT_SUPPORT_EMAIL}.`,
+      'Fluent is in early access and open source.',
+      'This account does not have Fluent access yet.',
+      `Request early access: ${FLUENT_CLOUD_WAITLIST_URL}`,
+      `Open-source runtime: ${FLUENT_OSS_AVAILABLE_URL}`,
+      `If you expected access, contact ${FLUENT_SUPPORT_EMAIL}.`,
     ].join(' ');
   }
   return fallback;
@@ -272,15 +276,46 @@ function isFluentCloudEarlyAccessDenial(source) {
   }
 
   return [
+    'account deleted',
+    'account disabled',
     'access_denied',
+    'auth expired',
+    'client is not supported',
+    'contract version',
     'early access',
+    'fluent_cloud_failure',
     'no cloud access',
     'not have access',
-    'not approved',
-    'not enabled',
-    'sign-up interest',
+    'not on the fluent waitlist',
+    'onboarding is not complete',
+    'temporarily unavailable',
     'waitlist',
   ].some((needle) => normalized.includes(needle));
+}
+
+function renderEarlyAccessCallbackPage(clientName, detail = 'This Fluent connection could not be completed.') {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fluent Early Access</title>
+</head>
+<body style="font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a;">
+  <main style="max-width: 680px; margin: 0 auto; padding: 32px 20px;">
+    <section style="background: #fff; border: 1px solid #dbe4f0; border-radius: 20px; padding: 24px; box-shadow: 0 24px 80px rgba(15, 23, 42, 0.08);">
+      <p style="margin: 0 0 10px; color: #475569; text-transform: uppercase; letter-spacing: 0.14em; font-size: 12px;">Fluent</p>
+      <h1 style="margin: 0 0 12px;">Fluent connection blocked</h1>
+      <p style="margin: 0 0 16px; color: #475569; line-height: 1.6;">${escapeHtml(detail)} You can return to ${escapeHtml(clientName)} after reviewing the options below.</p>
+      <ul style="margin: 0; padding-left: 20px; color: #475569; line-height: 1.7;">
+        <li>Request early access: <a href="${FLUENT_CLOUD_WAITLIST_URL}">${FLUENT_CLOUD_WAITLIST_URL}</a></li>
+        <li>Open-source runtime: <a href="${FLUENT_OSS_AVAILABLE_URL}">${FLUENT_OSS_AVAILABLE_URL}</a></li>
+        <li>Contact support: <a href="mailto:${FLUENT_SUPPORT_EMAIL}">${FLUENT_SUPPORT_EMAIL}</a></li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>`;
 }
 
 function normalizeErrorText(source) {
@@ -298,4 +333,30 @@ function normalizeErrorText(source) {
       .toLowerCase();
   }
   return String(source).trim().toLowerCase();
+}
+
+function extractFluentHostedErrorDescription(source) {
+  if (!source) {
+    return null;
+  }
+  if (typeof source === 'string') {
+    const parsed = safeParseJson(source);
+    if (parsed && typeof parsed.error_description === 'string' && parsed.error_description.trim()) {
+      return parsed.error_description.trim();
+    }
+    return null;
+  }
+  if (typeof source === 'object' && typeof source.error_description === 'string' && source.error_description.trim()) {
+    return source.error_description.trim();
+  }
+  return null;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }

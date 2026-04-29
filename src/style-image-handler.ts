@@ -1,10 +1,10 @@
 import { FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE, runWithFluentAuthProps } from './auth';
 import { authenticateBearerRequest } from './bearer-auth';
-import { coreBindingsFromCloudEnv, type AppEnv, type CoreRuntimeBindings, type OAuthAppEnv } from './config';
+import { coreBindingsFromCloudEnv, type AppEnv, type CloudRuntimeEnv, type CoreRuntimeBindings, type OAuthAppEnv } from './config';
 import { StyleService } from './domains/style/service';
 import { verifyStyleImagePathSignature } from './domains/style/media';
 
-export async function maybeHandleStyleImageRequest(request: Request, env: AppEnv | OAuthAppEnv): Promise<Response | null> {
+export async function maybeHandleStyleImageRequest(request: Request, env: AppEnv | CloudRuntimeEnv | OAuthAppEnv): Promise<Response | null> {
   if (request.method !== 'GET') {
     return null;
   }
@@ -34,6 +34,7 @@ export async function maybeHandleStyleImageRequest(request: Request, env: AppEnv
 
   const expiresAt = url.searchParams.get('exp');
   const signature = url.searchParams.get('sig');
+  const signedTenantId = url.searchParams.get('tid')?.trim() || null;
   if (!expiresAt || !signature) {
     return (
       bearerAuth ??
@@ -66,6 +67,7 @@ export async function maybeHandleStyleImageRequest(request: Request, env: AppEnv
     path: url.pathname,
     secret,
     signatureHex: signature,
+    tenantId: signedTenantId,
   });
   if (!valid) {
     return new Response('Invalid Style image signature.', {
@@ -74,13 +76,15 @@ export async function maybeHandleStyleImageRequest(request: Request, env: AppEnv
     });
   }
 
-  return serveStyleImage(env, photoId);
+  return serveStyleImage(env, photoId, signedTenantId);
 }
 
-async function serveStyleImage(env: AppEnv | OAuthAppEnv, photoId: string): Promise<Response> {
+async function serveStyleImage(env: AppEnv | CloudRuntimeEnv | OAuthAppEnv, photoId: string, tenantId?: string | null): Promise<Response> {
   const bindings = getBindings(env);
   const style = new StyleService(bindings.db);
-  const asset = await style.getPhotoDeliveryAsset(photoId);
+  const asset = tenantId
+    ? await style.getPhotoDeliveryAssetForTenant({ photoId, tenantId })
+    : await style.getPhotoDeliveryAsset(photoId);
   if (!asset) {
     return new Response('Style image not found.', {
       status: 404,
@@ -105,11 +109,14 @@ async function serveStyleImage(env: AppEnv | OAuthAppEnv, photoId: string): Prom
   });
 }
 
-function getBindings(env: AppEnv | OAuthAppEnv): CoreRuntimeBindings {
-  return 'OAUTH_PROVIDER' in env ? coreBindingsFromCloudEnv(env) : env;
+function getBindings(env: AppEnv | CloudRuntimeEnv | OAuthAppEnv): CoreRuntimeBindings {
+  if ('db' in env && 'artifacts' in env) {
+    return env;
+  }
+  return coreBindingsFromCloudEnv(env);
 }
 
-function getImageDeliverySecret(env: AppEnv | OAuthAppEnv): string {
+function getImageDeliverySecret(env: AppEnv | CloudRuntimeEnv | OAuthAppEnv): string {
   const secret =
     ('IMAGE_DELIVERY_SECRET' in env ? env.IMAGE_DELIVERY_SECRET : undefined) ??
     ('COOKIE_ENCRYPTION_KEY' in env ? env.COOKIE_ENCRYPTION_KEY : undefined) ??

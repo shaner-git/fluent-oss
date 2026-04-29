@@ -69,21 +69,21 @@ async function main(): Promise<void> {
       return writeFetchResponse(res, styleImageResponse);
     }
 
-    if (url.pathname === '/mcp') {
+    if (url.pathname === '/mcp' || url.pathname === '/mcp/chatgpt') {
       const tokenState = authorizeLocalBearer(runtime.paths.rootDir, req.headers.authorization);
       if (!tokenState) {
         res.statusCode = 401;
         res.setHeader('content-type', 'application/json; charset=utf-8');
         res.setHeader(
           'www-authenticate',
-          `Bearer realm="Fluent OSS Experimental", error="invalid_token", scope="${defaultLocalScopes().join(' ')}"`,
+          `Bearer realm="Fluent open-source runtime experimental", error="invalid_token", scope="${defaultLocalScopes().join(' ')}"`,
         );
         res.end(
           JSON.stringify(
             {
               auth_model: LOCAL_AUTH_MODEL,
               deploymentTrack: 'oss',
-              error: 'Fluent OSS experimental MCP access requires Authorization: Bearer <token>.',
+              error: 'Fluent experimental MCP access requires Authorization: Bearer <token> when you run Fluent yourself.',
               recommended_auth_env: 'FLUENT_OSS_TOKEN',
               required_scopes: defaultLocalScopes(),
               storageBackend: 'postgres-s3',
@@ -96,7 +96,10 @@ async function main(): Promise<void> {
         return;
       }
 
-      const mcpServer = createFluentMcpServer(runtime.env, origin);
+      const route = url.pathname === '/mcp/chatgpt' ? '/mcp/chatgpt' : '/mcp';
+      const mcpServer = createFluentMcpServer(runtime.env, origin, {
+        profile: route === '/mcp/chatgpt' ? 'chatgpt_app' : 'full',
+      });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       await mcpServer.connect(transport);
 
@@ -104,9 +107,9 @@ async function main(): Promise<void> {
         await runWithFluentAuthProps(
           {
             email: 'oss@fluent',
-            name: 'Fluent OSS Experimental',
+            name: 'Fluent Experimental',
             oauthClientId: 'fluent-oss-postgres-s3',
-            oauthClientName: 'Fluent OSS Experimental',
+            oauthClientName: 'Fluent Experimental',
             accessToken: tokenState.token,
             scope: tokenState.scopes,
           },
@@ -124,7 +127,7 @@ async function main(): Promise<void> {
       return writeHtml(
         res,
         200,
-        `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Fluent OSS Experimental</title></head><body><h1>Fluent OSS Experimental</h1><p>Experimental Postgres + S3-backed single-user Fluent runtime.</p><p>MCP endpoint: <code>${origin}/mcp</code></p><p>Probe: <code>${origin}/codex-probe</code></p><p>Health: <code>${origin}/health</code></p></body></html>`,
+        `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Fluent Experimental</title></head><body><h1>Fluent Experimental</h1><p>Experimental Postgres + S3-backed open-source runtime for running Fluent yourself.</p><p>MCP endpoint: <code>${origin}/mcp</code></p><p>Probe: <code>${origin}/codex-probe</code></p><p>Health: <code>${origin}/health</code></p></body></html>`,
       );
     }
 

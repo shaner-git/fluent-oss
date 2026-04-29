@@ -15,11 +15,10 @@ Supported setup paths for the public `v0.1.0` release.
 | --- | --- | --- |
 | Codex | `npm run scaffold:mcp -- --client codex --track oss --base-url <url>` | generated config targets Fluent open-source runtime |
 | Claude | `npm run scaffold:mcp -- --client claude --track oss --base-url <url>` | generated config targets Fluent open-source runtime |
-| OpenClaw | `openclaw plugins install fluent-openclaw` plus `openclaw fluent mcp oss --base-url <url> --token <oss-token>` | the checked-in `openclaw-plugin/fluent` bundle is the separate helper package `fluent-openclaw-oss-helper`; scaffold output remains a native `mcp.servers.fluent` block |
+| OpenClaw | `npm run scaffold:mcp -- --client openclaw --track oss --base-url <url>` | scaffold output is an `mcp.servers.fluent` JSON block |
 
 ## Contract Support
 
-- supported minimum contract version: `2026-04-20.fluent-core-v1.37`
+- supported minimum contract version: `2026-04-26.fluent-core-v1.48`
 - contract artifact: [../../contracts/fluent-contract.v1.json](../../contracts/fluent-contract.v1.json)
 - contract notes: [../fluent-contract-v1.md](../fluent-contract-v1.md)
-- OpenClaw package versioning: [./openclaw-package-versioning.md](./openclaw-package-versioning.md)

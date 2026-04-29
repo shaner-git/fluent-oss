@@ -3,9 +3,18 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderContractDocMarkdown } from '../scripts/render-contract-doc';
+import { renderDomainSurfacesMarkdown } from '../scripts/render-domain-surfaces-doc';
+import {
+  extractCurrentToolNamesFromMarkdown,
+  normalizeNewlines,
+  readFrozenContractSnapshot,
+} from '../scripts/render-public-doc-shared';
+import { renderToolsReferenceMarkdown } from '../scripts/render-tools-reference-doc';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const doc = readFileSync(path.join(root, 'docs', 'fluent-contract-v1.md'), 'utf8');
+const toolsReferenceDoc = readFileSync(path.join(root, 'docs', 'fluent-tools-reference.md'), 'utf8');
+const domainSurfacesDoc = readFileSync(path.join(root, 'docs', 'fluent-domain-surfaces.md'), 'utf8');
 const packagedMealSkill = readFileSync(path.join(root, 'plugins', 'fluent', 'skills', 'fluent-meals', 'SKILL.md'), 'utf8');
 const claudeMealSkill = readFileSync(
   path.join(root, 'claude-plugin', 'fluent', 'skills', 'fluent-meals', 'SKILL.md'),
@@ -26,6 +35,30 @@ nodeAssert.equal(
   normalizeNewlines(renderContractDocMarkdown()),
   'fluent-contract-v1.md must stay in exact parity with the rendered contract doc template.',
 );
+nodeAssert.equal(
+  normalizeNewlines(toolsReferenceDoc),
+  normalizeNewlines(renderToolsReferenceMarkdown()),
+  'fluent-tools-reference.md must stay in exact parity with the rendered tools reference template.',
+);
+nodeAssert.equal(
+  normalizeNewlines(domainSurfacesDoc),
+  normalizeNewlines(renderDomainSurfacesMarkdown()),
+  'fluent-domain-surfaces.md must stay in exact parity with the rendered domain surfaces template.',
+);
+const frozenSnapshot = readFrozenContractSnapshot(path.join(root, 'contracts', 'fluent-contract.v1.json'));
+const frozenToolSet = new Set(frozenSnapshot.tools);
+for (const toolName of extractCurrentToolNamesFromMarkdown(toolsReferenceDoc)) {
+  assert(
+    frozenToolSet.has(toolName),
+    `fluent-tools-reference.md lists ${toolName} as a current tool, but it is missing from contracts/fluent-contract.v1.json.`,
+  );
+}
+for (const toolName of extractCurrentToolNamesFromMarkdown(domainSurfacesDoc)) {
+  assert(
+    frozenToolSet.has(toolName),
+    `fluent-domain-surfaces.md lists ${toolName} as a current tool, but it is missing from contracts/fluent-contract.v1.json.`,
+  );
+}
 assert(
   packagedMealSkill.includes('When the user says they are already cooking a planned meal or have started prep:'),
   'plugins/fluent meals skill must instruct the agent to mark a started meal as cooked before refreshing plan reads.',
@@ -103,8 +136,4 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
-}
-
-function normalizeNewlines(value: string) {
-  return value.replace(/\r\n/g, '\n');
 }

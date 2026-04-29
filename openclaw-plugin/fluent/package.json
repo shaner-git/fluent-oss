@@ -1,16 +1,26 @@
 {
   "name": "fluent-openclaw-oss-helper",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
-  "description": "Bundled Fluent open-source runtime helper package for OpenClaw skills, local auth, and MCP setup.",
+  "description": "Bundled OpenClaw helper package shipped with Fluent open-source exports; not the published fluent-openclaw package.",
   "author": {
-    "name": "Fluent",
-    "email": "alex@example.invalid",
-    "url": "https://mcp.meetfluent.app"
+    "name": "Fluent"
   },
-  "homepage": "https://mcp.meetfluent.app",
+  "homepage": "https://github.com/shaner-git/fluent-oss/blob/main/docs/fluent-oss.md",
   "repository": "https://github.com/shaner-git/fluent-oss",
+  "files": [
+    "assets",
+    "skills",
+    "src",
+    ".mcp.hosted.json",
+    ".mcp.json",
+    ".mcp.local.json",
+    ".mcp.oss.json",
+    "index.js",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
   "license": "MIT",
   "keywords": [
     "fluent",
@@ -24,20 +34,10 @@
   "engines": {
     "node": ">=22"
   },
-  "files": [
-    "assets",
-    "skills",
-    "src",
-    ".mcp.hosted.json",
-    ".mcp.json",
-    ".mcp.local.json",
-    ".mcp.oss.json",
-    "index.js",
-    "openclaw.plugin.json",
-    "README.md"
-  ],
   "openclaw": {
-    "extensions": ["./index.js"],
+    "extensions": [
+      "./index.js"
+    ],
     "compat": {
       "pluginApi": ">=2026.3.24-beta.2",
       "minGatewayVersion": "2026.3.24-beta.2"
@@ -50,16 +50,33 @@
   "x-fluent": {
     "artifactKind": "oss-bundled-openclaw-helper",
     "packagingDecision": "oss-embedded-openclaw-bundle-is-a-distinct-helper-package",
-    "standalonePackageName": "fluent-openclaw",
-    "standalonePackageRepository": "https://github.com/shaner-git/fluent-openclaw",
-    "versionPolicy": "Tracks bundled Fluent open-source runtime helper revisions and is not the published fluent-openclaw package line.",
+    "publishedPackageName": "fluent-openclaw",
+    "publishedPackageRepository": "https://github.com/shaner-git/fluent-openclaw",
+    "helperVersionPolicy": "Tracks Fluent open-source bundled-helper revisions and is not the published fluent-openclaw package line.",
     "backendModesStatus": "plugin-managed-auth-beta",
-    "backendModes": ["hosted", "local"],
-    "legacyBackendModes": ["hosted", "local"],
-    "deploymentTracks": ["cloud", "oss"],
-    "defaultDeploymentTrack": "cloud",
-    "minimumContractVersion": "2026-04-20.fluent-core-v1.37",
-    "requiredHostedScopes": ["meals:read", "meals:write", "health:read", "health:write", "style:read", "style:write", "offline_access"],
+    "backendModes": [
+      "hosted",
+      "local"
+    ],
+    "legacyBackendModes": [
+      "hosted",
+      "local"
+    ],
+    "deploymentTracks": [
+      "cloud",
+      "oss"
+    ],
+    "defaultDeploymentTrack": "oss",
+    "minimumContractVersion": "2026-04-26.fluent-core-v1.48",
+    "requiredHostedScopes": [
+      "meals:read",
+      "meals:write",
+      "health:read",
+      "health:write",
+      "style:read",
+      "style:write",
+      "offline_access"
+    ],
     "pluginManagedAuth": true
   }
 }

@@ -294,6 +294,10 @@ export class StyleRepository {
   }
 
   async getPhotoDeliveryRow(photoId: string) {
+    return this.getPhotoDeliveryRowForTenant(this.profileKey.tenantId, photoId);
+  }
+
+  async getPhotoDeliveryRowForTenant(tenantId: string, photoId: string) {
     return this.db
       .prepare(
         `SELECT p.id, p.item_id, p.artifact_id, p.mime_type, p.source_url, p.url,
@@ -302,7 +306,7 @@ export class StyleRepository {
          LEFT JOIN artifacts a ON a.id = p.artifact_id
          WHERE p.tenant_id = ? AND p.id = ?`,
       )
-      .bind(this.profileKey.tenantId, photoId)
+      .bind(tenantId, photoId)
       .first<{
         artifact_id: string | null;
         artifact_mime_type: string | null;

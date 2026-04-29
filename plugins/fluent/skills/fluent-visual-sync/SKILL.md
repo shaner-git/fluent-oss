@@ -9,13 +9,20 @@ description: Render Fluent state as an interactive visual with clickable local U
 
 Render Fluent state as an interactive widget inside the chat using the `visualize:show_widget` tool, and close the persistence loop by having the widget call `sendPrompt()` with a serialized summary of user actions. The assistant then reads that summary on the next turn and writes the corresponding changes back to Fluent through MCP.
 
-This skill is the implementation reference for visual-sync patterns in Fluent. Today, groceries are the primary shipped example, and `fluent-meals` routes grocery-list-first turns into it in rich hosts.
+This skill is the implementation reference for visual-sync patterns in Fluent. Today, groceries are the primary shipped example, but this Codex package does not assume `visualize:show_widget` is available by default.
+
+Follow the host routing matrix in [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md):
+
+- ChatGPT / MCP Apps-style hosts should prefer `meals_render_grocery_list_v2` instead of this skill
+- Claude-side hosts should use this skill when `visualize:show_widget` is actually available
+- Codex and generic plain clients should fall back to canonical data plus text unless the live host explicitly proves a compatible visual surface
 
 ## When to use
 
 Use this skill when:
 
 - The user asks for the grocery checklist itself, such as "What's on my grocery list?", "What do I still need to buy?", or "Show me this week's grocery list".
+- The assistant has just offered to pull up or show the grocery list and the user accepts with "yes", "pull it up", "bring it up", "show it", or similar.
 - The host supports `visualize:show_widget` and the goal is an inline interactive checklist instead of plain markdown.
 - The user explicitly asks for an inline, visual, or interactive grocery view.
 
@@ -23,6 +30,7 @@ Do **not** use this skill when:
 
 - The user only wants a text summary.
 - The host is known to support Fluent MCP widget payloads directly, such as ChatGPT app surfaces where `meals_render_grocery_list_v2` is the correct path.
+- The current host is plain Codex with no explicit visualizer support.
 - The current turn needs raw grocery-plan detail, order reconciliation, or intent debugging more than the checklist UI itself.
 
 ## Core pattern: visualizer + sendPrompt round-trip
@@ -86,7 +94,7 @@ Inline the fetched item list as a JS object literal in the widget's `<script>` b
 ```js
 const ITEMS = {
   weekStart: "2026-04-13",
-  buy:    [ { key, name, qty, meta?, badge? }, ... ],
+  buy:    [ { key, name, qty, meta?, badge?, actionStatus? }, ... ],
   verify: [ ... ],
   pantry: [ ... ],
   covered: [ ... ],
@@ -94,6 +102,14 @@ const ITEMS = {
 ```
 
 `key` must be the exact Fluent `itemKey`. Also carry it onto each rendered row via `data-item-key`.
+
+For each active item, precompute the action status the assistant should write if that row is checked:
+
+- `buy` rows usually use `purchased`
+- `verify` and `pantry` rows must use the row's supported Fluent action when available, such as the `action_status` from `syncAction.args` / `syncActions.args`
+- if the plan data does not expose a supported row action, use `have_enough` only for pantry-sufficiency-eligible lines; otherwise use `confirmed`
+
+Carry the precomputed value as `actionStatus` and onto each rendered row via `data-action-status`. Do not make the next assistant infer `have_enough` versus `confirmed` from the visible section name.
 
 ### Interaction
 
@@ -123,31 +139,32 @@ The `↗` arrow signals "this sends a prompt back to chat".
 Implement `window.getCheckedSummary()` on the widget global. It must:
 
 1. Walk all checked rows.
-2. Group them by section (`buy` → purchased, `verify` → have enough, `pantry` → pantry confirmed).
-3. Return a **single-line string** that a language model can parse reliably. Format:
+2. Group them by section (`buy` → purchased, `verify` → have enough, `pantry` → pantry confirmed) for the human-readable labels.
+3. Include the stable `itemKey` and precomputed `actionStatus` for every checked row.
+4. Return a **single-line string** that a language model can parse reliably. Format:
 
 ```
-purchased: Name A, Name B; have enough of: Name C; pantry confirmed: Name D, Name E
+purchased: Name A [key=item-key-a action_status=purchased], Name B [key=item-key-b action_status=purchased]; have enough of: Name C [key=item-key-c action_status=confirmed]; pantry confirmed: Name D [key=item-key-d action_status=have_enough]
 ```
 
 Sections with no checked items are omitted. If nothing is checked, return `"nothing checked yet"` so the assistant can respond gracefully.
 
-This grammar is pinned in `src/domains/meals/grocery-sync.ts`. Do not invent a variant punctuation or label scheme in the widget.
+Keep the section labels and punctuation stable. Do not invent a variant punctuation or label scheme in the widget.
 
-Use display names, not item keys, in the serialized string — it reads naturally in chat and the assistant can map names back to keys using the current grocery plan.
+Use display names first so the chat remains readable, but include bracketed `key=` and `action_status=` fields so writeback can use stable identifiers. Older widgets may send names only; support that fallback by resolving names against the current grocery plan.
 
 ## Sync parsing (assistant side, next turn)
 
 When the assistant receives a message matching `Sync my grocery checkboxes to Fluent for week <YYYY-MM-DD>: <summary>`:
 
-1. Parse the callback with the canonical helper in `src/domains/meals/grocery-sync.ts`.
+1. Parse the callback according to the summary serialization above.
 2. Reuse the in-context plan only if it is still present for the same week; otherwise re-fetch the grocery plan for that week with `view: "full"` before writing anything. The callback is not safe to apply against stale or missing plan context.
-3. Resolve each parsed display name against the current grocery plan before choosing `action_status`.
-4. Map statuses with the same helper logic as `src/domains/meals/grocery-sync.ts`:
+3. Prefer bracketed `key=` and `action_status=` fields from the callback when present; verify the key exists in the current grocery plan for that week before writing.
+4. For older name-only callbacks, resolve each parsed display name against the current grocery plan before choosing `action_status`.
+5. Map name-only statuses with the same supported-action logic used to build the widget:
    - `purchased` → `action_status="purchased"`
-   - `have enough of` → `action_status="have_enough"` for pantry-sufficiency-eligible lines, otherwise `action_status="confirmed"`
-   - `pantry confirmed` → `action_status="have_enough"` for pantry-sufficiency-eligible lines, otherwise `action_status="confirmed"`
-5. Call `meals_upsert_grocery_plan_action` once per item with:
+   - `have enough of` / `pantry confirmed` → use the item's supported `have_it` action from the full plan when available; otherwise use `have_enough` only for pantry-sufficiency-eligible lines and `confirmed` for quantity-aware or non-pantry lines
+6. Call `meals_upsert_grocery_plan_action` once per item with:
    ```
    week_start=<resolved week>
    item_key=<resolved key>
@@ -157,7 +174,7 @@ When the assistant receives a message matching `Sync my grocery checkboxes to Fl
    source_skill="fluent-visual-sync"
    confidence=1.0
    ```
-6. Report status per item. If any call fails, surface the error inline — do not silently drop it.
+7. Report status per item. If any call fails, surface the error inline — do not silently drop it or claim the batch fully succeeded.
 
 Name resolution guidance:
 
@@ -249,9 +266,12 @@ Follow visualizer design conventions loaded from `visualize:read_me` with `modul
       const section = row.dataset.section;
       if (section === 'covered') return;
       const name = row.querySelector('.gl-name').childNodes[0].textContent.trim();
-      if (section === 'buy') summary.purchased.push(name);
-      else if (section === 'verify') summary.verified.push(name);
-      else if (section === 'pantry') summary.pantryConfirmed.push(name);
+      const key = row.dataset.itemKey;
+      const actionStatus = row.dataset.actionStatus;
+      const encoded = name + ' [key=' + key + ' action_status=' + actionStatus + ']';
+      if (section === 'buy') summary.purchased.push(encoded);
+      else if (section === 'verify') summary.verified.push(encoded);
+      else if (section === 'pantry') summary.pantryConfirmed.push(encoded);
     });
     const parts = [];
     if (summary.purchased.length) parts.push('purchased: ' + summary.purchased.join(', '));

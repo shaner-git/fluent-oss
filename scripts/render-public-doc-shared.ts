@@ -41,10 +41,9 @@ export const CURRENT_MEALS_RENDER_TOOL_NAMES = [
   'meals_render_recipe_card',
   'meals_render_pantry_dashboard',
   'meals_render_grocery_list_v2',
-  'meals_render_grocery_list',
 ] as const;
 
-export const CURRENT_STYLE_RENDER_TOOL_NAMES = ['style_render_purchase_analysis'] as const;
+export const CURRENT_STYLE_RENDER_TOOL_NAMES = ['style_show_purchase_analysis_widget'] as const;
 
 export const CURRENT_RENDER_TOOL_NAMES = [
   ...CURRENT_MEALS_RENDER_TOOL_NAMES,
@@ -74,18 +73,14 @@ export const CURRENT_RENDER_TOOL_HOST_GUIDE: readonly RenderToolHostGuide[] = [
     plainMcpFallback: '`meals_get_grocery_plan`',
   },
   {
-    name: 'meals_render_grocery_list',
-    hostClass: 'ChatGPT/App-SDK-style widget (legacy alias)',
-    claude: 'Do not depend on the legacy widget alias in Claude hosts.',
-    openclaw: 'Use the plain-MCP grocery-plan path.',
-    plainMcpFallback: '`meals_get_grocery_plan`',
-  },
-  {
-    name: 'style_render_purchase_analysis',
+    name: 'style_show_purchase_analysis_widget',
     hostClass: 'ChatGPT/App-SDK-style widget',
-    claude: 'Prefer `style_analyze_purchase` and host-native visual follow-up.',
-    openclaw: 'Use the plain-MCP purchase-analysis path.',
-    plainMcpFallback: '`style_analyze_purchase`',
+    claude:
+      'Do not call this widget tool. Use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations` when exposed, then `style_render_purchase_analysis` for the final structured/text result. If the submit tool is unavailable, pass concrete `visual_evidence` with `source: "host_vision"` directly to `style_render_purchase_analysis`.',
+    openclaw:
+      'Do not call this widget tool. Use the plain-MCP purchase-analysis path and answer from `style_render_purchase_analysis` after real visual evidence is available.',
+    plainMcpFallback:
+      '`style_prepare_purchase_analysis` plus page extraction, `style_get_purchase_vision_packet`, and `style_render_purchase_analysis` with accepted or direct `host_vision` evidence',
   },
 ] as const;
 

@@ -8,8 +8,8 @@ import { createLocalRuntime } from '../src/local/runtime';
 
 const tempRoots: string[] = [];
 const provenance = {
-  actorEmail: 'jordan@example.invalid',
-  actorName: 'Alex Example',
+  actorEmail: 'tester@example.com',
+  actorName: 'Test User',
   confidence: 1,
   scopes: ['health:write'],
   sessionId: 'health-v2-test',

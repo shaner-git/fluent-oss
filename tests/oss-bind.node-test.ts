@@ -31,7 +31,7 @@ async function main() {
     assert.equal(health.body?.deploymentTrack, 'oss');
     assert.equal(probe.ok, true);
     assert.equal(probe.body?.deploymentTrack, 'oss');
-    assert.equal(probe.body?.display_name, 'Fluent OSS');
+    assert.equal(probe.body?.display_name, 'Fluent');
   } finally {
     child.kill('SIGTERM');
     await waitForExit(child);

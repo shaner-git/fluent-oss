@@ -136,7 +136,13 @@ When Style state is needed, prefer these read tools:
 - `style_get_item`
 - `style_get_item_profile`
 - `style_get_item_provenance`
+- `style_prepare_purchase_analysis`
+- `style_get_purchase_vision_packet`
+- `style_submit_purchase_visual_observations`
 - `style_analyze_purchase`
+- `style_get_visual_bundle`
+- `style_render_purchase_analysis`
+- `style_show_purchase_analysis_widget`
 
 Use these only for explicit writes:
 
@@ -144,6 +150,7 @@ Use these only for explicit writes:
 - `style_upsert_item_profile`
 - `style_upsert_item`
 - `style_upsert_item_photos`
+- `style_set_item_product_image`
 
 Prefer the smallest read that answers the question. Only fetch item-level detail when the next step depends on it.
 
@@ -167,26 +174,51 @@ When the user clearly tells you to change closet state, treat that as a write re
 
 ## Purchase Analysis
 
+`style_prepare_purchase_analysis` is the first hop for every purchase decision, including text-only candidate names, product links, direct image URLs, and "should I buy this?" prompts. It returns normalized candidate context, the likely comparator lane, and the visual evidence still needed before a final recommendation or widget render.
+
 `style_analyze_purchase` returns wardrobe context only.
 
+- Do not fall back to `style_get_context` as the purchase decision path when the candidate has no URL or image. Use `style_prepare_purchase_analysis` first so Fluent can return the comparator lane, render gate, and evidence requirements.
+- In the staged purchase flow, do not call `style_get_visual_bundle`; use `style_get_purchase_vision_packet` for candidate/comparator images, then call `style_submit_purchase_visual_observations`.
+- For product URLs, call `style_prepare_purchase_analysis` before any final verdict or widget.
+- If `style_prepare_purchase_analysis` returns `hostResponseMode: "request_candidate_image"`, stop the purchase verdict path and ask for candidate image evidence. Do not call `style_analyze_purchase` just to produce a text-only shopping take.
+- URL-only purchase prompts use the staged flow: `style_prepare_purchase_analysis` -> `style_extract_purchase_page_evidence` -> enriched `style_prepare_purchase_analysis` -> `style_get_purchase_vision_packet` -> host image inspection -> `style_submit_purchase_visual_observations` -> `style_show_purchase_analysis_widget`.
+- `style_render_purchase_analysis` returns structured presentation data without opening a widget.
+- Do not use `style_show_purchase_analysis_widget` as the first analytical step; it is the final widget surface after the candidate has been prepared and usable images have been inspected.
+- In ChatGPT/App SDK hosts, once `style_submit_purchase_visual_observations` returns `renderReady: true`, call `style_show_purchase_analysis_widget` before or alongside the final buy/wait/skip explanation instead of stopping with prose only.
+- If the host actually inspected the candidate/comparator images, pass `visual_evidence` with `candidateInspected`, `candidateObservations`, and `comparatorItemIdsInspected` into `style_analyze_purchase`, `style_render_purchase_analysis`, or `style_show_purchase_analysis_widget`.
 - Treat `comparatorCoverage` as the signal for how strong the closet evidence is.
 - Use `contextBuckets.exactComparatorItems` first when exact comparator coverage exists.
 - Use `contextBuckets.typedRoleItems`, `sameCategoryItems`, `sameColorFamilyItems`, and `nearbyFormalityItems` as supporting context when exact coverage is weak.
+- Use `contextBuckets.nonComparatorItems` and `comparatorReasoning.rejectedComparisons` to explain tempting matches that were deliberately rejected, such as same-color items from the wrong category.
 - Use `contextBuckets.pairingCandidates` as plausible pairing context, not as outfit judgment.
+- Use `style_get_purchase_vision_packet` as the normal purchase host-vision packet: it returns model-visible inline candidate/comparator images plus compact `itemContext` and `comparisonContext`.
+- After inspecting those inline images, call `style_submit_purchase_visual_observations` to turn concrete pixel observations into render-ready `visual_evidence`.
+- If a text-first host does not expose `style_submit_purchase_visual_observations`, pass concrete `visual_evidence` or `visualEvidence` directly to `style_render_purchase_analysis` with `source: "host_vision"` only after actually inspecting candidate and comparator images. This is a fallback for Claude-style hosts, not the ChatGPT widget path; do not tell the user the backend requires the submit tool if `Render Purchase Analysis Data` is available.
+- When a visual packet or bundle returns `textFirstRenderFallback`, use its `renderInputTemplate` as the exact shape for `style_render_purchase_analysis`. If render returns `not_render_ready`, use `renderRepair.retryInput`, replace placeholder observations with real visual details, and retry once before explaining any limitation.
+- Use `style_get_visual_bundle` for broader visual inspection outside the staged purchase flow, such as closet-analysis clusters or manual comparator review.
+- Do not call `style_get_item` in the normal purchase-analysis happy path unless you are correcting an item, checking provenance, or the visual bundle is missing detail needed for the answer.
 - If coverage mode is `category_fallback` or `sparse`, say so clearly.
 - Use the returned buckets as evidence, not as a verdict.
 - Choose the real comparators and decide whether the item is redundant, improved, adjacent, or useful.
+- In the final answer, briefly separate "closest owned comparators" from "not real comparators" when a rejected comparison would otherwise look surprising to the user.
 - Map the evidence back to stylist questions:
   - Is the silhouette better than what the closet already has?
   - Is the color genuinely useful or just familiar?
   - Does the formality fill a hole or sit in a dead zone?
   - Is this an upgrade, a duplicate, or a distraction?
 - Use the returned comparator buckets to choose which closet items to inspect visually.
-- Treat purchase analysis as a two-step flow:
+- Treat purchase analysis as a staged flow:
+  - `style_prepare_purchase_analysis` for URL/candidate normalization and evidence requirements
+  - `style_extract_purchase_page_evidence` for product-page title and direct product image URLs when preparation needs candidate images
   - `style_analyze_purchase` for lane/comparator reasoning
-  - `style_get_visual_bundle` for the candidate plus the best closet comparators you actually want to inspect
-- If the candidate has an image, pass it as `imageUrl`, `image_url`, or `imageUrls`, then use `style_get_visual_bundle` to inspect the candidate plus the closest closet comparators before deciding.
-- A product page URL is not enough on its own. For reliable candidate-side visual grounding, provide a direct image URL or image bytes.
+  - `style_get_purchase_vision_packet` for model-visible candidate and closet-comparator images, compact profile facts, and comparison reasons
+  - `style_submit_purchase_visual_observations` after the host has actually inspected the inline images
+  - `style_render_purchase_analysis` for final structured data without opening the widget in text-first clients
+  - `style_show_purchase_analysis_widget` as the ChatGPT/App SDK finish when you are ready to show the final widget and have real host visual observations
+- If the candidate has an image, pass it as `imageUrl`, `image_url`, or `imageUrls`, then use `style_get_purchase_vision_packet` and `style_submit_purchase_visual_observations` before deciding.
+- A product page URL is not enough on its own. If `style_prepare_purchase_analysis` returns `hostResponseMode: "request_candidate_image"`, do not give a final buy/wait/skip answer yet. Extract a usable direct product image or ask the user for one.
+- Do not treat a returned image URL or visual-bundle asset as inspected visual evidence until the host has actually fetched, rendered, or shown it to a vision-capable model.
 - Use metadata to shortlist. Use the images to judge.
 - Make the final recommendation in Fluent's normal voice, with uncertainty when appropriate.
 - If the item is wrong, say what would be better instead: cleaner, looser, darker, softer, less technical, more structured, and so on.
@@ -268,8 +300,8 @@ If the user indicates they are keeping the item, or wants it saved to the closet
    - clear user item photo
    - fit photo if that is the only image available
 3. Create the item with `style_upsert_item`.
-4. Write photos with `style_upsert_item_photos`.
-   - On Fluent early access, local upload file paths are not enough by themselves.
+4. Write photos with `style_set_item_product_image` when the user provides an exact product image for an exact item, or `style_upsert_item_photos` for fuller photo-set replacement.
+   - On hosted Fluent, local upload file paths are not enough by themselves.
    - Prefer `data_url`, `data_base64`, or a fetchable remote image URL so Fluent can own the image asset immediately.
 
 Do not create closet items from analysis alone.

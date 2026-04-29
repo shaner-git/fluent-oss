@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { ensureLocalTokenState } from '../src/local/auth';
@@ -8,6 +8,7 @@ import { generateMcpConfig } from '../scripts/scaffold-mcp';
 const tempRoots: string[] = [];
 
 try {
+  rejectsPlaceholderHostedEndpoint();
   rejectsCloudConfigWithoutBaseUrl();
   generatesCloudConfigFromExplicitBaseUrl();
   generatesCloudConfigForOpenClaw();
@@ -22,6 +23,14 @@ try {
       rmSync(root, { force: true, recursive: true });
     }
   }
+}
+
+function rejectsPlaceholderHostedEndpoint() {
+  const scaffoldSource = readFileSync(new URL('../scripts/scaffold-mcp.ts', import.meta.url), 'utf8');
+  const placeholderPrefix = 'hosted-fluent.';
+  const placeholderSuffix = 'example.com';
+  assert.equal(scaffoldSource.includes(placeholderPrefix), false);
+  assert.equal(scaffoldSource.includes(placeholderSuffix), false);
 }
 
 function rejectsCloudConfigWithoutBaseUrl() {

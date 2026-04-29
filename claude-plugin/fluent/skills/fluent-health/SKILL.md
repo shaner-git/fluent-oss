@@ -14,7 +14,7 @@ Use this skill when the user wants Health help that depends on saved Health stat
 - setting or updating a fitness goal
 - building or adjusting a training block
 - showing this week from the active block
-- checking today's workout
+- checking today’s workout
 - logging a completed or partial workout
 - reviewing the block and adjusting the next stretch
 - logging lightweight body metrics like weight or waist
@@ -102,6 +102,8 @@ For explicit training planning:
 Treat the block review as the main coaching moment:
 
 - use adherence counts, `metricSignals`, and `trainingSupportSummary`
+- treat missing rich logs as normal; Health should still work from lightweight `done` / `partial` / `skipped` state
+- if weekly adherence evidence is too thin for a strong adjustment, ask one short grounding question instead of acting like a tracker is missing
 - recommend `2-4` concrete next-block or next-week changes
 - keep workout logging minimal unless the user explicitly wants more detail
 

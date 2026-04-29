@@ -1,6 +1,7 @@
 import type { FluentAuthProps } from './auth';
 import { authenticateBetterAuthBearerRequest } from './better-auth';
-import { hasBetterAuthConfig, type AppEnv, type OAuthAppEnv } from './config';
+import { hasBetterAuthConfig, type AppEnv, type CloudRuntimeEnv, type OAuthAppEnv } from './config';
+import { escapeHeaderQuotedString } from './http-header';
 
 export interface BearerAuthSuccess {
   mode: 'local' | 'oauth';
@@ -17,7 +18,7 @@ export interface BearerAuthOptions {
 }
 
 export async function authenticateBearerRequest(
-  env: AppEnv | OAuthAppEnv,
+  env: AppEnv | CloudRuntimeEnv | OAuthAppEnv,
   options: BearerAuthOptions,
 ): Promise<BearerAuthSuccess | Response | null> {
   const presentedToken = parseBearerToken(options.request.headers.get('authorization'));
@@ -205,7 +206,7 @@ function parseBearerToken(headerValue: string | null): string | null {
   return match?.[1]?.trim() || null;
 }
 
-function hasOAuthProvider(env: AppEnv | OAuthAppEnv): env is OAuthAppEnv {
+function hasOAuthProvider(env: AppEnv | CloudRuntimeEnv | OAuthAppEnv): env is OAuthAppEnv {
   return typeof (env as OAuthAppEnv).OAUTH_PROVIDER?.unwrapToken === 'function';
 }
 
@@ -245,5 +246,5 @@ function hasAnyScope(grantedScopes: string[] | undefined, requiredScopes: readon
 }
 
 function escapeAuthValue(value: string): string {
-  return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+  return escapeHeaderQuotedString(value);
 }

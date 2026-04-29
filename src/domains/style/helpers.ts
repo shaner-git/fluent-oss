@@ -255,21 +255,46 @@ export function normalizeStyleItemProfile(value: unknown): StyleItemProfileDocum
 }
 
 export function normalizeStylePurchaseCandidate(value: unknown): StylePurchaseCandidate {
-  const record = asRecord(parseJsonLike<Record<string, unknown>>(value)) ?? {};
+  const rawStringValue = asNullableString(value);
+  const parsed = parseJsonLike<unknown>(value);
+  const directUrl = asNullableString(parsed) ?? rawStringValue;
+  const record = asRecord(parsed) ?? (directUrl ? { notes: rawStringValue, url: directUrl } : {});
   const price = asRecord(record.estimatedPrice);
-  const category = asNullableString(record.category);
+  const candidateName = asNullableString(record.name) ?? derivePurchaseCandidateName(record);
+  const category = normalizeStyleCategory(record.category) ?? inferStylePurchaseCategory(record);
+  const explicitSubcategory =
+    asNullableString(record.subcategory) ??
+    asNullableString(record.sub_category) ??
+    asNullableString(record.subtype) ??
+    asNullableString(record.sub_type);
   if (!category) {
     throw new Error('Style purchase candidate must include a category.');
   }
+  const signalText = buildPurchaseCandidateSignalText(record, candidateName);
+  const subcategory = explicitSubcategory ?? inferPurchaseCandidateSubcategory(category, signalText);
+  const colorName =
+    asNullableString(record.colorName) ??
+    asNullableString(record.color_name) ??
+    asNullableString(record.colourName) ??
+    asNullableString(record.colour_name) ??
+    asNullableString(record.colorway) ??
+    asNullableString(record.colourway);
   return {
-    brand: asNullableString(record.brand),
+    brand: asNullableString(record.brand) ?? asNullableString(record.brand_name) ?? inferPurchaseCandidateBrand(signalText),
     category,
     comparatorKey: inferStyleComparatorKey({
       category,
       comparatorKey: record.comparatorKey ?? record.comparator_key,
       extraSignals: [
-        record.name,
+        candidateName,
         record.notes,
+        record.url,
+        record.productUrl,
+        record.product_url,
+        record.sourceUrl,
+        record.source_url,
+        record.pageUrl,
+        record.page_url,
         record.fitType,
         record.fabricHand,
         record.silhouette,
@@ -280,11 +305,16 @@ export function normalizeStylePurchaseCandidate(value: unknown): StylePurchaseCa
         styleRole: asNullableString(record.styleRole),
         tags: asStringArray(record.tags),
       },
-      subcategory: record.subcategory,
+      subcategory,
       tags: record.tags,
     }),
-    colorFamily: asNullableString(record.colorFamily),
-    colorName: asNullableString(record.colorName),
+    colorFamily:
+      asNullableString(record.colorFamily) ??
+      asNullableString(record.color_family) ??
+      asNullableString(record.colourFamily) ??
+      asNullableString(record.colour_family) ??
+      inferPurchaseCandidateColorFamily(signalText, colorName),
+    colorName,
     estimatedPrice: price
       ? {
           max: asNullableNumber(price.max),
@@ -297,19 +327,243 @@ export function normalizeStylePurchaseCandidate(value: unknown): StylePurchaseCa
     fitObservations: asStringArray(record.fitObservations),
     formality: asNullableNumber(record.formality),
     imageUrls: collectPurchaseCandidateImageUrls(record),
-    name: asNullableString(record.name),
+    name: candidateName,
     notes: asNullableString(record.notes),
     polishLevel: asNullableString(record.polishLevel),
     qualityTier: asNullableString(record.qualityTier),
     seasonality: asStringArray(record.seasonality),
     silhouette: asNullableString(record.silhouette),
     structureLevel: asNullableString(record.structureLevel),
-    subcategory: asNullableString(record.subcategory),
+    subcategory,
     texture: asNullableString(record.texture),
     useCases: asStringArray(record.useCases),
     avoidUseCases: asStringArray(record.avoidUseCases),
     visualWeight: asNullableString(record.visualWeight),
   };
+}
+
+function inferStylePurchaseCategory(record: Record<string, unknown>): string | null {
+  const url =
+    asNullableString(record.url) ??
+    asNullableString(record.productUrl) ??
+    asNullableString(record.product_url) ??
+    asNullableString(record.sourceUrl) ??
+    asNullableString(record.source_url) ??
+    asNullableString(record.pageUrl) ??
+    asNullableString(record.page_url);
+  const signals = [
+    asNullableString(record.name),
+    asNullableString(record.subcategory),
+    asNullableString(record.sub_category),
+    asNullableString(record.subtype),
+    asNullableString(record.sub_type),
+    asNullableString(record.notes),
+    url,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ');
+
+  if (!signals) {
+    return null;
+  }
+
+  if (/(shoe|shoes|sneaker|sneakers|trainer|trainers|runner|runners|boot|boots|loafer|loafers|slides|sandals|air force|air max|stan smith|common projects)/.test(signals)) {
+    return 'SHOE';
+  }
+  if (/(jacket|coat|overshirt|hoodie|hooded)/.test(signals)) {
+    return 'OUTERWEAR';
+  }
+  if (/(jean|jeans|trouser|trousers|pants|pant|short|shorts|chino|chinos|jogger|joggers)/.test(signals)) {
+    return 'BOTTOM';
+  }
+  if (/(tee|t-shirt|t shirt|shirt|shirts|sweater|polo|henley|jersey)/.test(signals)) {
+    return 'TOP';
+  }
+
+  return null;
+}
+
+function buildPurchaseCandidateSignalText(record: Record<string, unknown>, candidateName: string | null): string {
+  return [
+    candidateName,
+    record.brand,
+    record.brand_name,
+    record.colorFamily,
+    record.color_family,
+    record.colorName,
+    record.color_name,
+    record.colourFamily,
+    record.colour_family,
+    record.colourName,
+    record.colour_name,
+    record.colorway,
+    record.colourway,
+    record.subcategory,
+    record.sub_category,
+    record.subtype,
+    record.sub_type,
+    record.notes,
+    record.title,
+    record.pageTitle,
+    record.page_title,
+    record.url,
+    record.productUrl,
+    record.product_url,
+    record.sourceUrl,
+    record.source_url,
+    record.pageUrl,
+    record.page_url,
+  ]
+    .map((entry) => asNullableString(entry))
+    .filter((entry): entry is string => Boolean(entry))
+    .join(' ')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ');
+}
+
+function inferPurchaseCandidateBrand(signalText: string): string | null {
+  if (!signalText) {
+    return null;
+  }
+  if (/\b(nocta|nike x nocta)\b/.test(signalText)) {
+    return 'Nike x NOCTA';
+  }
+  if (/\bnike\b/.test(signalText)) {
+    return 'Nike';
+  }
+  if (/\badidas\b/.test(signalText)) {
+    return 'Adidas';
+  }
+  if (/\bcommon projects\b/.test(signalText)) {
+    return 'Common Projects';
+  }
+  if (/\ballen edmonds\b/.test(signalText)) {
+    return 'Allen Edmonds';
+  }
+  return null;
+}
+
+function inferPurchaseCandidateSubcategory(category: string, signalText: string): string | null {
+  if (!signalText) {
+    return null;
+  }
+
+  const patternsByCategory: Record<string, Array<[RegExp, string]>> = {
+    BOTTOM: [
+      [/\b(chino|chinos)\b/, 'Chino'],
+      [/\b(jean|jeans|denim)\b/, 'Jean'],
+      [/\b(trouser|trousers|slack|slacks|pant|pants)\b/, 'Trouser'],
+      [/\b(jogger|joggers|track pants?|sweatpants?)\b/, 'Jogger'],
+      [/\b(short|shorts)\b/, 'Short'],
+    ],
+    OUTERWEAR: [
+      [/\b(parka)\b/, 'Parka'],
+      [/\b(overcoat|topcoat|trench|raincoat|mac)\b/, 'Coat'],
+      [/\b(bomber|blazer|sport coat|jacket|anorak)\b/, 'Jacket'],
+      [/\b(overshirt|shirt jacket|shacket)\b/, 'Overshirt'],
+      [/\b(hoodie|hooded sweatshirt)\b/, 'Hoodie'],
+    ],
+    SHOE: [
+      [/\b(air force 1|af1|air max|stan smith|common projects|achilles|sneaker|sneakers|trainer|trainers|runner|running shoe|court shoe)\b/, 'Sneaker'],
+      [/\b(loafer|loafers)\b/, 'Loafer'],
+      [/\b(oxford|oxfords|cap toe)\b/, 'Oxford'],
+      [/\b(derby|derbies|blucher)\b/, 'Derby'],
+      [/\b(chelsea|chukka|boot|boots)\b/, 'Boot'],
+      [/\b(sandal|sandals|slide|slides|flip flop)\b/, 'Sandal'],
+      [/\b(mule|mules|clog|clogs)\b/, 'Mule'],
+    ],
+    TOP: [
+      [/\b(crew neck sweater|crewneck sweater|crew neck jumper|crewneck jumper|sweater|jumper|pullover|knit)\b/, 'Sweater'],
+      [/\b(polo|polo shirt)\b/, 'Polo'],
+      [/\b(oxford shirt|ocbd|button down)\b/, 'Oxford Shirt'],
+      [/\b(camp shirt|camp collar|resort shirt|cabana shirt)\b/, 'Camp Shirt'],
+      [/\b(henley)\b/, 'Henley'],
+      [/\b(basketball jersey|soccer jersey|football jersey|jersey)\b/, 'Jersey'],
+      [/\b(t-shirt|t shirt|tee|tshirt)\b/, 'T-Shirt'],
+      [/\b(hoodie|hooded sweatshirt)\b/, 'Hoodie'],
+      [/\b(cardigan)\b/, 'Cardigan'],
+      [/\b(dress shirt|button up|buttonup|shirt)\b/, 'Shirt'],
+    ],
+  };
+
+  for (const [pattern, subcategory] of patternsByCategory[category] ?? []) {
+    if (pattern.test(signalText)) {
+      return subcategory;
+    }
+  }
+  return null;
+}
+
+function inferPurchaseCandidateColorFamily(signalText: string, colorName: string | null): string | null {
+  const signals = [colorName, signalText]
+    .map((entry) => asNullableString(entry))
+    .filter((entry): entry is string => Boolean(entry))
+    .join(' ')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ');
+  if (!signals) {
+    return null;
+  }
+
+  const colorPatterns: Array<[RegExp, string]> = [
+    [/\b(triple white|all white|white)\b/, 'white'],
+    [/\b(triple black|all black|black)\b/, 'black'],
+    [/\b(gray|grey|silver)\b/, 'gray'],
+    [/\b(brown|chocolate|espresso|tan|taupe|beige|cream|sail|khaki)\b/, 'brown'],
+    [/\b(yellow|citron|gold)\b/, 'yellow'],
+    [/\b(green|olive)\b/, 'green'],
+    [/\b(blue|navy)\b/, 'blue'],
+    [/\b(red|burgundy|maroon)\b/, 'red'],
+    [/\b(pink|rose)\b/, 'pink'],
+    [/\b(orange|rust)\b/, 'orange'],
+    [/\b(purple|violet)\b/, 'purple'],
+  ];
+
+  return colorPatterns.find(([pattern]) => pattern.test(signals))?.[1] ?? null;
+}
+
+function derivePurchaseCandidateName(record: Record<string, unknown>): string | null {
+  const urlValue =
+    asNullableString(record.url) ??
+    asNullableString(record.productUrl) ??
+    asNullableString(record.product_url) ??
+    asNullableString(record.sourceUrl) ??
+    asNullableString(record.source_url) ??
+    asNullableString(record.pageUrl) ??
+    asNullableString(record.page_url);
+  if (!urlValue) return null;
+
+  try {
+    const url = new URL(urlValue);
+    const slug = url.pathname
+      .split('/')
+      .filter(Boolean)
+      .slice(-2)
+      .find((part) => /[a-z]/i.test(part) && !/^\d+$/.test(part));
+    if (!slug) return null;
+
+    const normalized = slug
+      .replace(/\.(html|htm)$/i, '')
+      .replace(/[-_]+/g, ' ')
+      .replace(/\bmens?\b/gi, '')
+      .replace(/\bwomens?\b/gi, '')
+      .replace(/\bkids?\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!normalized) return null;
+    return normalized
+      .split(' ')
+      .map((part) => {
+        if (/^\d/.test(part)) return part;
+        return part.charAt(0).toUpperCase() + part.slice(1);
+      })
+      .join(' ');
+  } catch {
+    return null;
+  }
 }
 
 function normalizeWeightedPreferences(value: unknown, fallbackValues: string[] = []): StyleWeightedPreferenceRecord[] {
@@ -468,7 +722,7 @@ function collectPurchaseCandidateImageUrls(record: Record<string, unknown>): str
     asNullableString(record.source_url),
     asNullableString(record.url),
   ].filter((value): value is string => Boolean(value));
-  return Array.from(new Set(urls));
+  return Array.from(new Set(urls.filter(looksLikeImageUrl)));
 }
 
 export function normalizeStyleItemInput(value: unknown): Record<string, unknown> {
@@ -663,7 +917,60 @@ export function isStylePurchaseEvalReady(
 
 function normalizeStyleCategory(value: unknown): string | null {
   const category = asNullableString(value);
-  return category ? category.trim().toUpperCase() : null;
+  if (!category) {
+    return null;
+  }
+
+  switch (category.trim().toLowerCase().replace(/[\s_-]+/g, ' ')) {
+    case 'top':
+    case 'tops':
+    case 'shirt':
+    case 'shirts':
+      return 'TOP';
+    case 'bottom':
+    case 'bottoms':
+    case 'pants':
+    case 'trousers':
+      return 'BOTTOM';
+    case 'outerwear':
+    case 'outer wear':
+    case 'jacket':
+    case 'jackets':
+    case 'coat':
+    case 'coats':
+      return 'OUTERWEAR';
+    case 'shoe':
+    case 'shoes':
+    case 'footwear':
+    case 'sneaker':
+    case 'sneakers':
+    case 'boot':
+    case 'boots':
+      return 'SHOE';
+    default:
+      return category.trim().toUpperCase();
+  }
+}
+
+function looksLikeImageUrl(value: string): boolean {
+  if (/^data:image\//i.test(value)) {
+    return true;
+  }
+
+  try {
+    const url = new URL(value);
+    const pathname = url.pathname.toLowerCase();
+    if (/\.(avif|gif|jpe?g|png|svg|webp)$/.test(pathname)) {
+      return true;
+    }
+    if (pathname.endsWith('.html') || pathname.endsWith('.htm')) {
+      return false;
+    }
+    const hint = `${url.hostname}${pathname}${url.search}`.toLowerCase();
+    return /(image|img|photo|cdn|media)/.test(hint) && !/product/.test(pathname);
+  } catch {
+    return false;
+  }
 }
 
 function collectComparatorSignals(
@@ -770,6 +1077,9 @@ function inferComparatorKeyForCategory(category: string | null, signals: string[
     if (matchesComparatorAlias(signals, ['loafer', 'loafers'])) return 'loafer';
     if (matchesComparatorAlias(signals, ['oxford', 'oxfords', 'cap_toe_oxford', 'oxford_derby'])) return 'oxford';
     if (matchesComparatorAlias(signals, ['derby', 'derbies', 'blucher'])) return 'derby';
+    if (signals.some((signal) => /(air_force_1|af1|air_max|stan_smith|common_projects|achilles)/.test(signal))) {
+      return 'sneaker';
+    }
     if (
       matchesComparatorAlias(signals, [
         'sneaker',

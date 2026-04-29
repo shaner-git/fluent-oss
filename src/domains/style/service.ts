@@ -7,6 +7,7 @@ import {
   asNullableNumber,
   asNullableString,
   asRecord,
+  asStringArray,
   deriveBaselineStyleItemProfile,
   inferStyleComparatorKey,
   inferStyleOnboardingMode,
@@ -60,7 +61,9 @@ import type {
   StylePurchaseAnalysis,
   StylePurchaseCandidate,
   StylePurchaseAnalysisItemMatch,
+  StylePurchaseVisualEvidence,
   StyleComparatorCoverage,
+  StyleArchiveItemResult,
   StylePhotoDeliveryRecord,
   StyleReplacementCandidateRecord,
   StyleWardrobeAnalysis,
@@ -69,7 +72,10 @@ import type {
   StyleWardrobeFindingRecord,
   StyleRedundancyClusterRecord,
   StyleVisualBundleAssetRecord,
+  StyleVisualBundleComparisonBucketRole,
+  StyleVisualBundleComparisonContext,
   StyleVisualBundleDeliveryMode,
+  StyleVisualBundleItemContext,
   StyleVisualBundleRecord,
 } from './types';
 
@@ -87,6 +93,13 @@ export {
   summarizeStyleWardrobeAnalysis,
 };
 
+const EMPTY_PURCHASE_VISUAL_EVIDENCE: StylePurchaseVisualEvidence = {
+  candidateInspected: false,
+  candidateObservations: [],
+  comparatorItemIdsInspected: [],
+  source: null,
+};
+
 export function buildStyleMutationAck(
   entityType: string,
   entityId: string,
@@ -100,6 +113,33 @@ export function buildStyleMutationAck(
     eventType,
     happenedAt,
     summary,
+  };
+}
+
+function normalizeStylePurchaseVisualEvidence(value: unknown): StylePurchaseVisualEvidence {
+  const record = asRecord(value);
+  if (!record) {
+    return EMPTY_PURCHASE_VISUAL_EVIDENCE;
+  }
+
+  const candidateObservations = [
+    ...asStringArray(record.candidateObservations ?? record.candidate_observations ?? record.observations),
+    asNullableString(record.candidateObservation ?? record.candidate_observation ?? record.note),
+  ]
+    .filter((entry): entry is string => Boolean(entry))
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const comparatorItemIdsInspected = asStringArray(
+    record.comparatorItemIdsInspected ?? record.comparator_item_ids_inspected ?? record.inspectedComparatorItemIds,
+  );
+  const candidateInspected =
+    asBoolean(record.candidateInspected ?? record.candidate_inspected) === true || candidateObservations.length > 0;
+
+  return {
+    candidateInspected,
+    candidateObservations: Array.from(new Set(candidateObservations)).slice(0, 8),
+    comparatorItemIdsInspected: Array.from(new Set(comparatorItemIdsInspected)).slice(0, 12),
+    source: asNullableString(record.source) ?? (candidateInspected ? 'host_vision' : null),
   };
 }
 
@@ -397,6 +437,89 @@ export class StyleService {
       provenance: input.provenance,
     });
     return after;
+  }
+
+  async archiveItem(input: {
+    itemId?: string | null;
+    itemName?: string | null;
+    provenance: MutationProvenance;
+    sourceSnapshot?: unknown;
+  }): Promise<StyleArchiveItemResult> {
+    const requestedItemId = asNullableString(input.itemId);
+    const requestedName = asNullableString(input.itemName);
+    if (!requestedItemId && !requestedName) {
+      throw new Error('style_archive_item requires item_id or item_name.');
+    }
+
+    const beforeItems = await this.listItems();
+    const nameKey = normalizeStyleArchiveMatchName(requestedName);
+    const exactNameMatches = nameKey
+      ? beforeItems.filter((item) => normalizeStyleArchiveMatchName(item.name) === nameKey)
+      : [];
+    const matchedItems = requestedItemId
+      ? beforeItems.filter((item) => item.id === requestedItemId)
+      : exactNameMatches;
+    const activeExactMatchesBefore = matchedItems.filter((item) => item.status === 'active');
+
+    if (matchedItems.length === 0) {
+      return {
+        activeExactMatchesAfter: [],
+        activeExactMatchesBefore: [],
+        archivedItemIds: [],
+        archivedItems: [],
+        matchedItems: rankStyleArchiveNameCandidates(beforeItems, requestedName).map((item) => summarizeStyleItem(item) as StyleItemSummaryRecord),
+        notes: [
+          requestedItemId
+            ? `No Style closet item found with id ${requestedItemId}.`
+            : `No exact Style closet item name match found for ${requestedName}.`,
+        ],
+        requestedItemId,
+        requestedName,
+        status: 'not_found',
+        verifiedNoActiveExactMatch: false,
+      };
+    }
+
+    const archivedItems: StyleItemRecord[] = [];
+    for (const item of activeExactMatchesBefore) {
+      archivedItems.push(
+        await this.upsertItem({
+          item: {
+            id: item.id,
+            status: 'archived',
+          },
+          provenance: input.provenance,
+          sourceSnapshot: input.sourceSnapshot,
+        }),
+      );
+    }
+
+    const afterItems = await this.listItems();
+    const activeExactMatchesAfter = requestedItemId
+      ? afterItems.filter((item) => item.id === requestedItemId && item.status === 'active')
+      : afterItems.filter((item) => normalizeStyleArchiveMatchName(item.name) === nameKey && item.status === 'active');
+    const status =
+      archivedItems.length > 0
+        ? 'archived'
+        : matchedItems.every((item) => item.status !== 'active')
+          ? 'already_archived'
+          : 'needs_disambiguation';
+
+    return {
+      activeExactMatchesAfter: activeExactMatchesAfter.map((item) => summarizeStyleItem(item) as StyleItemSummaryRecord),
+      activeExactMatchesBefore: activeExactMatchesBefore.map((item) => summarizeStyleItem(item) as StyleItemSummaryRecord),
+      archivedItemIds: archivedItems.map((item) => item.id),
+      archivedItems: archivedItems.map((item) => summarizeStyleItem(item) as StyleItemSummaryRecord),
+      matchedItems: matchedItems.map((item) => summarizeStyleItem(item) as StyleItemSummaryRecord),
+      notes:
+        activeExactMatchesAfter.length === 0
+          ? ['Read-after-write verification found no active exact match for the requested item.']
+          : ['Read-after-write verification still found active exact matches; use item_id to disambiguate.'],
+      requestedItemId,
+      requestedName,
+      status,
+      verifiedNoActiveExactMatch: activeExactMatchesAfter.length === 0,
+    };
   }
 
   async upsertItemPhotos(input: {
@@ -876,9 +999,15 @@ export class StyleService {
     };
   }
 
-  async analyzePurchase(input: { candidate: unknown; provenance?: MutationProvenance }): Promise<StylePurchaseAnalysis> {
+  async analyzePurchase(input: {
+    candidate: unknown;
+    provenance?: MutationProvenance;
+    visualEvidence?: unknown;
+  }): Promise<StylePurchaseAnalysis> {
     const candidate = normalizeStylePurchaseCandidate(input.candidate);
+    const visualEvidence = normalizeStylePurchaseVisualEvidence(input.visualEvidence);
     const [profile, items] = await Promise.all([this.getProfile(), this.listItems()]);
+    const activeItems = items.filter((item) => item.status === 'active');
     const itemsById: Record<string, StyleItemSummaryRecord> = {};
     const registerAnalysisItem = (item: StyleItemRecord): StyleItemSummaryRecord => {
       const existing = itemsById[item.id];
@@ -896,7 +1025,7 @@ export class StyleService {
         category: candidate.category,
         subcategory: candidate.subcategory,
       });
-    const sameCategory = items.filter((item) => item.category?.toLowerCase() === candidateCategory);
+    const sameCategory = activeItems.filter((item) => item.category?.toLowerCase() === candidateCategory);
     const exactComparatorItems = [...sameCategory]
       .map((item) => {
         if (candidateComparatorKey && candidateComparatorKey !== 'unknown' && item.comparatorKey === candidateComparatorKey) {
@@ -915,12 +1044,7 @@ export class StyleService {
         return null;
       })
       .filter((entry): entry is { item: StyleItemRecord; reasons: string[] } => Boolean(entry))
-      .sort(
-        (left, right) =>
-          Number(right.item.status === 'active') - Number(left.item.status === 'active') ||
-          left.item.name?.localeCompare(right.item.name ?? '') ||
-          0,
-      )
+      .sort((left, right) => comparePurchaseBucketEntries(candidate, left.item, right.item))
       .slice(0, 4)
       .map(({ item, reasons }) => {
         registerAnalysisItem(item);
@@ -945,12 +1069,7 @@ export class StyleService {
         return null;
       })
       .filter((entry): entry is { item: StyleItemRecord; reasons: string[] } => Boolean(entry))
-      .sort(
-        (left, right) =>
-          Number(right.item.status === 'active') - Number(left.item.status === 'active') ||
-          left.item.name?.localeCompare(right.item.name ?? '') ||
-          0,
-      )
+      .sort((left, right) => comparePurchaseBucketEntries(candidate, left.item, right.item))
       .slice(0, 4)
       .map(({ item, reasons }) => {
         registerAnalysisItem(item);
@@ -991,27 +1110,12 @@ export class StyleService {
         };
       })
       .filter((entry) => entry.score > 1)
-      .sort((left, right) => right.score - left.score || left.sortName?.localeCompare(right.sortName ?? '') || 0)
-      .slice(0, 4)
-      .map(({ item, reasons }) => {
-        registerAnalysisItem(item);
-        return {
-          itemId: item.id,
-          reasons,
-        };
-      });
-
-    const sameColorFamilyItems = items
-      .filter((item) => item.colorFamily && candidate.colorFamily && item.colorFamily.toLowerCase() === candidate.colorFamily.toLowerCase())
-      .map((item) => {
-        const reasons = [`same color family (${candidate.colorFamily})`];
-        if (item.category?.toLowerCase() === candidateCategory) {
-          reasons.push(`same category lane (${candidate.category})`);
+      .sort((left, right) => {
+        const bucketOrder = comparePurchaseBucketEntries(candidate, left.item, right.item);
+        if (bucketOrder !== 0) {
+          return bucketOrder;
         }
-        return {
-          item,
-          reasons,
-        };
+        return right.score - left.score || left.sortName?.localeCompare(right.sortName ?? '') || 0;
       })
       .slice(0, 4)
       .map(({ item, reasons }) => {
@@ -1022,7 +1126,27 @@ export class StyleService {
         };
       });
 
-    const nearbyFormalityItems = items
+    const sameColorFamilyItems = sameCategory
+      .filter((item) => item.colorFamily && candidate.colorFamily && item.colorFamily.toLowerCase() === candidate.colorFamily.toLowerCase())
+      .map((item) => {
+        const reasons = [`same color family (${candidate.colorFamily})`];
+        reasons.push(`same category lane (${candidate.category})`);
+        return {
+          item,
+          reasons,
+        };
+      })
+      .sort((left, right) => comparePurchaseBucketEntries(candidate, left.item, right.item))
+      .slice(0, 4)
+      .map(({ item, reasons }) => {
+        registerAnalysisItem(item);
+        return {
+          itemId: item.id,
+          reasons,
+        };
+      });
+
+    const nearbyFormalityItems = activeItems
       .filter((item) => candidate.formality != null && item.formality != null && Math.abs(item.formality - candidate.formality) <= 1)
       .map((item) => ({
         item,
@@ -1045,7 +1169,7 @@ export class StyleService {
     };
     const preferredPairCategories = relatedCategoryPriority[candidateCategory] ?? [];
     const candidateAthletic = isAthleticPurchaseCandidate(candidate);
-    const pairingCandidates: StylePurchaseAnalysisItemMatch[] = items
+    const pairingCandidates: StylePurchaseAnalysisItemMatch[] = activeItems
       .filter((item) => item.category && item.category.toLowerCase() !== candidateCategory)
       .filter((item) =>
         isCoherentPairingCandidate({
@@ -1093,6 +1217,18 @@ export class StyleService {
           reasons,
         };
       });
+
+    const nonComparatorItems = buildPurchaseNonComparatorItems({
+      candidate,
+      candidateCategory,
+      items: activeItems,
+    });
+    for (const rejected of nonComparatorItems) {
+      const item = activeItems.find((entry) => entry.id === rejected.itemId);
+      if (item) {
+        registerAnalysisItem(item);
+      }
+    }
 
     const preferredColors = activeStyleColorSignals(profile.raw);
     const preferredSilhouettes = activeStyleSilhouetteSignals(profile.raw);
@@ -1159,14 +1295,36 @@ export class StyleService {
     if (sportUtilityException) {
       tensionNotes.push('reads as sport or utility gear rather than a core wardrobe lane piece');
     }
-    const typedProfileCoverage = items.length > 0 ? Number((items.filter((item) => item.profile !== null).length / items.length).toFixed(2)) : 0;
+    const typedProfileCoverage =
+      activeItems.length > 0
+        ? Number((activeItems.filter((item) => item.profile !== null).length / activeItems.length).toFixed(2))
+        : 0;
     const primaryPhotoCoverage =
-      items.length > 0
-        ? Number((items.filter((item) => item.photos.some((photo) => photo.isPrimary)).length / items.length).toFixed(2))
+      activeItems.length > 0
+        ? Number(
+            (
+              activeItems.filter((item) => item.photos.some((photo) => photo.isPrimary)).length / activeItems.length
+            ).toFixed(2),
+          )
         : 0;
     const evidenceNotes: string[] = [];
-    if (candidate.imageUrls.length === 0) {
+    const candidateVisualGrounding = visualEvidence.candidateInspected
+      ? 'host_visual_inspection'
+      : candidate.imageUrls.length > 0
+        ? 'image_reference_only'
+        : 'none';
+    if (visualEvidence.candidateInspected) {
+      evidenceNotes.push('candidate image was inspected by the host before this purchase analysis was finalized');
+    } else if (candidate.imageUrls.length === 0) {
       evidenceNotes.push('no candidate image provided; analysis relies on text attributes and closet state');
+    } else {
+      evidenceNotes.push('candidate image reference is present, but purchase analysis has not inspected pixels; use style_get_visual_bundle and direct image reading before making color or material claims');
+    }
+    for (const observation of visualEvidence.candidateObservations.slice(0, 4)) {
+      evidenceNotes.push(`candidate visual observation: ${observation}`);
+    }
+    if (visualEvidence.comparatorItemIdsInspected.length > 0) {
+      evidenceNotes.push(`host inspected ${visualEvidence.comparatorItemIdsInspected.length} closet comparator image(s)`);
     }
     if (typedProfileCoverage < 0.5) {
       evidenceNotes.push('typed profile coverage is still partial across the closet');
@@ -1185,17 +1343,6 @@ export class StyleService {
       evidenceNotes.push(comparatorCoverage.note);
     }
     const candidateDescriptorSummary = descriptorSummaryFromCandidate(candidate);
-    const comparatorDescriptorSummaries = Object.fromEntries(
-      Object.keys(itemsById).map((itemId) => {
-        const item = items.find((entry) => entry.id === itemId);
-        return [itemId, descriptorSummaryFromItem(item ?? null)];
-      }),
-    );
-    const descriptorDeltas = descriptorDeltaNotes({
-      candidate: candidateDescriptorSummary,
-      comparatorIds: exactComparatorItems.map((entry) => entry.itemId),
-      comparatorSummaries: comparatorDescriptorSummaries,
-    });
     const laneAssessment = buildLaneAssessment({
       candidateCategory: candidate.category,
       candidateComparatorKey,
@@ -1211,26 +1358,44 @@ export class StyleService {
       gapLane: exactComparatorItems.length === 0 && typedRoleItems.length === 0,
       sameCategoryCount: sameCategory.length,
     });
-    const confidenceNotes = buildPurchaseConfidenceNotes({
-      candidateHasImage: candidate.imageUrls.length > 0,
-      comparatorCoverageMode: comparatorCoverage.mode,
-      descriptorDeltas,
-      exactComparatorCount: exactComparatorItems.length,
-      itemsById,
-    });
     const comparatorReasoning = buildPurchaseComparatorReasoning({
       candidate,
       contextBuckets: {
         exactComparatorItems,
         nearbyFormalityItems,
+        nonComparatorItems,
         pairingCandidates,
         sameCategoryItems,
         sameColorFamilyItems,
         typedRoleItems,
       },
       coverageImpact,
-      items,
+      items: activeItems,
       laneAssessment,
+    });
+    for (const comparison of comparatorReasoning.topComparisons) {
+      const item = items.find((entry) => entry.id === comparison.itemId);
+      if (item) {
+        registerAnalysisItem(item);
+      }
+    }
+    const comparatorDescriptorSummaries = Object.fromEntries(
+      Object.keys(itemsById).map((itemId) => {
+        const item = items.find((entry) => entry.id === itemId);
+        return [itemId, descriptorSummaryFromItem(item ?? null)];
+      }),
+    );
+    const descriptorDeltas = descriptorDeltaNotes({
+      candidate: candidateDescriptorSummary,
+      comparatorIds: exactComparatorItems.map((entry) => entry.itemId),
+      comparatorSummaries: comparatorDescriptorSummaries,
+    });
+    const confidenceNotes = buildPurchaseConfidenceNotes({
+      candidateHasImage: candidate.imageUrls.length > 0,
+      comparatorCoverageMode: comparatorCoverage.mode,
+      descriptorDeltas,
+      exactComparatorCount: exactComparatorItems.length,
+      itemsById,
     });
 
     const analysis: StylePurchaseAnalysis = {
@@ -1254,6 +1419,7 @@ export class StyleService {
       contextBuckets: {
         exactComparatorItems,
         nearbyFormalityItems,
+        nonComparatorItems,
         pairingCandidates,
         sameCategoryItems,
         sameColorFamilyItems,
@@ -1276,10 +1442,14 @@ export class StyleService {
         sportUtilityException,
       },
       evidenceQuality: {
+        candidateVisualGrounding,
         candidateImageCount: candidate.imageUrls.length,
+        candidateVisualObservations: visualEvidence.candidateObservations,
+        comparatorItemIdsInspected: visualEvidence.comparatorItemIdsInspected,
         notes: evidenceNotes,
         primaryPhotoCoverage,
         typedProfileCoverage,
+        visualEvidenceSource: visualEvidence.source,
       },
     };
 
@@ -1313,6 +1483,9 @@ export class StyleService {
       input.candidate ? this.analyzePurchase({ candidate: input.candidate }) : Promise.resolve(null),
     ]);
     const itemMap = new Map(items.map((item) => [item.id, item]));
+    const comparisonContextByItemId = analysis
+      ? buildVisualBundleComparisonContextByItemId(analysis)
+      : new Map<string, StyleVisualBundleComparisonContext>();
     const assets: StyleVisualBundleAssetRecord[] = [];
     const evidenceWarnings: string[] = [];
     const seenPhotoIds = new Set<string>();
@@ -1347,8 +1520,10 @@ export class StyleService {
         : null;
       assets.push({
         authenticatedOriginalUrl: bundlePhoto.delivery?.originalUrl ?? null,
+        comparisonContext: comparisonContextByItemId.get(item.id) ?? null,
         fallbackExpiresAt: fallbackSigned?.expiresAt ?? null,
         fallbackSignedOriginalUrl: fallbackSigned?.originalUrl ?? null,
+        itemContext: buildVisualBundleItemContext(item),
         itemId: item.id,
         label: item.name ?? item.id,
         photoId: bundlePhoto.id,
@@ -1362,8 +1537,10 @@ export class StyleService {
       if (candidateImageUrl) {
         assets.push({
           authenticatedOriginalUrl: null,
+          comparisonContext: null,
           fallbackExpiresAt: null,
           fallbackSignedOriginalUrl: null,
+          itemContext: null,
           itemId: null,
           label: analysis.candidate.name ?? 'Candidate',
           photoId: null,
@@ -1379,7 +1556,28 @@ export class StyleService {
       await pushItemPrimaryPhoto(itemId, 'requested_item');
     }
 
-    if (includeComparators && analysis) {
+    if (includeComparators && analysis && requestedItemIds.length === 0) {
+      const exactComparatorIds = new Set(analysis.contextBuckets.exactComparatorItems.map((entry) => entry.itemId));
+      const typedRoleIds = new Set(analysis.contextBuckets.typedRoleItems.map((entry) => entry.itemId));
+      const pushedComparatorIds = new Set<string>();
+      const roleForComparison = (itemId: string): Exclude<StyleVisualBundleAssetRecord['role'], 'candidate' | 'requested_item'> => {
+        if (exactComparatorIds.has(itemId)) {
+          return 'exact_comparator';
+        }
+        if (typedRoleIds.has(itemId)) {
+          return 'typed_role';
+        }
+        return 'same_category';
+      };
+
+      for (const comparison of analysis.comparatorReasoning.topComparisons) {
+        if (assets.length >= maxImages) {
+          break;
+        }
+        pushedComparatorIds.add(comparison.itemId);
+        await pushItemPrimaryPhoto(comparison.itemId, roleForComparison(comparison.itemId));
+      }
+
       const comparatorRoles: Array<{
         items: StylePurchaseAnalysisItemMatch[];
         role: Exclude<StyleVisualBundleAssetRecord['role'], 'candidate' | 'requested_item'>;
@@ -1387,7 +1585,6 @@ export class StyleService {
         { items: analysis.contextBuckets.exactComparatorItems, role: 'exact_comparator' },
         { items: analysis.contextBuckets.typedRoleItems, role: 'typed_role' },
         { items: analysis.contextBuckets.sameCategoryItems, role: 'same_category' },
-        { items: analysis.contextBuckets.nearbyFormalityItems, role: 'nearby_formality' },
       ];
 
       for (const bucket of comparatorRoles) {
@@ -1395,6 +1592,10 @@ export class StyleService {
           if (assets.length >= maxImages) {
             break;
           }
+          if (pushedComparatorIds.has(entry.itemId)) {
+            continue;
+          }
+          pushedComparatorIds.add(entry.itemId);
           await pushItemPrimaryPhoto(entry.itemId, bucket.role);
         }
         if (assets.length >= maxImages) {
@@ -1407,12 +1608,32 @@ export class StyleService {
       evidenceWarnings.push(...analysis.evidenceQuality.notes);
     }
 
+    const fetchableAssetCount = assets.filter((asset) => asset.fallbackSignedOriginalUrl || asset.authenticatedOriginalUrl || asset.sourceUrl).length;
+    const missingCandidateImage = Boolean(analysis) && !assets.some((asset) => asset.role === 'candidate');
+    const visualInspectionState =
+      assets.length === 0
+        ? 'no_images_available'
+        : missingCandidateImage
+          ? 'missing_candidate_image'
+          : 'image_references_returned';
+
     return {
       assets,
       comparatorCoverageMode: analysis?.comparatorCoverage.mode ?? null,
       deliveryMode,
       evidenceWarnings: Array.from(new Set(evidenceWarnings)),
       requestedItemIds,
+      visualInspection: {
+        assetCount: assets.length,
+        fetchableAssetCount,
+        note:
+          assets.length === 0
+            ? 'No image references were returned; answer from metadata only.'
+            : missingCandidateImage
+              ? 'Comparator image references plus compact closet item and comparator context were returned, but no candidate image was available. Ask for or use a direct product image before making color, texture, condition, fit, or fine visual-overlap claims about the candidate.'
+            : 'This bundle returns image references plus compact closet item and comparator context. Use host vision on the images before making color, texture, condition, or visual-overlap claims; a separate style_get_item call is only needed for correction, provenance, or unusually deep item detail.',
+        state: visualInspectionState,
+      },
     };
   }
 
@@ -1434,6 +1655,30 @@ export class StyleService {
     r2Key: string;
   } | null> {
     const row = await this.repository.getPhotoDeliveryRow(photoId);
+    return this.mapPhotoDeliveryAsset(row);
+  }
+
+  async getPhotoDeliveryAssetForTenant(input: {
+    photoId: string;
+    tenantId: string;
+  }): Promise<{
+    artifactId: string;
+    mimeType: string;
+    r2Key: string;
+  } | null> {
+    const tenantId = input.tenantId.trim();
+    if (!tenantId) {
+      return null;
+    }
+    const row = await this.repository.getPhotoDeliveryRowForTenant(tenantId, input.photoId);
+    return this.mapPhotoDeliveryAsset(row);
+  }
+
+  private mapPhotoDeliveryAsset(row: Awaited<ReturnType<StyleRepository['getPhotoDeliveryRow']>>): {
+    artifactId: string;
+    mimeType: string;
+    r2Key: string;
+  } | null {
     if (!row?.artifact_id || !row.r2_key) {
       return null;
     }
@@ -1569,6 +1814,7 @@ export class StyleService {
       origin: this.options.origin,
       photoId,
       secret: this.options.imageDeliverySecret,
+      tenantId: this.repository.profileKey.tenantId,
     });
   }
 
@@ -1821,6 +2067,166 @@ function clampVisualBundleMaxImages(value: number | null | undefined): number {
     return 8;
   }
   return Math.min(12, Math.max(1, Math.trunc(value)));
+}
+
+function buildVisualBundleItemContext(item: StyleItemRecord): StyleVisualBundleItemContext {
+  const profile = item.profile?.raw ?? null;
+  return {
+    brand: item.brand,
+    category: item.category,
+    colorFamily: item.colorFamily,
+    colorName: item.colorName,
+    comparatorKey: item.comparatorKey,
+    fabricHand: profile?.fabricHand ?? null,
+    formality: item.formality,
+    itemType: profile?.itemType ?? null,
+    name: item.name,
+    pairingNotes: profile?.pairingNotes ?? null,
+    polishLevel: profile?.polishLevel ?? null,
+    qualityTier: profile?.qualityTier ?? null,
+    silhouette: profile?.silhouette ?? null,
+    status: item.status,
+    styleRole: profile?.styleRole ?? null,
+    subcategory: item.subcategory,
+    tags: clampVisualBundleStrings(profile?.tags ?? [], 12),
+    texture: profile?.texture ?? null,
+    useCases: clampVisualBundleStrings(profile?.useCases ?? [], 8),
+    visualWeight: profile?.visualWeight ?? null,
+  };
+}
+
+function buildVisualBundleComparisonContextByItemId(
+  analysis: StylePurchaseAnalysis,
+): Map<string, StyleVisualBundleComparisonContext> {
+  const contexts = new Map<string, StyleVisualBundleComparisonContext>();
+  const ensureContext = (itemId: string): StyleVisualBundleComparisonContext => {
+    const existing = contexts.get(itemId);
+    if (existing) {
+      return existing;
+    }
+    const created: StyleVisualBundleComparisonContext = {
+      bucketRoles: [],
+      confidence: null,
+      descriptorDeltas: [],
+      notes: [],
+      overlapScore: null,
+      reasons: [],
+      rejectedBecause: null,
+      relation: null,
+      summary: null,
+    };
+    contexts.set(itemId, created);
+    return created;
+  };
+  const addBucketMatches = (
+    role: StyleVisualBundleComparisonBucketRole,
+    entries: StylePurchaseAnalysisItemMatch[],
+  ) => {
+    for (const entry of entries) {
+      const context = ensureContext(entry.itemId);
+      addUniqueVisualBundleValue(context.bucketRoles, role);
+      addUniqueVisualBundleValues(context.reasons, entry.reasons);
+    }
+  };
+
+  for (const comparison of analysis.comparatorReasoning.topComparisons) {
+    const context = ensureContext(comparison.itemId);
+    addUniqueVisualBundleValue(context.bucketRoles, 'top_comparison');
+    context.confidence = comparison.confidence;
+    context.overlapScore = comparison.overlapScore;
+    context.relation = comparison.relation;
+    context.summary = comparison.summary;
+    addUniqueVisualBundleValues(context.notes, comparison.notes);
+  }
+
+  addBucketMatches('exact_comparator', analysis.contextBuckets.exactComparatorItems);
+  addBucketMatches('typed_role', analysis.contextBuckets.typedRoleItems);
+  addBucketMatches('same_category', analysis.contextBuckets.sameCategoryItems);
+  addBucketMatches('same_color_family', analysis.contextBuckets.sameColorFamilyItems);
+  addBucketMatches('nearby_formality', analysis.contextBuckets.nearbyFormalityItems);
+  addBucketMatches('pairing_candidate', analysis.contextBuckets.pairingCandidates);
+
+  for (const rejected of analysis.contextBuckets.nonComparatorItems) {
+    const context = ensureContext(rejected.itemId);
+    addUniqueVisualBundleValue(context.bucketRoles, 'rejected_non_comparator');
+    context.rejectedBecause = rejected.rejectedBecause;
+    addUniqueVisualBundleValues(context.reasons, rejected.reasons);
+  }
+
+  for (const rejected of analysis.comparatorReasoning.rejectedComparisons) {
+    const context = ensureContext(rejected.itemId);
+    addUniqueVisualBundleValue(context.bucketRoles, 'rejected_non_comparator');
+    context.rejectedBecause = context.rejectedBecause ?? rejected.rejectedBecause;
+    addUniqueVisualBundleValues(context.reasons, rejected.reasons);
+  }
+
+  for (const delta of analysis.descriptorDeltas) {
+    const context = ensureContext(delta.itemId);
+    addUniqueVisualBundleValues(context.descriptorDeltas, delta.notes);
+  }
+
+  return contexts;
+}
+
+function addUniqueVisualBundleValue<T>(target: T[], value: T): void {
+  if (!target.includes(value)) {
+    target.push(value);
+  }
+}
+
+function addUniqueVisualBundleValues(target: string[], values: string[]): void {
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed.length > 0 && !target.includes(trimmed)) {
+      target.push(trimmed);
+    }
+  }
+}
+
+function clampVisualBundleStrings(values: string[], maxLength: number): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).slice(0, maxLength);
+}
+
+function normalizeStyleArchiveMatchName(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+  return normalized.length > 0 ? normalized : null;
+}
+
+function rankStyleArchiveNameCandidates(items: StyleItemRecord[], requestedName: string | null): StyleItemRecord[] {
+  const requestedKey = normalizeStyleArchiveMatchName(requestedName);
+  if (!requestedKey) {
+    return [];
+  }
+  const requestedTokens = new Set(requestedKey.split(' '));
+  return items
+    .map((item) => {
+      const itemKey = normalizeStyleArchiveMatchName(item.name);
+      if (!itemKey) {
+        return { item, score: 0 };
+      }
+      const itemTokens = new Set(itemKey.split(' '));
+      const sharedTokenCount = [...requestedTokens].filter((token) => itemTokens.has(token)).length;
+      const containmentScore = itemKey.includes(requestedKey) || requestedKey.includes(itemKey) ? 2 : 0;
+      const activeScore = item.status === 'active' ? 0.25 : 0;
+      return {
+        item,
+        score: containmentScore + sharedTokenCount / Math.max(requestedTokens.size, 1) + activeScore,
+      };
+    })
+    .filter((entry) => entry.score >= 0.75)
+    .sort((left, right) => right.score - left.score || left.item.id.localeCompare(right.item.id))
+    .slice(0, 6)
+    .map((entry) => entry.item);
 }
 
 function selectBestVisualBundlePhoto(photos: StylePhotoRecord[]): StylePhotoRecord | null {
@@ -2150,6 +2556,59 @@ function descriptorDeltaNotes(input: {
     .filter((entry) => entry.notes.length > 0);
 }
 
+function buildPurchaseNonComparatorItems(input: {
+  candidate: StylePurchaseAnalysis['candidate'];
+  candidateCategory: string;
+  items: StyleItemRecord[];
+}): StylePurchaseAnalysis['contextBuckets']['nonComparatorItems'] {
+  return input.items
+    .filter((item) => item.category?.toLowerCase() !== input.candidateCategory)
+    .map((item) => {
+      const reasons: string[] = [];
+      let score = 0;
+      if (
+        input.candidate.colorFamily &&
+        item.colorFamily?.toLowerCase() === input.candidate.colorFamily.toLowerCase()
+      ) {
+        reasons.push(`same color family (${input.candidate.colorFamily})`);
+        score += 3;
+      }
+      if (input.candidate.formality != null && item.formality != null) {
+        const formalityDistance = Math.abs(item.formality - input.candidate.formality);
+        if (formalityDistance <= 1) {
+          reasons.push(`nearby formality (${item.formality})`);
+          score += 2 - formalityDistance;
+        }
+      }
+      if (sharesCandidateNameToken(input.candidate, item)) {
+        reasons.push('shares product or brand wording');
+        score += 1;
+      }
+      if (reasons.length === 0) {
+        return null;
+      }
+      const candidateCategoryLabel = formatCategoryLaneLabel(input.candidate.category);
+      const itemCategoryLabel = formatCategoryLaneLabel(item.category);
+      return {
+        itemId: item.id,
+        rejectedBecause: `${formatOwnedItemLabel(item)} is a ${itemCategoryLabel}, not a ${candidateCategoryLabel}; use it as styling context only, not as a duplicate or substitute comparator.`,
+        reasons,
+        score,
+        sortName: item.name,
+      };
+    })
+    .filter((entry): entry is { itemId: string; rejectedBecause: string; reasons: string[]; score: number; sortName: string | null } =>
+      Boolean(entry),
+    )
+    .sort((left, right) => right.score - left.score || left.sortName?.localeCompare(right.sortName ?? '') || 0)
+    .slice(0, 8)
+    .map(({ itemId, rejectedBecause, reasons }) => ({
+      itemId,
+      rejectedBecause,
+      reasons,
+    }));
+}
+
 function buildPurchaseComparatorReasoning(input: {
   candidate: StylePurchaseAnalysis['candidate'];
   contextBuckets: StylePurchaseAnalysis['contextBuckets'];
@@ -2171,11 +2630,16 @@ function buildPurchaseComparatorReasoning(input: {
     .filter((item): item is StyleItemRecord => Boolean(item));
 
   if (input.candidate.category === 'SHOE') {
+    const allShoeComparators = uniqueStyleItemsById([
+      ...comparatorItems,
+      ...input.items.filter((item) => item.category === input.candidate.category),
+    ]);
     return buildShoeComparatorReasoning({
       candidate: input.candidate,
-      comparatorItems,
+      comparatorItems: allShoeComparators,
       coverageImpact: input.coverageImpact,
       laneAssessment: input.laneAssessment,
+      rejectedComparisons: input.contextBuckets.nonComparatorItems,
     });
   }
 
@@ -2184,6 +2648,7 @@ function buildPurchaseComparatorReasoning(input: {
     comparatorItems,
     coverageImpact: input.coverageImpact,
     laneAssessment: input.laneAssessment,
+    rejectedComparisons: input.contextBuckets.nonComparatorItems,
   });
 }
 
@@ -2192,6 +2657,7 @@ function buildBaselineComparatorReasoning(input: {
   comparatorItems: StyleItemRecord[];
   coverageImpact: StylePurchaseAnalysis['coverageImpact'];
   laneAssessment: StylePurchaseAnalysis['laneAssessment'];
+  rejectedComparisons: StylePurchaseAnalysis['comparatorReasoning']['rejectedComparisons'];
 }): StylePurchaseAnalysis['comparatorReasoning'] {
   const topComparisons = input.comparatorItems.slice(0, 3).map((item) => ({
     confidence: 'medium' as const,
@@ -2207,6 +2673,7 @@ function buildBaselineComparatorReasoning(input: {
       framing: 'addition',
       mode: 'baseline',
       notes: ['This still reads like a real addition rather than a near-duplicate.'],
+      rejectedComparisons: input.rejectedComparisons,
       summary: 'This looks like a real addition, not more of the same.',
       topComparisons,
     };
@@ -2217,6 +2684,7 @@ function buildBaselineComparatorReasoning(input: {
       framing: 'adjacent',
       mode: 'baseline',
       notes: [topComparisons[0]!.summary],
+      rejectedComparisons: input.rejectedComparisons,
       summary: 'There is overlap, but it does not read like an obvious duplicate.',
       topComparisons,
     };
@@ -2226,9 +2694,51 @@ function buildBaselineComparatorReasoning(input: {
     framing: 'uncertain',
     mode: 'baseline',
     notes: ['There are not enough grounded closet comparators yet to make a sharper call.'],
+    rejectedComparisons: input.rejectedComparisons,
     summary: 'The closet signal is still too thin to make a stronger comparison.',
     topComparisons: [],
   };
+}
+
+function uniqueStyleItemsById(items: StyleItemRecord[]): StyleItemRecord[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) {
+      return false;
+    }
+    seen.add(item.id);
+    return true;
+  });
+}
+
+function comparePurchaseBucketEntries(
+  candidate: StylePurchaseAnalysis['candidate'],
+  left: StyleItemRecord,
+  right: StyleItemRecord,
+): number {
+  if (candidate.category === 'SHOE') {
+    const leftComparison = compareShoeCandidateAgainstItem(candidate, left);
+    const rightComparison = compareShoeCandidateAgainstItem(candidate, right);
+    const relationPriority = shoeRelationPriority(rightComparison.relation) - shoeRelationPriority(leftComparison.relation);
+    if (relationPriority !== 0) {
+      return relationPriority;
+    }
+    const confidencePriority =
+      shoeConfidencePriority(rightComparison.confidence) - shoeConfidencePriority(leftComparison.confidence);
+    if (confidencePriority !== 0) {
+      return confidencePriority;
+    }
+    const overlapPriority = rightComparison.overlapScore - leftComparison.overlapScore;
+    if (overlapPriority !== 0) {
+      return overlapPriority;
+    }
+  }
+
+  return (
+    Number(right.status === 'active') - Number(left.status === 'active') ||
+    left.name?.localeCompare(right.name ?? '') ||
+    0
+  );
 }
 
 function buildShoeComparatorReasoning(input: {
@@ -2236,6 +2746,7 @@ function buildShoeComparatorReasoning(input: {
   comparatorItems: StyleItemRecord[];
   coverageImpact: StylePurchaseAnalysis['coverageImpact'];
   laneAssessment: StylePurchaseAnalysis['laneAssessment'];
+  rejectedComparisons: StylePurchaseAnalysis['comparatorReasoning']['rejectedComparisons'];
 }): StylePurchaseAnalysis['comparatorReasoning'] {
   const shoeKindLabel = describeShoeKind(input.candidate);
   const topComparisons = input.comparatorItems
@@ -2262,6 +2773,7 @@ function buildShoeComparatorReasoning(input: {
       framing: 'duplicate',
       mode: 'shoe_pairwise',
       notes: duplicateComparisons.slice(0, 2).map((entry) => entry.summary),
+      rejectedComparisons: input.rejectedComparisons,
       summary: `This looks too close to ${pluralizeShoeKind(shoeKindLabel)} you already own.`,
       topComparisons,
     };
@@ -2272,6 +2784,7 @@ function buildShoeComparatorReasoning(input: {
       framing: 'replacement',
       mode: 'shoe_pairwise',
       notes: replacementComparisons.slice(0, 2).map((entry) => entry.summary),
+      rejectedComparisons: input.rejectedComparisons,
       summary: `This reads more like a replacement than a genuinely new ${shoeKindLabel}.`,
       topComparisons,
     };
@@ -2282,6 +2795,7 @@ function buildShoeComparatorReasoning(input: {
       framing: 'upgrade',
       mode: 'shoe_pairwise',
       notes: upgradeComparisons.slice(0, 2).map((entry) => entry.summary),
+      rejectedComparisons: input.rejectedComparisons,
       summary: `This could upgrade a ${shoeKindLabel} you already wear rather than expand your rotation.`,
       topComparisons,
     };
@@ -2292,6 +2806,7 @@ function buildShoeComparatorReasoning(input: {
       framing: 'addition',
       mode: 'shoe_pairwise',
       notes: topComparisons.slice(0, 2).map((entry) => entry.summary),
+      rejectedComparisons: input.rejectedComparisons,
       summary: 'The closest shoe comparisons still point toward a real addition.',
       topComparisons,
     };
@@ -2302,6 +2817,7 @@ function buildShoeComparatorReasoning(input: {
       framing: 'adjacent',
       mode: 'shoe_pairwise',
       notes: adjacentComparisons.slice(0, 2).map((entry) => entry.summary),
+      rejectedComparisons: input.rejectedComparisons,
       summary: 'This overlaps with shoes you own, but it may still earn a slightly different role.',
       topComparisons,
     };
@@ -2311,6 +2827,7 @@ function buildShoeComparatorReasoning(input: {
     framing: 'uncertain',
     mode: 'shoe_pairwise',
     notes: ['The closest shoe comparisons are still too thin to call this a duplicate or a real addition.'],
+    rejectedComparisons: input.rejectedComparisons,
     summary: 'There is not enough grounded shoe context yet for a sharper call.',
     topComparisons,
   };
@@ -2329,6 +2846,11 @@ function compareShoeCandidateAgainstItem(
     Boolean(candidate.colorFamily) &&
     Boolean(item.colorFamily) &&
     candidate.colorFamily!.toLowerCase() === item.colorFamily!.toLowerCase();
+  const colorDetailOverlap = intersectStrings(candidateSignals.colorDetails, itemSignals.colorDetails);
+  const sameSpecificColorDetail = colorDetailOverlap.some((entry) => isSpecificShoeColorDetail(entry));
+  const conflictingSpecificColorDetail = itemSignals.colorDetails.some(
+    (entry) => isSpecificShoeColorDetail(entry) && !candidateSignals.colorDetails.includes(entry),
+  );
   const colorSignalMissing = !candidate.colorFamily || !item.colorFamily;
   const overlappingRoles = intersectStrings(candidateSignals.roleTags, itemSignals.roleTags);
   const sameRole = overlappingRoles.length > 0;
@@ -2344,6 +2866,9 @@ function compareShoeCandidateAgainstItem(
   }
   if (sameColor && candidate.colorFamily) {
     notes.push(`same color family (${candidate.colorFamily})`);
+  }
+  if (colorDetailOverlap.length > 0) {
+    notes.push(`same color detail (${colorDetailOverlap.map(formatShoeColorDetailLabel).join(', ')})`);
   }
   if (sameRole) {
     notes.push(`same role (${overlappingRoles.map(formatShoeRoleLabel).join(', ')})`);
@@ -2371,11 +2896,13 @@ function compareShoeCandidateAgainstItem(
   const overlapScore = Math.max(
     24,
     Math.min(
-      94,
+      100,
       18 +
         (familyOverlap.length > 0 ? 42 : 0) +
         (sameArchetype ? 20 : 0) +
         (sameColor ? 8 : 0) +
+        (sameSpecificColorDetail ? 12 : colorDetailOverlap.length > 0 ? 4 : 0) +
+        (conflictingSpecificColorDetail ? -10 : 0) +
         (sameRole ? 12 : 0) +
         (relation === 'replacement' || relation === 'upgrade' ? 6 : 0),
     ),
@@ -2416,6 +2943,8 @@ function buildShoeComparisonSignalsFromCandidate(candidate: StylePurchaseAnalysi
     candidate.brand,
     candidate.name,
     candidate.subcategory,
+    candidate.colorFamily,
+    candidate.colorName,
     candidate.notes,
     candidate.silhouette,
     candidate.fitType,
@@ -2439,6 +2968,8 @@ function buildShoeComparisonSignalsFromItem(item: StyleItemRecord) {
     item.brand,
     item.name,
     item.subcategory,
+    item.colorFamily,
+    item.colorName,
     item.profile?.raw.itemType,
     item.profile?.raw.styleRole,
     ...(item.profile?.raw.tags ?? []),
@@ -2474,6 +3005,7 @@ function buildShoeComparisonSignals(input: {
   return {
     archetype: input.archetype,
     colorFamily: input.colorFamily?.toLowerCase() ?? null,
+    colorDetails: extractShoeColorDetailSignals(input.blob),
     families: extractShoeFamilySignals(input.blob),
     refinementScore,
     roleTags: inferShoeRoleTags({
@@ -2545,6 +3077,36 @@ function extractShoeFamilySignals(blob: string): string[] {
   }
 
   return [...families];
+}
+
+function extractShoeColorDetailSignals(blob: string): string[] {
+  const details = new Set<string>();
+  const colorPatterns: Array<[RegExp, string]> = [
+    [/\b(triple white|all white)\b/, 'triple_white'],
+    [/\b(triple black|all black)\b/, 'triple_black'],
+    [/\bcitron(?: tint)?\b/, 'citron_tint'],
+    [/\bcobalt(?: tint)?\b/, 'cobalt_tint'],
+    [/\bmetallic silver\b/, 'metallic_silver'],
+    [/\bsail\b/, 'sail'],
+    [/\bwhite\b/, 'white'],
+    [/\bblack\b/, 'black'],
+    [/\b(gray|grey|silver)\b/, 'gray'],
+    [/\b(beige|cream|tan|taupe|khaki)\b/, 'beige'],
+    [/\b(yellow|gold)\b/, 'yellow'],
+    [/\b(olive|green)\b/, 'green'],
+  ];
+
+  for (const [pattern, detail] of colorPatterns) {
+    if (pattern.test(blob)) {
+      details.add(detail);
+    }
+  }
+
+  return [...details];
+}
+
+function isSpecificShoeColorDetail(detail: string): boolean {
+  return detail !== 'white' && detail !== 'black' && detail !== 'gray' && detail !== 'beige';
 }
 
 function inferShoeRoleTags(input: {
@@ -2652,6 +3214,21 @@ function shoeRelationPriority(
   }
 }
 
+function shoeConfidencePriority(
+  confidence: StylePurchaseAnalysis['comparatorReasoning']['topComparisons'][number]['confidence'],
+): number {
+  switch (confidence) {
+    case 'high':
+      return 3;
+    case 'medium':
+      return 2;
+    case 'low':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 function intersectStrings(left: string[], right: string[]): string[] {
   const rightSet = new Set(right);
   return left.filter((entry) => rightSet.has(entry));
@@ -2675,6 +3252,23 @@ function formatShoeFamilyLabel(family: string): string {
       return 'Duke Chelsea';
     default:
       return family.replace(/_/g, ' ');
+  }
+}
+
+function formatShoeColorDetailLabel(detail: string): string {
+  switch (detail) {
+    case 'triple_white':
+      return 'triple white';
+    case 'triple_black':
+      return 'triple black';
+    case 'citron_tint':
+      return 'citron tint';
+    case 'cobalt_tint':
+      return 'cobalt tint';
+    case 'metallic_silver':
+      return 'metallic silver';
+    default:
+      return detail.replace(/_/g, ' ');
   }
 }
 
@@ -2725,6 +3319,31 @@ function formatOwnedItemLabel(item: StyleItemRecord): string {
     return name;
   }
   return `${brand} ${name}`;
+}
+
+function formatCategoryLaneLabel(category: string | null | undefined): string {
+  const normalized = category?.toString().trim().toLowerCase().replace(/_/g, ' ') ?? '';
+  return normalized || 'unknown lane';
+}
+
+function sharesCandidateNameToken(candidate: StylePurchaseAnalysis['candidate'], item: StyleItemRecord): boolean {
+  const candidateTokens = meaningfulComparisonTokens([candidate.brand, candidate.name, candidate.subcategory]);
+  const itemTokens = meaningfulComparisonTokens([item.brand, item.name, item.subcategory]);
+  if (candidateTokens.size === 0 || itemTokens.size === 0) {
+    return false;
+  }
+  return [...candidateTokens].some((token) => itemTokens.has(token));
+}
+
+function meaningfulComparisonTokens(values: Array<string | null | undefined>): Set<string> {
+  const ignored = new Set(['and', 'for', 'low', 'men', 'mens', 'the', 'with']);
+  const tokens = values
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join(' ')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 3 && !ignored.has(token));
+  return new Set(tokens);
 }
 
 function formatShoeArchetypeLabel(archetype: string): string {

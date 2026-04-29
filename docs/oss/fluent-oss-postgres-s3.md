@@ -99,4 +99,4 @@ Portability does not yet cover:
 
 - The checked-in bootstrap schema is a current-state Postgres snapshot, not a replay of every historical SQLite/D1 migration.
 - This backend exists to prove Fluent can run on a third storage stack without changing the MCP contract.
-- Cloud and default SQLite OSS remain the supported release paths.
+- Managed early access and the default SQLite open-source runtime remain the supported release paths.

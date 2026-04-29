@@ -3,7 +3,7 @@
 This page is generated from `contracts/fluent-contract.v1.json`.
 Anything listed as a current tool is present in the frozen public contract artifact. Preview items are intentionally not current contract tools.
 
-Current contract version: `2026-04-20.fluent-core-v1.37`
+Current contract version: `2026-04-26.fluent-core-v1.48`
 
 ## How To Read This Page
 
@@ -17,6 +17,9 @@ Current contract version: `2026-04-20.fluent-core-v1.37`
 ### Core Platform Tools
 
 - `fluent_get_capabilities`
+- `fluent_get_account_status`
+- `fluent_get_home`
+- `fluent_get_next_actions`
 - `fluent_get_profile`
 - `fluent_update_profile`
 - `fluent_list_domains`
@@ -68,7 +71,6 @@ Current contract version: `2026-04-20.fluent-core-v1.37`
 - `meals_render_recipe_card`
 - `meals_render_pantry_dashboard`
 - `meals_render_grocery_list_v2`
-- `meals_render_grocery_list`
 
 ### Health Canonical Data Tools
 
@@ -102,20 +104,27 @@ Current contract version: `2026-04-20.fluent-core-v1.37`
 - `style_get_item_profile`
 - `style_get_item_provenance`
 - `style_upsert_item`
+- `style_archive_item`
 - `style_upsert_item_profile`
 - `style_upsert_item_photos`
+- `style_set_item_product_image`
+- `style_extract_purchase_page_evidence`
+- `style_prepare_purchase_analysis`
+- `style_get_purchase_vision_packet`
+- `style_submit_purchase_visual_observations`
 - `style_analyze_purchase`
+- `style_render_purchase_analysis`
 - `style_apply_purchase_analysis_action`
 - `style_get_visual_bundle`
 
 ### Style Host-Specific Render Tools
 
-- `style_render_purchase_analysis`
+- `style_show_purchase_analysis_widget`
 <!-- current-tools:end -->
 
 ## Current Render Host Classification
 
-- ChatGPT/App-SDK-style current render tools: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `meals_render_grocery_list`, `style_render_purchase_analysis`
+- ChatGPT/App-SDK-style current render tools: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `style_show_purchase_analysis_widget`
 - Claude-specific current render tools: none. Claude should prefer canonical data tools and host-native visuals.
 - OpenClaw-compatible current render tools: none as dedicated Fluent rich widgets. OpenClaw should use the plain-MCP fallbacks.
 - Plain-MCP fallback tools stay canonical even when a render tool exists.
@@ -127,8 +136,7 @@ Current contract version: `2026-04-20.fluent-core-v1.37`
 | `meals_render_recipe_card` | ChatGPT/App-SDK-style widget | Prefer `meals_get_recipe` and let Claude render a host-native card. | Use the plain-MCP recipe read path. | `meals_get_recipe` |
 | `meals_render_pantry_dashboard` | ChatGPT/App-SDK-style widget | Prefer canonical inventory reads and a host-native summary. | Use the plain-MCP inventory path. | `meals_get_inventory_summary` plus `meals_get_inventory` when detail is needed |
 | `meals_render_grocery_list_v2` | ChatGPT/App-SDK-style widget | Prefer `meals_get_grocery_plan` and let Claude render the checklist. | Use the plain-MCP grocery-plan path. | `meals_get_grocery_plan` |
-| `meals_render_grocery_list` | ChatGPT/App-SDK-style widget (legacy alias) | Do not depend on the legacy widget alias in Claude hosts. | Use the plain-MCP grocery-plan path. | `meals_get_grocery_plan` |
-| `style_render_purchase_analysis` | ChatGPT/App-SDK-style widget | Prefer `style_analyze_purchase` and host-native visual follow-up. | Use the plain-MCP purchase-analysis path. | `style_analyze_purchase` |
+| `style_show_purchase_analysis_widget` | ChatGPT/App-SDK-style widget | Do not call this widget tool. Use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations` when exposed, then `style_render_purchase_analysis` for the final structured/text result. If the submit tool is unavailable, pass concrete `visual_evidence` with `source: "host_vision"` directly to `style_render_purchase_analysis`. | Do not call this widget tool. Use the plain-MCP purchase-analysis path and answer from `style_render_purchase_analysis` after real visual evidence is available. | `style_prepare_purchase_analysis` plus page extraction, `style_get_purchase_vision_packet`, and `style_render_purchase_analysis` with accepted or direct `host_vision` evidence |
 
 ## Preview Or Planned Rich Surfaces
 
