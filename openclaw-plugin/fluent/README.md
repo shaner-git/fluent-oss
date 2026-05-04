@@ -1,8 +1,8 @@
 # Fluent OpenClaw Plugin
 
-This bundled OpenClaw helper package is for running Fluent yourself.
+This bundled OpenClaw helper package, `fluent-openclaw-oss-helper`, is for running Fluent yourself.
 
-It is not the published `fluent-openclaw` package. The supported public OpenClaw install surface stays the standalone `fluent-openclaw` repo/package, while this directory is the helper copy shipped inside the Fluent public export.
+It is not the published standalone `fluent-openclaw` package. The supported public OpenClaw install surface stays `openclaw plugins install fluent-openclaw`, while this directory is the helper copy shipped inside the Fluent public export.
 
 Default MCP config:
 

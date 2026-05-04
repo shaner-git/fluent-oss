@@ -1,7 +1,7 @@
 {
   "name": "fluent-openclaw-oss-helper",
   "version": "0.1.0",
-  "private": false,
+  "private": true,
   "type": "module",
   "description": "Bundled OpenClaw helper package shipped with Fluent open-source exports; not the published fluent-openclaw package.",
   "author": {

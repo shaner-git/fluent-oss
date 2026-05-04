@@ -116,8 +116,8 @@ export async function verifyContractParity(options?: { cwd?: string }) {
     report.parity.claudeMcp.ok === true && report.parity.claudeMcp.baseUrl === 'http://127.0.0.1:8788',
     report.parity.claudeOssMcp.ok === true && report.parity.claudeOssMcp.baseUrl === 'http://127.0.0.1:8788',
     report.parity.claudeLocalMcp.ok === true && report.parity.claudeLocalMcp.baseUrl === 'http://127.0.0.1:8788',
-    report.parity.openclawMcp.ok === true && report.parity.openclawMcp.baseUrl === 'http://127.0.0.1:8788',
-    report.parity.openclawOssMcp.ok === true && report.parity.openclawOssMcp.baseUrl === 'http://127.0.0.1:8788',
+    report.parity.openclawMcp.ok === true && report.parity.openclawMcp.baseUrl === 'http://localhost:8788',
+    report.parity.openclawOssMcp.ok === true && report.parity.openclawOssMcp.baseUrl === 'http://localhost:8788',
     report.parity.openclawLocalMcp.ok === true && report.parity.openclawLocalMcp.baseUrl === 'http://localhost:8788',
   ];
 

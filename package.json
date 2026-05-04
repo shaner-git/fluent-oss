@@ -19,6 +19,8 @@
     "oss:token:print": "tsx scripts/local-token.ts print",
     "oss:token:rotate": "tsx scripts/local-token.ts rotate",
     "scaffold:mcp": "tsx scripts/scaffold-mcp.ts",
+    "check:public-scrub": "node scripts/check-public-scrub.mjs",
+    "export:oss:check": "npm run check:public-scrub && tsx scripts/check-oss-export.ts",
     "test:contract-doc": "tsx tests/contract-doc.node-test.ts",
     "test:contract-surface": "tsx tests/contract-surface.node-test.ts",
     "test:experimental:postgres-s3": "tsx tests/postgres-s3-experimental.node-test.ts",
@@ -31,15 +33,17 @@
     "test:order-preflight": "tsx tests/meals-order-preflight.node-test.ts",
     "test:oss-bind": "tsx tests/oss-bind.node-test.ts",
     "test:oss-container": "tsx tests/oss-container.node-test.ts",
+    "test:oss-docs": "tsx tests/oss-docs.node-test.ts",
     "test:oss-snapshot": "tsx tests/oss-snapshot.node-test.ts",
     "test:planner-brain": "tsx tests/meals-planner-brain.node-test.ts",
     "test:style": "tsx tests/style-phase1.node-test.ts",
     "test:style-import": "tsx tests/style-import.node-test.ts",
     "typecheck": "tsc --noEmit",
+    "verify:contract-parity": "tsx scripts/verify-contract-parity.ts",
     "verify:local-parity": "tsx scripts/verify-local-parity.ts",
     "verify:oss-parity": "tsx scripts/verify-local-parity.ts",
     "check": "npm run typecheck && npm run test",
-    "test": "npm run test:contract-doc && npm run test:contract-surface && npm run test:local-auth && npm run test:local-import && npm run test:oss-snapshot && npm run test:scaffold-mcp && npm run test:oss-bind && npm run test:oss-container && npm run test:style-import && npm run test:style && npm run test:health && npm run test:planner-brain && npm run test:grocery-canonical && npm run test:grocery-actions && npm run test:order-preflight && npm run test:inventory-batch",
+    "test": "npm run test:contract-doc && npm run test:contract-surface && npm run test:local-auth && npm run test:local-import && npm run test:oss-snapshot && npm run test:scaffold-mcp && npm run test:oss-bind && npm run test:oss-container && npm run test:oss-docs && npm run test:style-import && npm run test:style && npm run test:health && npm run test:planner-brain && npm run test:grocery-canonical && npm run test:grocery-actions && npm run test:order-preflight && npm run test:inventory-batch",
     "test:scaffold-mcp": "tsx tests/scaffold-mcp.node-test.ts"
   },
   "dependencies": {
@@ -52,6 +56,9 @@
     "better-auth": "^1.6.5",
     "pg": "^8.16.3",
     "zod": "^4.3.6"
+  },
+  "x-fluent": {
+    "minimumContractVersion": "2026-04-26.fluent-core-v1.48"
   },
   "devDependencies": {
     "@types/node": "^25.3.5",

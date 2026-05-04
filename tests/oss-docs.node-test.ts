@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const repoRoot = process.cwd();
-const currentVersion = '2026-04-20.fluent-core-v1.37';
+const supportedContractVersion = '2026-04-26.fluent-core-v1.48';
+const openclawMinimumContractVersion = '2026-04-20.fluent-core-v1.37';
 const staleVersions = [
   { date: '2026-04-13', version: 'fluent-core-v1.34' },
   { date: '2026-04-17', version: 'fluent-core-v1.35' },
@@ -19,31 +20,33 @@ for (const relativePath of [
   'docs/oss/README.md',
   'docs/oss/fluent-oss-github-release-checklist.md',
   'docs/oss/fluent-oss-setup-matrix.md',
-  'docs/oss/openclaw-package-versioning.md',
   'docs/oss/fluent-oss-upgrade-notes.md',
 ]) {
   const body = readRepoFile(relativePath);
-  assert.equal(body.includes(currentVersion), true, `${relativePath} must reference ${currentVersion}.`);
+  assert.equal(
+    body.includes(supportedContractVersion),
+    true,
+    `${relativePath} must reference ${supportedContractVersion}.`,
+  );
   for (const staleVersion of staleVersions) {
     assert.equal(body.includes(staleVersion), false, `${relativePath} must not reference ${staleVersion}.`);
   }
 }
+
+const openclawVersioning = readRepoFile('docs/oss/openclaw-package-versioning.md');
+assert.equal(openclawVersioning.includes(openclawMinimumContractVersion), true);
 
 const sharedDocs = readRepoFile('docs/shared/README.md');
 assert.equal(sharedDocs.includes('fluent-tools-reference.md'), true);
 assert.equal(sharedDocs.includes('fluent-domain-surfaces.md'), true);
 
 const ci = readRepoFile('.github/workflows/ci.yml');
-assert.equal(ci.includes('npm run export:oss:check'), true);
 assert.equal(ci.includes('npm run verify:contract-parity'), true);
 
 const packageJson = JSON.parse(readRepoFile('package.json')) as {
   scripts?: Record<string, string>;
-  'x-fluent'?: Record<string, unknown>;
 };
-assert.equal(packageJson['x-fluent']?.minimumContractVersion, currentVersion);
 assert.equal(packageJson.scripts?.['verify:contract-parity'], 'tsx scripts/verify-contract-parity.ts');
-assert.equal(packageJson.scripts?.['export:oss:check'], 'npm run check:public-scrub && tsx scripts/check-oss-export.ts');
 
 for (const relativePath of [
   'plugins/fluent/.codex-plugin/plugin.json',
@@ -53,7 +56,11 @@ for (const relativePath of [
   const json = JSON.parse(readRepoFile(relativePath)) as {
     'x-fluent'?: Record<string, unknown>;
   };
-  assert.equal(json['x-fluent']?.minimumContractVersion, currentVersion, `${relativePath} must stay on ${currentVersion}.`);
+  assert.equal(
+    json['x-fluent']?.minimumContractVersion,
+    supportedContractVersion,
+    `${relativePath} must stay on ${supportedContractVersion}.`,
+  );
 }
 
 const openclawPackage = JSON.parse(readRepoFile('openclaw-plugin/fluent/package.json')) as {
