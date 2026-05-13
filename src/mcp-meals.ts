@@ -13,11 +13,13 @@ import {
   buildMutationAck,
   MealsService,
   summarizeGroceryPlan,
+  summarizeCurrentGroceryList,
   summarizeMealPlan,
   summarizeMealPreferences,
   summarizePreparedOrder,
 } from './domains/meals/service';
 import type {
+  CurrentGroceryListRecord,
   GroceryIntentRecord,
   GroceryPlanRecord,
   InventoryRecord,
@@ -31,6 +33,8 @@ import {
   buildRecipeCardStructuredContent,
   buildRecipeCardViewModel,
   getRecipeCardWidgetHtml,
+  MEALS_RECIPE_CARD_CACHED_TEMPLATE_URI,
+  MEALS_RECIPE_CARD_PREVIOUS_TEMPLATE_URI,
   MEALS_RECIPE_CARD_TEMPLATE_URI,
 } from './domains/meals/recipe-card';
 import {
@@ -39,6 +43,10 @@ import {
   buildGroceryListStructuredContent,
   getGrocerySmokeWidgetHtml,
   getGroceryListWidgetHtml,
+  MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI,
   MEALS_GROCERY_LIST_TEMPLATE_URI,
   MEALS_GROCERY_SMOKE_TEMPLATE_URI,
   type GroceryListActionViewModel,
@@ -49,6 +57,7 @@ import {
   buildPantryDashboardMetadata,
   buildPantryDashboardStructuredContent,
   getPantryDashboardWidgetHtml,
+  MEALS_PANTRY_DASHBOARD_PREVIOUS_TEMPLATE_URI,
   MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
   type PantryDashboardActionViewModel,
   type PantryBoughtRecentlyViewModel,
@@ -85,6 +94,36 @@ function buildWidgetMeta(description: string, origin: string) {
       prefersBorder: true,
     },
   } as const;
+}
+
+type AppsOAuth2SecurityScheme = {
+  scopes: string[];
+  type: 'oauth2';
+};
+
+function withAppsSecurity<T extends { _meta?: Record<string, unknown> }>(
+  config: T,
+  securitySchemes: AppsOAuth2SecurityScheme[],
+  options?: { uiVisibility?: string[] },
+): T {
+  const meta: Record<string, unknown> = {
+    ...(config._meta ?? {}),
+    securitySchemes,
+  };
+  if (options?.uiVisibility) {
+    const currentUi = meta.ui && typeof meta.ui === 'object' && !Array.isArray(meta.ui)
+      ? (meta.ui as Record<string, unknown>)
+      : {};
+    meta.ui = {
+      ...currentUi,
+      visibility: options.uiVisibility,
+    };
+  }
+  return {
+    ...config,
+    securitySchemes,
+    _meta: meta,
+  } as T;
 }
 
 type MealsMcpSurfaceOptions = {
@@ -166,6 +205,8 @@ function pickRecentShopStore(item: InventoryRecord): string {
 }
 
 function isStapleCandidate(item: InventoryRecord): boolean {
+  const metadata = parseObject(item.metadata);
+  if (parseBoolean(metadata?.pantry_dashboard_staple) === false) return false;
   if (isPantryDashboardStaple(item)) return true;
   const normalized = normalizeMealsText(item.name);
   const stapleKeywords = ['egg', 'milk', 'olive oil', 'oil', 'butter', 'yogurt', 'granola', 'bread', 'rice', 'oat'];
@@ -186,6 +227,15 @@ function nextStapleState(current: StapleState): StapleState {
   if (current === 'ok') return 'low';
   if (current === 'low') return 'out';
   return 'ok';
+}
+
+function parseStapleQuantity(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error('Staple quantity must be zero or greater.');
+  }
+  return parsed;
 }
 
 interface PantryRecipeSuggestionViewModel {
@@ -415,7 +465,9 @@ function buildPantryDashboardViewModel(input: {
       id: item.id,
       name: titleCaseWords(item.name),
       qty: quantityDisplay(item.quantity ?? item.canonicalQuantity, item.unit ?? item.canonicalUnit),
+      quantity: item.quantity ?? item.canonicalQuantity ?? null,
       state: inferStapleState(item),
+      unit: item.unit ?? item.canonicalUnit ?? null,
     }));
 
   const actions: PantryDashboardActionViewModel[] = [
@@ -438,10 +490,22 @@ function buildPantryDashboardViewModel(input: {
       args: { action_id: 'update_staple' },
     },
     {
+      id: 'set_staple',
+      label: 'Save staple',
+      toolName: 'meals_apply_pantry_dashboard_action',
+      args: { action_id: 'set_staple' },
+    },
+    {
       id: 'add_staple',
       label: 'Add staple',
       toolName: 'meals_apply_pantry_dashboard_action',
       args: { action_id: 'add_staple' },
+    },
+    {
+      id: 'remove_staple',
+      label: 'Remove staple',
+      toolName: 'meals_apply_pantry_dashboard_action',
+      args: { action_id: 'remove_staple' },
     },
     {
       id: 'suggest_recipes',
@@ -528,12 +592,14 @@ export function registerMealsMcpSurface(
   origin: string,
   options?: MealsMcpSurfaceOptions,
 ) {
+  const mealsReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_MEALS_READ_SCOPE] }];
+  const mealsWriteSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_MEALS_WRITE_SCOPE] }];
   const recipeCardWidgetMeta = buildWidgetMeta(
     'Fluent recipe card for a saved meal recipe, with ingredients, steps, and cook mode.',
     origin,
   );
   const groceryListWidgetMeta = buildWidgetMeta(
-    'Fluent grocery checklist for the current week, with To buy, Verify quantity, Check pantry, and quick sync actions.',
+    'Fluent current shopping list with To buy, Check amount, Check at home, Done, and explicit save actions.',
     origin,
   );
   const pantryDashboardWidgetMeta = buildWidgetMeta(
@@ -541,71 +607,115 @@ export function registerMealsMcpSurface(
     origin,
   );
 
-  server.registerResource(
-    'fluent-meals-recipe-card-widget',
-    MEALS_RECIPE_CARD_TEMPLATE_URI,
-    {
-      title: 'Recipe Card Widget',
-      description: 'Rich recipe card for a saved Fluent meal recipe.',
-      mimeType: 'text/html;profile=mcp-app',
-      icons: iconFor(origin),
-      _meta: recipeCardWidgetMeta,
-    },
-    async () => ({
-      contents: [
-        {
-          uri: MEALS_RECIPE_CARD_TEMPLATE_URI,
-          mimeType: 'text/html;profile=mcp-app',
-          text: getRecipeCardWidgetHtml(),
-          _meta: recipeCardWidgetMeta,
-        },
-      ],
-    }),
-  );
+  const registerRecipeCardWidgetResource = (name: string, uri: string, title = 'Recipe Card Widget') =>
+    server.registerResource(
+      name,
+      uri,
+      {
+        title,
+        description: 'Rich recipe card for a saved Fluent meal recipe.',
+        mimeType: 'text/html;profile=mcp-app',
+        icons: iconFor(origin),
+        _meta: recipeCardWidgetMeta,
+      },
+      async () => ({
+        contents: [
+          {
+            uri,
+            mimeType: 'text/html;profile=mcp-app',
+            text: getRecipeCardWidgetHtml(),
+            _meta: recipeCardWidgetMeta,
+          },
+        ],
+      }),
+    );
 
-  server.registerResource(
-    'fluent-meals-grocery-list-widget-v2',
-    MEALS_GROCERY_LIST_TEMPLATE_URI,
-    {
-      title: 'Grocery List Widget',
-      description: 'Rich grocery checklist for a Fluent meal-planning week.',
-      mimeType: 'text/html;profile=mcp-app',
-      icons: iconFor(origin),
-      _meta: groceryListWidgetMeta,
-    },
-    async () => ({
-      contents: [
-        {
-          uri: MEALS_GROCERY_LIST_TEMPLATE_URI,
-          mimeType: 'text/html;profile=mcp-app',
-          text: getGroceryListWidgetHtml(),
-          _meta: groceryListWidgetMeta,
-        },
-      ],
-    }),
+  registerRecipeCardWidgetResource(
+    'fluent-meals-recipe-card-widget-cached-v8',
+    MEALS_RECIPE_CARD_CACHED_TEMPLATE_URI,
+    'Recipe Card Widget Cached v8',
   );
+  registerRecipeCardWidgetResource(
+    'fluent-meals-recipe-card-widget-previous-v9',
+    MEALS_RECIPE_CARD_PREVIOUS_TEMPLATE_URI,
+    'Recipe Card Widget Previous v9',
+  );
+  registerRecipeCardWidgetResource('fluent-meals-recipe-card-widget', MEALS_RECIPE_CARD_TEMPLATE_URI);
 
-  server.registerResource(
-    'fluent-meals-pantry-dashboard-widget',
-    MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
-    {
-      title: 'Pantry Dashboard Widget',
-      description: 'Rich pantry dashboard for recent shops, likely-open items, and tracked staples.',
-      mimeType: 'text/html;profile=mcp-app',
-      icons: iconFor(origin),
-      _meta: pantryDashboardWidgetMeta,
-    },
-    async () => ({
-      contents: [
-        {
-          uri: MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
-          mimeType: 'text/html;profile=mcp-app',
-          text: getPantryDashboardWidgetHtml(),
-          _meta: pantryDashboardWidgetMeta,
-        },
-      ],
-    }),
+  const registerGroceryListWidgetResource = (name: string, uri: string, title = 'Grocery List Widget') =>
+    server.registerResource(
+      name,
+      uri,
+      {
+        title,
+        description: 'Rich current shopping-list checklist with Fluent provenance and trust state.',
+        mimeType: 'text/html;profile=mcp-app',
+        icons: iconFor(origin),
+        _meta: groceryListWidgetMeta,
+      },
+      async () => ({
+        contents: [
+          {
+            uri,
+            mimeType: 'text/html;profile=mcp-app',
+            text: getGroceryListWidgetHtml(),
+            _meta: groceryListWidgetMeta,
+          },
+        ],
+      }),
+    );
+
+  registerGroceryListWidgetResource(
+    'fluent-meals-grocery-list-widget-v2-legacy-v57',
+    MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI,
+    'Grocery List Widget Legacy v57',
   );
+  registerGroceryListWidgetResource(
+    'fluent-meals-grocery-list-widget-v2-previous-v58',
+    MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI,
+    'Grocery List Widget Previous v58',
+  );
+  registerGroceryListWidgetResource(
+    'fluent-meals-grocery-list-widget-v2-previous-v59',
+    MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI,
+    'Grocery List Widget Previous v59',
+  );
+  registerGroceryListWidgetResource(
+    'fluent-meals-grocery-list-widget-v2-previous-v60',
+    MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI,
+    'Grocery List Widget Previous v60',
+  );
+  registerGroceryListWidgetResource('fluent-meals-grocery-list-widget-v2', MEALS_GROCERY_LIST_TEMPLATE_URI);
+
+  const registerPantryDashboardWidgetResource = (name: string, uri: string, title = 'Pantry Dashboard Widget') =>
+    server.registerResource(
+      name,
+      uri,
+      {
+        title,
+        description: 'Rich pantry dashboard for recent shops, likely-open items, and tracked staples.',
+        mimeType: 'text/html;profile=mcp-app',
+        icons: iconFor(origin),
+        _meta: pantryDashboardWidgetMeta,
+      },
+      async () => ({
+        contents: [
+          {
+            uri,
+            mimeType: 'text/html;profile=mcp-app',
+            text: getPantryDashboardWidgetHtml(),
+            _meta: pantryDashboardWidgetMeta,
+          },
+        ],
+      }),
+    );
+
+  registerPantryDashboardWidgetResource(
+    'fluent-meals-pantry-dashboard-widget-previous-v13',
+    MEALS_PANTRY_DASHBOARD_PREVIOUS_TEMPLATE_URI,
+    'Pantry Dashboard Widget Previous v13',
+  );
+  registerPantryDashboardWidgetResource('fluent-meals-pantry-dashboard-widget', MEALS_PANTRY_DASHBOARD_TEMPLATE_URI);
 
   if (options?.includeDevWidgetSurfaces) {
     const grocerySmokeWidgetMeta = buildWidgetMeta(
@@ -969,7 +1079,7 @@ export function registerMealsMcpSurface(
           content: [
             {
               type: 'text' as const,
-              text: `Recipe not found for id ${resolvedRecipeId ?? recipe_id ?? recipeId ?? id ?? slug ?? 'unknown'}.`,
+              text: 'I could not find that saved recipe. Try listing your saved recipes, then open the one you want.',
             },
           ],
           isError: true,
@@ -1034,10 +1144,10 @@ export function registerMealsMcpSurface(
   const registerRenderGroceryListTool = () =>
     server.registerTool(
       'meals_render_grocery_list_v2',
-      {
+      withAppsSecurity({
         title: 'Show Grocery Checklist (ChatGPT/App SDK Widget)',
         description:
-          'Show the user\'s real Fluent grocery checklist for the active week only in hosts that support Fluent MCP output templates, such as ChatGPT / MCP Apps-style hosts. Use this for ordinary grocery-list asks when the user wants a rich checklist with To buy, Verify quantity, and Check pantry sections in those hosts. Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer canonical grocery data from meals_get_grocery_plan and either let the host render with its own visualizer or answer in text. Do not use this for standalone smoke tests, host verification, widget debugging, or standalone widget prompts.',
+          'Show the user\'s current Fluent shopping list as a rich checklist in ChatGPT / MCP Apps-style hosts that support Fluent MCP output templates. Use this for ordinary ChatGPT grocery-list asks such as "show me my grocery list", "what do I need to buy?", or "open my shopping list"; the surface shows the living list with source provenance, trust state, To buy, Check amount, Check at home, and Done sections. Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer canonical living-list data from meals_get_current_grocery_list and either let the host render with its own visualizer or answer in text. Use meals_get_grocery_plan only for explicit week-scoped/raw plan detail.',
         inputSchema: {
           week_start: z.string().optional(),
           weekStart: z.string().optional(),
@@ -1055,32 +1165,26 @@ export function registerMealsMcpSurface(
           'openai/toolInvocation/invoking': 'Opening grocery checklist…',
           'openai/widgetAccessible': true,
         },
-      },
+      }, mealsReadSecuritySchemes),
       async ({ week_start, weekStart }) => {
         requireScope(FLUENT_MEALS_READ_SCOPE);
-        const resolvedWeekStart = await resolveMealsGroceryWeekStart(meals, week_start ?? weekStart);
-        const groceryPlan = await meals.getGroceryPlan(resolvedWeekStart);
-        const intents = await meals.listGroceryIntents();
-        const prepared = groceryPlan
-          ? await meals.prepareOrder({
-              weekStart: resolvedWeekStart,
-            })
-          : null;
+        const currentList = await getCurrentGroceryListForRender(meals, week_start ?? weekStart);
         const viewModel = buildGroceryListViewModel({
-          groceryPlan,
-          intents,
-          prepared,
-          weekStart: resolvedWeekStart,
+          currentList,
+          groceryPlan: currentList.groceryPlan,
+          intents: currentList.intents,
+          prepared: currentList.preparedOrder,
+          weekStart: currentList.weekStart,
         });
 
         if (!viewModel) {
-          const emptyViewModel = buildEmptyGroceryListViewModel(resolvedWeekStart);
+          const emptyViewModel = applyCurrentListMetadataToViewModel(buildEmptyGroceryListViewModel(currentList.weekStart), currentList);
           return {
             _meta: buildGroceryListMetadata(emptyViewModel),
             content: [
               {
                 type: 'text' as const,
-                text: `Your grocery list is empty for the week of ${resolvedWeekStart}.`,
+                text: 'Your current grocery list is empty.',
               },
             ],
             structuredContent: {
@@ -1096,7 +1200,7 @@ export function registerMealsMcpSurface(
           content: [
             {
               type: 'text' as const,
-              text: `Showing the grocery list for the week of ${viewModel.weekStart}.`,
+              text: 'Showing your current grocery list.',
             },
           ],
           structuredContent,
@@ -1108,7 +1212,7 @@ export function registerMealsMcpSurface(
 
   server.registerTool(
     'meals_render_pantry_dashboard',
-    {
+    withAppsSecurity({
       title: 'Show Pantry Dashboard (ChatGPT/App SDK Widget)',
       description:
         'Show a Fluent pantry dashboard for recent shops, likely-open pantry items, and tracked staples only in hosts that support Fluent MCP output templates, such as ChatGPT / MCP Apps-style hosts. Prefer this when the user wants a kitchen or pantry dashboard rather than the grocery checklist. Do not use this by default in Claude.ai, Claude Code, Codex, OpenClaw, or generic plain MCP clients.',
@@ -1126,7 +1230,7 @@ export function registerMealsMcpSurface(
         'openai/toolInvocation/invoking': 'Opening pantry dashboard…',
         'openai/widgetAccessible': true,
       },
-    },
+    }, mealsReadSecuritySchemes),
     async () => {
       requireScope(FLUENT_MEALS_READ_SCOPE);
       const currentPlan = await meals.getCurrentPlan();
@@ -1152,16 +1256,18 @@ export function registerMealsMcpSurface(
 
   server.registerTool(
     'meals_apply_pantry_dashboard_action',
-    {
+    withAppsSecurity({
       title: 'Apply Pantry Dashboard Action',
       description:
-        'Apply a widget-originated pantry dashboard action, such as marking a recent-shop item used up, updating a tracked staple, suggesting pantry-aware recipes, or generating a pantry-aware meal-plan candidate.',
+        'Apply an explicit user-requested pantry dashboard action from the widget, such as marking a recent-shop item used up, updating a tracked staple, suggesting pantry-aware recipes, or generating a pantry-aware meal-plan candidate.',
       inputSchema: {
         action_id: z.enum([
           'mark_used_up',
           'undo_used_up',
           'update_staple',
+          'set_staple',
           'add_staple',
+          'remove_staple',
           'suggest_recipes',
           'plan_meals',
         ]),
@@ -1169,13 +1275,16 @@ export function registerMealsMcpSurface(
         item_key: z.string().optional(),
         staple_id: z.string().optional(),
         staple_name: z.string().optional(),
+        staple_quantity: z.union([z.number(), z.string()]).nullable().optional(),
+        staple_unit: z.string().nullable().optional(),
+        staple_state: z.enum(['ok', 'low', 'out']).optional(),
         ...provenanceInputSchema,
       },
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
-    },
+    }, mealsWriteSecuritySchemes, { uiVisibility: ['model', 'app'] }),
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
       const provenance = buildMutationProvenance(authProps, args);
@@ -1205,13 +1314,11 @@ export function registerMealsMcpSurface(
           structuredContent: {
             action: args.action_id,
             experience: 'pantry_dashboard_action',
-            inventoryItemId: updated.id,
             name: updated.name,
             pantryDashboardUsedUp: parseBoolean(parseObject(updated.metadata)?.pantry_dashboard_used_up),
           },
           textData: {
             action: args.action_id,
-            inventoryItemId: updated.id,
             name: updated.name,
             pantryDashboardUsedUp: parseBoolean(parseObject(updated.metadata)?.pantry_dashboard_used_up),
           },
@@ -1242,15 +1349,58 @@ export function registerMealsMcpSurface(
           structuredContent: {
             action: args.action_id,
             experience: 'pantry_dashboard_action',
-            inventoryItemId: updated.id,
             name: updated.name,
             stapleState: nextState,
           },
           textData: {
             action: args.action_id,
-            inventoryItemId: updated.id,
             name: updated.name,
             stapleState: nextState,
+          },
+        });
+      }
+
+      if (args.action_id === 'set_staple') {
+        if (!args.staple_id?.trim()) {
+          throw new Error('Pantry dashboard action set_staple requires staple_id.');
+        }
+        const target = inventory.find((item) => item.id === args.staple_id);
+        if (!target) {
+          throw new Error(`Could not find pantry staple ${args.staple_id}.`);
+        }
+        const existingMetadata = parseObject(target.metadata) ?? {};
+        const stapleState = args.staple_state ?? inferStapleState(target);
+        const quantity = parseStapleQuantity(args.staple_quantity);
+        const unit = typeof args.staple_unit === 'string' ? args.staple_unit.trim() : null;
+        const update = buildInventoryMutationArgs(target, {
+          ...existingMetadata,
+          pantry_dashboard_staple: true,
+          pantry_dashboard_staple_added_at:
+            parseString(existingMetadata.pantry_dashboard_staple_added_at) ?? new Date().toISOString(),
+          pantry_dashboard_staple_state: stapleState,
+          pantry_dashboard_used_up: false,
+        });
+        update.quantity = quantity;
+        update.unit = unit;
+        const updated = await meals.updateInventory({
+          ...update,
+          provenance,
+        });
+        return toolResult(updated, {
+          structuredContent: {
+            action: args.action_id,
+            experience: 'pantry_dashboard_action',
+            name: updated.name,
+            quantity: updated.quantity,
+            stapleState,
+            unit: updated.unit,
+          },
+          textData: {
+            action: args.action_id,
+            name: updated.name,
+            quantity: updated.quantity,
+            stapleState,
+            unit: updated.unit,
           },
         });
       }
@@ -1286,15 +1436,46 @@ export function registerMealsMcpSurface(
           structuredContent: {
             action: args.action_id,
             experience: 'pantry_dashboard_action',
-            inventoryItemId: created.id,
             name: created.name,
             stapleState: 'ok',
           },
           textData: {
             action: args.action_id,
-            inventoryItemId: created.id,
             name: created.name,
             stapleState: 'ok',
+          },
+        });
+      }
+
+      if (args.action_id === 'remove_staple') {
+        if (!args.staple_id?.trim()) {
+          throw new Error('Pantry dashboard action remove_staple requires staple_id.');
+        }
+        const target = inventory.find((item) => item.id === args.staple_id);
+        if (!target) {
+          throw new Error(`Could not find pantry staple ${args.staple_id}.`);
+        }
+        const existingMetadata = parseObject(target.metadata) ?? {};
+        const updated = await meals.updateInventory({
+          ...buildInventoryMutationArgs(target, {
+            ...existingMetadata,
+            pantry_dashboard_staple: false,
+            pantry_dashboard_staple_state: null,
+            pantry_dashboard_used_up: true,
+          }),
+          provenance,
+        });
+        return toolResult(updated, {
+          structuredContent: {
+            action: args.action_id,
+            experience: 'pantry_dashboard_action',
+            name: updated.name,
+            removedFromPantryDashboard: true,
+          },
+          textData: {
+            action: args.action_id,
+            name: updated.name,
+            removedFromPantryDashboard: true,
           },
         });
       }
@@ -2123,11 +2304,38 @@ export function registerMealsMcpSurface(
   );
 
   server.registerTool(
+    'meals_get_current_grocery_list',
+    {
+      title: 'Get Current Grocery List',
+      description:
+        'Fetch the canonical current living grocery list for ordinary asks like "show me my grocery list" or "what do I need to buy?" This host-neutral read model distinguishes the living grocery list from weekly meal plans, derived grocery needs, shopping sessions, purchases, and kitchen memory. Prefer this in Claude.ai, Claude Code, Codex, OpenClaw, and generic MCP clients. In ChatGPT/App SDK hosts with widget support, prefer meals_render_grocery_list_v2 when the user wants to see or use the grocery-list surface.',
+      inputSchema: {
+        week_start: z.string().optional(),
+        today: z.string().optional(),
+        view: readViewSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ today, view, week_start }) => {
+      requireScope(FLUENT_MEALS_READ_SCOPE);
+      const currentList = await meals.getCurrentGroceryList({ today, weekStart: week_start });
+      const summary = summarizeCurrentGroceryList(currentList);
+      return toolResult(currentList, {
+        textData: view === 'full' ? currentList : summary,
+        structuredContent: view === 'summary' ? summary : undefined,
+      });
+    },
+  );
+
+  server.registerTool(
     'meals_get_grocery_plan',
     {
       title: 'Get Grocery Plan',
       description:
-        'Fetch the underlying grocery-plan document for a meal-plan week, including buy-list items, pantry checks, substitutions, and resolved grocery actions. Prefer this for audit/debugging, when the user explicitly wants the raw plan data, for simple grocery data questions, and as the canonical grocery source for Claude.ai, Claude Code, Codex, OpenClaw, and generic plain MCP clients. In ChatGPT / MCP Apps-style hosts that explicitly support Fluent MCP widgets, ordinary grocery-list asks can instead use meals_render_grocery_list_v2.',
+        'Fetch the underlying grocery-plan document for a specific meal-plan week, including buy-list items, pantry checks, substitutions, and resolved grocery actions. Prefer this for audit/debugging, when the user explicitly asks for a week-scoped grocery plan, or when a tool needs raw plan data. For ordinary "show my grocery list" asks in Claude.ai, Claude Code, Codex, OpenClaw, and generic plain MCP clients, prefer meals_get_current_grocery_list. In ChatGPT / MCP Apps-style hosts that explicitly support Fluent MCP widgets, ordinary grocery-list asks can use meals_render_grocery_list_v2.',
       inputSchema: {
         week_start: z.string(),
         view: readViewSchema,
@@ -2228,10 +2436,10 @@ export function registerMealsMcpSurface(
 
   server.registerTool(
     'meals_upsert_grocery_plan_action',
-    {
+    withAppsSecurity({
       title: 'Upsert Grocery Plan Action',
       description:
-        'Persist a grocery item resolution for a grocery-plan line, including mark purchased, track already in cart, skip item, confirm pantry stock, record a pantry sufficiency confirmation, mark need to buy, or substitute, swap, or replace one ingredient with another.',
+        'Persist an explicit user-requested grocery item resolution for a grocery-plan line, including mark purchased, track already in cart, skip item, confirm pantry stock, record a pantry sufficiency confirmation, mark need to buy, or substitute, swap, or replace one ingredient with another.',
       inputSchema: {
         week_start: z.string(),
         item_key: z.string(),
@@ -2259,10 +2467,11 @@ export function registerMealsMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
-    },
+    }, mealsWriteSecuritySchemes, { uiVisibility: ['model', 'app'] }),
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
       const result = await meals.upsertGroceryPlanAction({
@@ -2332,10 +2541,10 @@ export function registerMealsMcpSurface(
 
   server.registerTool(
     'meals_upsert_grocery_intent',
-    {
+    withAppsSecurity({
       title: 'Upsert Grocery Intent',
       description:
-        'Create or update a grocery intent for the next order, buy list, replacement ingredient, or explicit need-to-buy item.',
+        'Create or update a grocery intent only when the user explicitly asks to add or change a next-order, buy-list, replacement-ingredient, or need-to-buy item.',
       inputSchema: {
         id: z.string().optional(),
         display_name: z.string(),
@@ -2348,10 +2557,11 @@ export function registerMealsMcpSurface(
         metadata: z.any().optional(),
         ...provenanceInputSchema,
       },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
-    },
+    }, mealsWriteSecuritySchemes, { uiVisibility: ['model', 'app'] }),
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
       return toolResult(
@@ -2453,6 +2663,52 @@ async function resolveMealsGroceryWeekStart(meals: MealsService, explicitWeekSta
   return startOfWeekIso(new Date());
 }
 
+async function getCurrentGroceryListForRender(
+  meals: MealsService,
+  explicitWeekStart?: string,
+): Promise<CurrentGroceryListRecord> {
+  const optionalMeals = meals as MealsService & {
+    getCurrentGroceryList?: (input?: { weekStart?: string | null }) => Promise<CurrentGroceryListRecord>;
+  };
+  if (typeof optionalMeals.getCurrentGroceryList === 'function') {
+    return optionalMeals.getCurrentGroceryList({ weekStart: explicitWeekStart });
+  }
+
+  const weekStart = await resolveMealsGroceryWeekStart(meals, explicitWeekStart);
+  const groceryPlan = await meals.getGroceryPlan(weekStart);
+  const intents = await meals.listGroceryIntents();
+  const preparedOrder = groceryPlan ? await meals.prepareOrder({ weekStart }) : null;
+  return {
+    counts: {
+      checkAtHomeCount: preparedOrder?.unresolvedItems.length ?? 0,
+      inCartCount: preparedOrder?.alreadyInRetailerCart.length ?? 0,
+      manualIntentCount: intents.length,
+      planItemCount: groceryPlan?.raw.items.length ?? 0,
+      resolvedCount: groceryPlan?.raw.resolvedItems.length ?? 0,
+      toBuyCount: preparedOrder?.remainingToBuy.length ?? groceryPlan?.raw.items.length ?? 0,
+      unresolvedCount: preparedOrder?.unresolvedItems.length ?? 0,
+    },
+    generatedAt: groceryPlan?.generatedAt ?? null,
+    groceryPlan,
+    intents,
+    listId: `current-grocery-list:${weekStart}`,
+    objectRole: 'living_grocery_list',
+    preparedOrder,
+    sourceProvenance: [],
+    stale: false,
+    staleReasons: [],
+    selectionReason: null,
+    subtitle: `Check before shopping · plan week ${weekStart}`,
+    title: 'Grocery list',
+    trustLabel: 'Check before shopping',
+    trustState: groceryPlan ? 'review_before_shopping' : 'review_before_shopping',
+    updatedAt: groceryPlan?.generatedAt ?? null,
+    version: `legacy-render:${weekStart}:${groceryPlan?.generatedAt ?? 'empty'}`,
+    weekRelation: 'unknown',
+    weekStart,
+  };
+}
+
 function startOfWeekIso(date: Date): string {
   const clone = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   const day = clone.getUTCDay();
@@ -2462,6 +2718,7 @@ function startOfWeekIso(date: Date): string {
 }
 
 function buildGroceryListViewModel(input: {
+  currentList?: CurrentGroceryListRecord | null;
   groceryPlan: GroceryPlanRecord | null;
   intents: GroceryIntentRecord[];
   prepared: PreparedOrderRecord | null;
@@ -2542,36 +2799,75 @@ function buildGroceryListViewModel(input: {
   const buckets: GroceryListViewModel['buckets'] = [
     {
       id: 'need_to_buy',
-      label: 'Need to buy',
+      label: 'To buy',
       count: items.filter((item) => item.bucket === 'need_to_buy').length,
       items: items.filter((item) => item.bucket === 'need_to_buy'),
     },
     {
       id: 'verify_pantry',
-      label: 'Verify pantry',
+      label: 'Check at home',
       count: items.filter((item) => item.bucket === 'verify_pantry').length,
       items: items.filter((item) => item.bucket === 'verify_pantry'),
     },
     {
       id: 'covered',
-      label: 'Covered',
+      label: 'Done',
       count: items.filter((item) => item.bucket === 'covered').length,
       items: items.filter((item) => item.bucket === 'covered'),
     },
   ];
 
-  return {
+  return applyCurrentListMetadataToViewModel({
     bucketOrder: ['need_to_buy', 'verify_pantry', 'covered'],
     buckets,
-    subtitle: `Week of ${input.weekStart} with pantry checks, merged grocery intents, and linked recipe context.`,
+    listId: null,
+    objectRole: 'living_grocery_list',
+    sourceProvenance: [],
+    stale: false,
+    staleReasons: [],
+    subtitle: `Current list · plan week ${input.weekStart}`,
     summary: {
       coveredCount: buckets[2].count,
       headline: `${buckets[0].count} item${buckets[0].count === 1 ? '' : 's'} left to buy`,
       needToBuyCount: buckets[0].count,
       verifyCount: buckets[1].count,
     },
-    title: 'Grocery List',
+    title: 'Grocery list',
+    trustLabel: null,
+    trustState: null,
+    version: null,
     weekStart: input.weekStart,
+    weekRelation: null,
+  }, input.currentList ?? null);
+}
+
+function applyCurrentListMetadataToViewModel(
+  viewModel: GroceryListViewModel,
+  currentList: CurrentGroceryListRecord | null,
+): GroceryListViewModel {
+  if (!currentList) {
+    return viewModel;
+  }
+
+  return {
+    ...viewModel,
+    listId: currentList.listId,
+    objectRole: currentList.objectRole,
+    sourceProvenance: currentList.sourceProvenance.map((source) => ({
+      kind: source.kind,
+      label: source.label,
+      status: source.status ?? null,
+      weekStart: source.weekStart ?? null,
+    })),
+    stale: currentList.stale,
+    staleReasons: currentList.staleReasons,
+    subtitle: currentList.subtitle,
+    title: currentList.title,
+    trustLabel: currentList.trustLabel,
+    trustState: currentList.trustState,
+    version: currentList.version,
+    weekRelation: currentList.weekRelation,
+    weekStart: currentList.weekStart,
   };
 }
 
@@ -2687,6 +2983,22 @@ function buildPlanItemActions(
   bucket: GroceryListItemViewModel['bucket'],
 ): GroceryListActionViewModel[] {
   const sufficiencyEligible = item.inventoryStatus === 'check_pantry' || item.orderingPolicy === 'pantry_item' || item.orderingPolicy === 'household_staple';
+  const rememberKitchenMemory = {
+    fluentLifecycle: {
+      action: 'already_have_enough',
+      memoryEffect: 'kitchen_memory',
+      objectRole: 'living_grocery_list',
+      rememberInventory: true,
+    },
+  };
+  const markBoughtMemory = {
+    fluentLifecycle: {
+      action: 'mark_bought',
+      memoryEffect: 'purchase_inventory',
+      objectRole: 'living_grocery_list',
+      rememberInventory: true,
+    },
+  };
   if (bucket === 'covered') {
     return [
       {
@@ -2702,38 +3014,42 @@ function buildPlanItemActions(
   }
 
   if (bucket === 'verify_pantry') {
-    return [
-      {
-        id: 'have_it',
-        label: 'Have it',
+    const actions: GroceryListActionViewModel[] = [];
+    if (sufficiencyEligible) {
+      actions.push({
+        id: 'already_have_enough',
+        label: 'Already have enough',
         toolName: 'meals_upsert_grocery_plan_action',
         args: {
-          action_status: sufficiencyEligible ? 'have_enough' : 'confirmed',
+          action_status: 'have_enough',
           item_key: item.itemKey,
+          metadata: rememberKitchenMemory,
           week_start: weekStart,
         },
-      },
-      {
+      });
+    }
+    actions.push({
         id: 'need_to_buy',
-        label: 'Need to buy',
+        label: 'Add to buy list',
         toolName: 'meals_upsert_grocery_plan_action',
         args: {
           action_status: sufficiencyEligible ? 'dont_have_it' : 'needs_purchase',
           item_key: item.itemKey,
           week_start: weekStart,
         },
-      },
-    ];
+      });
+    return actions;
   }
 
   return [
     {
-      id: 'have_it',
-      label: 'Have it',
+      id: 'mark_bought',
+      label: 'Mark bought',
       toolName: 'meals_upsert_grocery_plan_action',
       args: {
-        action_status: sufficiencyEligible ? 'have_enough' : 'confirmed',
+        action_status: 'purchased',
         item_key: item.itemKey,
+        metadata: markBoughtMemory,
         week_start: weekStart,
       },
     },
@@ -2785,8 +3101,8 @@ function buildManualIntentActions(intent: GroceryIntentRecord, bucket: GroceryLi
 
   return [
     {
-      id: 'have_it',
-      label: 'Have it',
+      id: 'mark_bought',
+      label: 'Mark bought',
       toolName: 'meals_upsert_grocery_intent',
       args: {
         display_name: intent.displayName,

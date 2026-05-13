@@ -68,9 +68,10 @@ export const CURRENT_RENDER_TOOL_HOST_GUIDE: readonly RenderToolHostGuide[] = [
   {
     name: 'meals_render_grocery_list_v2',
     hostClass: 'ChatGPT/App-SDK-style widget',
-    claude: 'Prefer `meals_get_grocery_plan` and let Claude render the checklist.',
-    openclaw: 'Use the plain-MCP grocery-plan path.',
-    plainMcpFallback: '`meals_get_grocery_plan`',
+    claude:
+      'Prefer `meals_get_current_grocery_list` for ordinary grocery-list asks and let Claude render the checklist from that living-list data. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail.',
+    openclaw: 'Use `meals_get_current_grocery_list` as the plain-MCP living-list path.',
+    plainMcpFallback: '`meals_get_current_grocery_list`',
   },
   {
     name: 'style_show_purchase_analysis_widget',

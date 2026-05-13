@@ -2,6 +2,8 @@ import { asNonEmptyString, asNonNegativeNumber, asRecord, asStringArray } from '
 import type {
   DomainEventRecord,
   DomainEventSummaryRecord,
+  CurrentGroceryListRecord,
+  CurrentGroceryListSummaryRecord,
   GroceryPlanRecord,
   GroceryPlanSummaryRecord,
   MealPlanRecord,
@@ -116,6 +118,40 @@ export function summarizeGroceryPlan(plan: GroceryPlanRecord | null): GroceryPla
       inventoryStatus: item.inventoryStatus,
       uncertainty: item.uncertainty,
       preferredBrands: item.preferredBrands,
+    })),
+  };
+}
+
+export function summarizeCurrentGroceryList(list: CurrentGroceryListRecord | null): CurrentGroceryListSummaryRecord | null {
+  if (!list) return null;
+
+  return {
+    objectRole: list.objectRole,
+    listId: list.listId,
+    version: list.version,
+    title: list.title,
+    subtitle: list.subtitle,
+    weekStart: list.weekStart,
+    weekRelation: list.weekRelation,
+    selectionReason: list.selectionReason,
+    trustState: list.trustState,
+    trustLabel: list.trustLabel,
+    stale: list.stale,
+    staleReasons: list.staleReasons,
+    counts: list.counts,
+    sourceProvenance: list.sourceProvenance,
+    toBuyPreview: (list.preparedOrder?.remainingToBuy ?? []).slice(0, 10).map((item) => ({
+      displayName: item.displayName,
+      quantity: item.quantity,
+      unit: item.unit,
+    })),
+    checkAtHomePreview: (list.preparedOrder?.unresolvedItems ?? []).slice(0, 10).map((item) => ({
+      displayName: item.displayName,
+      reason: item.reason,
+    })),
+    manualItemPreview: list.intents.slice(0, 10).map((intent) => ({
+      displayName: intent.displayName,
+      status: intent.status,
     })),
   };
 }

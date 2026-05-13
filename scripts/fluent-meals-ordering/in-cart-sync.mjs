@@ -1,6 +1,8 @@
 import { scoreVoilaCandidate } from './browser/retailers/voila-profile.mjs';
 
-export function buildInCartSyncCandidates(itemRun, retailer = 'voila') {
+export function buildInCartSyncCandidates(itemRun, retailer = 'voila', runId = null) {
+  const syncedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
   return Array.isArray(itemRun?.items)
     ? itemRun.items
         .filter((item) => item?.added === true && typeof item?.itemKey === 'string' && item.itemKey.trim())
@@ -18,6 +20,11 @@ export function buildInCartSyncCandidates(itemRun, retailer = 'voila') {
             },
             kind: 'browser_cart_sync',
             retailer,
+            shoppingSession: {
+              expiresAt,
+              runId: typeof runId === 'string' && runId.trim() ? runId.trim() : null,
+              syncedAt,
+            },
           },
           notes:
             item.quantityOutcome === 'partial'
@@ -28,7 +35,7 @@ export function buildInCartSyncCandidates(itemRun, retailer = 'voila') {
     : [];
 }
 
-export function buildCartStateSyncPlan({ actions, cartItems, groceryPlan, retailer = 'voila' } = {}) {
+export function buildCartStateSyncPlan({ actions, cartItems, groceryPlan, retailer = 'voila', runId = null } = {}) {
   const normalizedRetailer = String(retailer || 'voila').trim().toLowerCase() || 'voila';
   const existingActions = Array.isArray(actions) ? actions : [];
   const liveCartItems = Array.isArray(cartItems) ? cartItems : [];
@@ -59,7 +66,7 @@ export function buildCartStateSyncPlan({ actions, cartItems, groceryPlan, retail
       unmatchedCartItems.push(cartTitle);
       continue;
     }
-    desiredByItemKey.set(match.item.itemKey, buildDesiredCartAction(match, cartItem, normalizedRetailer));
+    desiredByItemKey.set(match.item.itemKey, buildDesiredCartAction(match, cartItem, normalizedRetailer, runId));
   }
 
   const upserts = [];
@@ -269,8 +276,10 @@ function findExistingCartIdentityMatch(cartItem, actionsByItemKey, planItemsByKe
   return null;
 }
 
-function buildDesiredCartAction(match, cartItem, retailer) {
+function buildDesiredCartAction(match, cartItem, retailer, runId) {
   const cartTitle = String(cartItem?.title || '').trim();
+  const syncedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
   return {
     action_status: match.kind,
     item_key: match.item.itemKey,
@@ -285,6 +294,11 @@ function buildDesiredCartAction(match, cartItem, retailer) {
       },
       kind: 'browser_cart_sync',
       retailer,
+      shoppingSession: {
+        expiresAt,
+        runId: typeof runId === 'string' && runId.trim() ? runId.trim() : null,
+        syncedAt,
+      },
     },
     notes:
       match.kind === 'substituted'

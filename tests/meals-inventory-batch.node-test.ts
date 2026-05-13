@@ -4,7 +4,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { MealsService } from '../src/domains/meals/service';
 import { createLocalRuntime } from '../src/local/runtime';
-import { buildConfirmedOrderSyncMetadata } from '../plugins/fluent/skills/fluent-meals/scripts/confirmed-order-sync.mjs';
+import { buildConfirmedOrderSyncMetadata } from '../scripts/fluent-meals-ordering/confirmed-order-sync.mjs';
 
 const tempRoots: string[] = [];
 const provenance = {

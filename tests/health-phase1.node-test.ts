@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { FluentCoreService } from '../src/fluent-core';
-import { HealthService } from '../src/domains/health/service';
+import {
+  formatHealthBlockProjectionText,
+  formatHealthBlockText,
+  formatHealthContextText,
+  formatHealthTodayContextText,
+  HealthService,
+} from '../src/domains/health/service';
 import { createLocalRuntime } from '../src/local/runtime';
 
 const tempRoots: string[] = [];
@@ -34,6 +40,7 @@ main()
 
 async function main() {
   await persistsBlockFirstHealthLoop();
+  await doesNotResolveFutureBlockAsTodaysTraining();
   await resolvesMissedSessionDriftFromBlockState();
   await marksReviewContextAsNeedingCheckInWhenNoAdherenceSignalsExist();
   await usesSavedPreferencesToAutogenerateBlockSessions();
@@ -103,6 +110,18 @@ async function persistsBlockFirstHealthLoop() {
     const todayBeforeLog = await service.getTodayContext('2026-04-06');
     assert.equal(todayBeforeLog.projectedSession?.title, 'Full Body A');
     assert.equal(todayBeforeLog.resolvedSession?.title, 'Full Body A');
+    const todayText = formatHealthTodayContextText(todayBeforeLog);
+    assert.match(todayText, /Today's training/);
+    assert.match(todayText, /Full Body A \(planned\) for 2026-04-06/);
+    assert.match(todayText, /Warmup:/);
+    assert.match(todayText, /Main work:/);
+    assert.match(todayText, /Coach notes:/);
+    assert.match(todayText, /Today's notes: nothing recorded yet/);
+    assert.match(todayText, /Goal context: a goal is set for the current training direction/);
+    assert.match(todayText, /I can help with training, not medical diagnosis/);
+    assert.doesNotMatch(todayText, /health-block:|health-session:/i);
+    assert.doesNotMatch(todayText, /should diagnose|should treat|prescribe/i);
+    assert.doesNotMatch(todayText, /Goals:|active goals?|no workout logged today|Logged today:/i);
 
     const workout = await service.logWorkout({
       completion: 'full',
@@ -147,6 +166,13 @@ async function persistsBlockFirstHealthLoop() {
     assert.equal(context.blockState?.nextSessionIndex, 1);
     assert.equal(context.trainingSupportSummary.goalType, 'consistency');
     assert.equal(context.latestMetrics.sleep_hours?.value, 7.5);
+    const contextText = formatHealthContextText(context);
+    assert.match(contextText, /Health context/);
+    assert.match(contextText, /full body training Block/);
+    assert.match(contextText, /Recent training: recent workout history is available/);
+    assert.match(contextText, /Goal context: a goal is set for the current training direction/);
+    assert.doesNotMatch(contextText, /health-block:|health-goal:|health-session:/i);
+    assert.doesNotMatch(contextText, /Goals:|active goals?|recent workouts logged/i);
 
     const reviewContext = await service.getReviewContext('2026-04-06');
     assert.equal(reviewContext.activeBlock?.id, block.id);
@@ -157,11 +183,48 @@ async function persistsBlockFirstHealthLoop() {
     assert.equal(reviewContext.adherenceSummary.evidenceLevel, 'medium');
     assert.equal(reviewContext.adherenceSummary.needsUserCheckIn, false);
     assert.equal(reviewContext.trainingSupportSummary.daysPerWeek, 3);
+    assert.match(formatHealthBlockText(reviewContext.activeBlock), /Health training block/);
+    assert.match(formatHealthBlockProjectionText(reviewContext.blockProjection), /Health training week/);
 
     const events = await service.listDomainEvents(20);
     assert.equal(events.some((event) => event.eventType === 'health.training_block_created'), true);
     assert.equal(events.some((event) => event.eventType === 'health.workout_logged'), true);
     assert.equal(events.some((event) => event.eventType === 'health.block_review_created'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function doesNotResolveFutureBlockAsTodaysTraining() {
+  const runtime = createTempRuntime();
+  try {
+    const service = new HealthService(runtime.sqliteDb as unknown as D1Database);
+    const goal = await service.upsertGoal({
+      goalType: 'consistency',
+      provenance,
+      status: 'active',
+      title: 'Future plan',
+    });
+
+    await service.upsertBlock({
+      durationWeeks: 4,
+      goalId: goal.id,
+      name: 'Future debug block',
+      provenance,
+      startDate: '2099-01-01',
+    });
+
+    const activeBlock = await service.getActiveBlock('2026-05-10');
+    assert.equal(activeBlock, null);
+
+    const today = await service.getTodayContext('2026-05-10');
+    assert.equal(today.activeBlock, null);
+    assert.equal(today.projectedSession, null);
+    assert.equal(today.resolvedSession, null);
+    const todayText = formatHealthTodayContextText(today);
+    assert.match(todayText, /No training is planned for 2026-05-10/);
+    assert.match(todayText, /Set or activate a weekly training plan/);
+    assert.doesNotMatch(todayText, /Future debug block/);
   } finally {
     runtime.sqliteDb.close();
   }

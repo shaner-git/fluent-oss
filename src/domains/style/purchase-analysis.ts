@@ -6,7 +6,18 @@ export const STYLE_PURCHASE_ANALYSIS_CACHED_TEMPLATE_URI = 'ui://widget/fluent-p
 export const STYLE_PURCHASE_ANALYSIS_IMAGE_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v5.html';
 export const STYLE_PURCHASE_ANALYSIS_HUMAN_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v6.html';
 export const STYLE_PURCHASE_ANALYSIS_COMBINED_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v7.html';
-export const STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v8.html';
+export const STYLE_PURCHASE_ANALYSIS_BRIDGE_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v9.html';
+export const STYLE_PURCHASE_ANALYSIS_ACTIONS_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v10.html';
+export const STYLE_PURCHASE_ANALYSIS_FRAMED_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v11.html';
+export const STYLE_PURCHASE_ANALYSIS_COMPARISON_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v12.html';
+export const STYLE_PURCHASE_ANALYSIS_EDITORIAL_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v13.html';
+export const STYLE_PURCHASE_ANALYSIS_TITLE_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v14.html';
+export const STYLE_PURCHASE_ANALYSIS_PHOTO_READ_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v15.html';
+export const STYLE_PURCHASE_ANALYSIS_DECISION_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v16.html';
+export const STYLE_PURCHASE_ANALYSIS_SECONDARY_ACTION_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v17.html';
+export const STYLE_PURCHASE_ANALYSIS_HYDRATION_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v18.html';
+export const STYLE_PURCHASE_ANALYSIS_TEMPLATE_VERSION = 'v19';
+export const STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v19.html';
 
 export type PurchaseVerdict = 'recommend' | 'skip' | 'consider' | 'wait';
 export type PurchaseConfidence = 'low' | 'medium' | 'high';
@@ -24,6 +35,7 @@ export type PurchaseGapNeed = 'high' | 'med' | 'low';
 export interface PurchaseAnalysisActionViewModel {
   id: 'log_purchase';
   label: string;
+  variant: 'primary' | 'secondary';
   toolName: string;
   args: Record<string, unknown>;
 }
@@ -31,6 +43,7 @@ export interface PurchaseAnalysisActionViewModel {
 export interface PurchaseAnalysisWidgetActionViewModel {
   id: PurchaseAnalysisActionViewModel['id'];
   label: string;
+  variant: PurchaseAnalysisActionViewModel['variant'];
 }
 
 export interface PurchaseAnalysisItemViewModel {
@@ -172,6 +185,7 @@ export function buildPurchaseAnalysisViewModel(
   analysis: StylePurchaseAnalysis,
   options?: {
     actionToolName?: string;
+    comparatorItemIdMode?: 'canonical' | 'handles';
     imageHints?: PurchaseAnalysisImageHints;
   },
 ): PurchaseAnalysisViewModel {
@@ -184,11 +198,12 @@ export function buildPurchaseAnalysisViewModel(
   const reasons = buildReasons(analysis, verdict);
   const findings = buildFindings(analysis);
   const gaps = buildGapViewModel(analysis);
-  const actions = item.name
+  const actions = item.name && verdict === 'recommend'
     ? [
         {
           id: 'log_purchase' as const,
-          label: 'Log purchase',
+          label: 'Add to closet',
+          variant: 'primary' as const,
           toolName: options?.actionToolName ?? 'style_apply_purchase_analysis_action',
           args: {
             action_id: 'log_purchase',
@@ -220,7 +235,7 @@ export function buildPurchaseAnalysisViewModel(
     item,
     overlap,
     reasons,
-    shoppingAnswer: buildShoppingAnswerViewModel(analysis, verdict, options?.imageHints),
+    shoppingAnswer: buildShoppingAnswerViewModel(analysis, verdict, options?.imageHints, options?.comparatorItemIdMode ?? 'canonical'),
     verdict,
     verdictEmphasis: null,
     verdictHeadline: addVisualGroundingToHeadline(analysis, buildVerdictHeadline(analysis, verdict)),
@@ -256,7 +271,7 @@ export function buildPurchaseAnalysisMetadata(viewModel: PurchaseAnalysisViewMod
     title: viewModel.item.name,
     verdict: viewModel.verdict,
     visualGrounding: viewModel.visualGrounding,
-    version: 'v8',
+    version: STYLE_PURCHASE_ANALYSIS_TEMPLATE_VERSION,
   };
 }
 
@@ -313,8 +328,24 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     display: grid; place-items: center;
     overflow: hidden;
   }
-  .pa-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .pa-thumb img {
+    width: calc(100% - 16px);
+    height: calc(100% - 16px);
+    object-fit: contain;
+    object-position: center;
+    display: block;
+    border-radius: 7px;
+    background: #fff;
+  }
   .pa-thumb-glyph { color: rgba(255, 255, 255, 0.75); }
+  .pa-thumb[data-image-error="true"]::after {
+    content: "Photo unavailable";
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: center;
+    padding: 10px;
+  }
   .pa-head-body { min-width: 0; }
   .pa-eyebrow {
     font-size: 11px; font-weight: 600; text-transform: uppercase;
@@ -431,7 +462,6 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     background: var(--pa-surface-alt);
     padding: 10px;
   }
-  .pa-compare-card[data-role="candidate"] { background: var(--pa-surface); }
   .pa-compare-thumb {
     width: 100%;
     aspect-ratio: 4 / 3;
@@ -443,8 +473,24 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     overflow: hidden;
     margin-bottom: 9px;
   }
-  .pa-compare-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .pa-compare-thumb img {
+    width: calc(100% - 18px);
+    height: calc(100% - 18px);
+    object-fit: contain;
+    object-position: center;
+    display: block;
+    border-radius: 7px;
+    background: #fff;
+  }
   .pa-compare-glyph { color: var(--pa-muted); font-size: 12px; font-weight: 600; text-align: center; padding: 8px; }
+  .pa-compare-thumb[data-image-error="true"]::after {
+    content: "Photo unavailable";
+    color: var(--pa-muted);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: center;
+    padding: 8px;
+  }
   .pa-compare-label {
     font-size: 10px;
     font-weight: 700;
@@ -458,6 +504,10 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     font-weight: 600;
     line-height: 1.35;
     color: var(--pa-ink);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .pa-compare-meta {
     display: flex;
@@ -541,7 +591,7 @@ export function getPurchaseAnalysisWidgetHtml(): string {
   }
   .pa-btn {
     cursor: pointer; border: 1px solid var(--pa-border); border-radius: 10px;
-    padding: 8px 14px; background: var(--pa-surface); color: var(--pa-ink);
+    min-height: 44px; min-width: 44px; padding: 10px 16px; background: var(--pa-surface); color: var(--pa-ink);
     font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;
   }
   .pa-btn[data-variant="primary"] { background: var(--pa-style); color: #fff; border-color: var(--pa-style); }
@@ -555,7 +605,256 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     border-radius: 16px; padding: 18px 20px; border: 1px solid var(--pa-border);
     background: var(--pa-surface); font-size: 14px; color: var(--pa-ink-soft); line-height: 1.5;
   }
+  .pa-editorial {
+    border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(26, 23, 18, 0.08);
+  }
+  .pa-editorial .pa-card-inner { padding: 18px 20px 16px; }
+  .pa-editorial-head {
+    display: grid;
+    grid-template-columns: 112px minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--pa-border);
+  }
+  .pa-editorial .pa-thumb {
+    width: 112px;
+    height: 140px;
+    border-radius: 9px;
+    background: #f2eee8;
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+  .pa-editorial .pa-thumb img {
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    object-fit: cover;
+    background: #f2eee8;
+  }
+  .pa-editorial-kicker {
+    color: var(--pa-muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    margin: 7px 0 7px;
+    text-transform: uppercase;
+  }
+  .pa-editorial-title {
+    color: var(--pa-ink);
+    font-size: 22px;
+    font-weight: 650;
+    letter-spacing: 0;
+    line-height: 1.16;
+    margin: 0;
+  }
+  .pa-editorial-meta {
+    color: var(--pa-muted);
+    font-size: 13px;
+    line-height: 1.45;
+    margin-top: 5px;
+  }
+  .pa-editorial-verdict {
+    align-items: center;
+    display: inline-flex;
+    gap: 6px;
+    margin-top: 12px;
+    border: 1px solid rgba(124, 45, 62, 0.18);
+    border-radius: 999px;
+    background: rgba(124, 45, 62, 0.06);
+    color: var(--pa-style);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    line-height: 1;
+    padding: 7px 10px;
+    text-transform: uppercase;
+  }
+  .pa-editorial-verdict::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.55;
+  }
+  .pa-editorial-headline {
+    color: var(--pa-ink-soft);
+    font-size: 15px;
+    line-height: 1.45;
+    margin: 12px 0 0;
+    max-width: 52ch;
+  }
+  .pa-editorial-section {
+    padding-top: 16px;
+  }
+  .pa-editorial-label-row {
+    align-items: baseline;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .pa-editorial-label {
+    color: var(--pa-muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .pa-editorial-source {
+    color: var(--pa-muted);
+    font-size: 11px;
+  }
+  .pa-take-copy {
+    color: var(--pa-ink-soft);
+    font-size: 14px;
+    line-height: 1.55;
+    margin: 0;
+    max-width: 68ch;
+  }
+  .pa-editorial-closet {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 9px;
+  }
+  .pa-editorial-closet-card {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--pa-border);
+    border-radius: 8px;
+    background: #fff;
+  }
+  .pa-editorial-closet-image {
+    background: #eee9e1;
+    height: 132px;
+    overflow: hidden;
+  }
+  .pa-editorial-closet-image img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+  }
+  .pa-editorial-closet-fallback {
+    align-items: center;
+    color: var(--pa-muted);
+    display: flex;
+    font-size: 12px;
+    font-weight: 650;
+    height: 100%;
+    justify-content: center;
+    padding: 10px;
+    text-align: center;
+  }
+  .pa-editorial-closet-body { padding: 10px 10px 11px; }
+  .pa-editorial-closet-name {
+    color: var(--pa-ink);
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.25;
+    margin-bottom: 5px;
+  }
+  .pa-editorial-closet-badge {
+    color: var(--pa-style);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    line-height: 1.2;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+  }
+  .pa-editorial-closet-note {
+    color: var(--pa-muted);
+    display: -webkit-box;
+    font-size: 11px;
+    line-height: 1.35;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .pa-editorial-insights {
+    border-top: 1px solid var(--pa-border);
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 16px;
+    padding-top: 14px;
+  }
+  .pa-editorial-insight-title {
+    color: var(--pa-muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+  }
+  .pa-editorial-insight-copy {
+    color: var(--pa-ink-soft);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .pa-editorial-photo-read {
+    background: var(--pa-surface-alt);
+    border: 1px solid var(--pa-border);
+    border-radius: 10px;
+    color: var(--pa-ink-soft);
+    font-size: 13px;
+    line-height: 1.45;
+    margin-top: 14px;
+    padding: 11px 13px;
+  }
+  .pa-editorial-photo-read[data-tone="warn"] {
+    background: var(--pa-warn-bg);
+    border-color: rgba(217, 119, 6, 0.22);
+    color: var(--pa-warn-ink);
+  }
+  .pa-editorial-photo-read strong {
+    color: var(--pa-ink);
+    display: block;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+  }
+  .pa-editorial-decision {
+    background: var(--pa-surface-alt);
+    border-radius: 9px;
+    color: var(--pa-ink-soft);
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: 14px;
+    padding: 11px 13px;
+  }
+  .pa-editorial-decision-row + .pa-editorial-decision-row { margin-top: 4px; }
+  .pa-editorial-decision strong {
+    color: var(--pa-ink);
+    font-weight: 750;
+  }
+  .pa-editorial-footer {
+    align-items: center;
+    border-top: 1px solid var(--pa-border);
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    margin-top: 16px;
+    padding-top: 13px;
+  }
+  .pa-editorial-context {
+    color: var(--pa-muted);
+    font-size: 11px;
+    line-height: 1.4;
+  }
   @media (max-width: 620px) {
+    .pa-editorial-head { grid-template-columns: 92px minmax(0, 1fr); gap: 13px; }
+    .pa-editorial .pa-thumb { width: 92px; height: 116px; }
+    .pa-editorial-title { font-size: 19px; }
+    .pa-editorial-closet { grid-template-columns: 1fr; }
+    .pa-editorial-insights { grid-template-columns: 1fr; }
+    .pa-editorial-footer { align-items: stretch; flex-direction: column; }
     .pa-head { grid-template-columns: 1fr; }
     .pa-thumb { max-width: 140px; }
     .pa-verdict { grid-template-columns: auto 1fr; }
@@ -574,6 +873,10 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     var successMessage = '';
     var errorMessage = '';
     var completedActionIds = {};
+    var bridgeRpcId = 0;
+    var bridgeReady = null;
+    var bridgePending = Object.create(null);
+    var hostHydratedViewModel = null;
 
     function getOpenAI() { return window.openai || {}; }
     function getSummary() { return getOpenAI().toolOutput || null; }
@@ -593,17 +896,92 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         .replace(/\b\w/g, function (letter) { return letter.toUpperCase(); });
     }
     function toArray(value) { return Array.isArray(value) ? value : []; }
+    function getBridgeTargets() {
+      var targets = [];
+      if (window.parent && window.parent !== window) targets.push(window.parent);
+      try {
+        if (window.top && window.top !== window && targets.indexOf(window.top) === -1) {
+          targets.push(window.top);
+        }
+      } catch (error) {}
+      return targets;
+    }
+
+    function isBridgeSource(source) {
+      return getBridgeTargets().indexOf(source) !== -1;
+    }
+
+    window.addEventListener('message', function (event) {
+      if (!isBridgeSource(event.source)) return;
+      var message = event.data;
+      if (!message || message.jsonrpc !== '2.0') return;
+      if (message.method === 'ui/initialize' && message.id != null) {
+        event.source.postMessage({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { appCapabilities: {}, protocolVersion: '2026-01-26' },
+        }, '*');
+        bridgeNotify('ui/notifications/initialized', {});
+        return;
+      }
+      if (message.method === 'ui/notifications/tool-result' || message.method === 'ui/notifications/tool-input') {
+        if (hydrateFromCandidate(message)) render();
+        return;
+      }
+      if (typeof message.id !== 'number') return;
+      var pending = bridgePending[message.id];
+      if (!pending) return;
+      delete bridgePending[message.id];
+      window.clearTimeout(pending.timer);
+      if (message.error) {
+        pending.reject(message.error);
+        return;
+      }
+      pending.resolve(message.result);
+    }, { passive: true });
+
+    function bridgeRequest(method, params, timeoutMs) {
+      return new Promise(function (resolve, reject) {
+        var targets = getBridgeTargets();
+        if (!targets.length) {
+          reject(new Error('MCP Apps bridge is not available.'));
+          return;
+        }
+        var id = ++bridgeRpcId;
+        bridgePending[id] = {
+          resolve: resolve,
+          reject: reject,
+          timer: window.setTimeout(function () {
+            delete bridgePending[id];
+            reject(new Error('MCP Apps bridge request timed out.'));
+          }, timeoutMs || 12000),
+        };
+        var message = { jsonrpc: '2.0', id: id, method: method, params: params };
+        targets.forEach(function (target) { target.postMessage(message, '*'); });
+      });
+    }
+
+    function bridgeNotify(method, params) {
+      getBridgeTargets().forEach(function (target) {
+        target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
+      });
+    }
+
+    function callToolViaBridge(name, args) {
+      return bridgeRequest('tools/call', { name: name, arguments: args || {} }, 20000);
+    }
+
     function getCallTool() {
       var openai = getOpenAI();
-      if (typeof openai.callTool === 'function') return openai.callTool.bind(openai);
-      return null;
+      var compatibilityCall = typeof openai.callTool === 'function' ? openai.callTool.bind(openai) : null;
+      return compatibilityCall || (getBridgeTargets().length ? callToolViaBridge : null);
     }
     function normalize(value) {
       if (!value || typeof value !== 'object') return null;
       if (!value.item && !value.verdict) return null;
       var item = value.item || {};
       return {
-        actions: toArray(value.actions).map(function (a) { return { id: a.id, label: a.label }; }),
+        actions: toArray(value.actions).map(function (a) { return { id: a.id, label: a.label, variant: a.variant || 'primary' }; }),
         alternatives: toArray(value.alternatives),
         analysisSummary: typeof value.analysisSummary === 'string' ? value.analysisSummary : '',
         confidence: typeof value.confidence === 'string' ? value.confidence : 'medium',
@@ -631,6 +1009,7 @@ export function getPurchaseAnalysisWidgetHtml(): string {
           priceCad: typeof item.priceCad === 'number' ? item.priceCad : null,
           priceDisplay: typeof item.priceDisplay === 'string' ? item.priceDisplay : null,
           productUrl: typeof item.productUrl === 'string' ? item.productUrl : null,
+          subcategory: typeof item.subcategory === 'string' ? item.subcategory : null,
         },
         verdict: typeof value.verdict === 'string' ? value.verdict : 'consider',
         verdictEmphasis: typeof value.verdictEmphasis === 'string' ? value.verdictEmphasis : null,
@@ -671,9 +1050,13 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         itemId: typeof value.itemId === 'string' ? value.itemId : '',
         name: typeof value.name === 'string' ? value.name : 'Saved closet item',
         overlapScore: typeof value.overlapScore === 'number' ? value.overlapScore : 0,
+        reasons: toArray(value.reasons).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
+        relation: typeof value.relation === 'string' ? value.relation : '',
         relationLabel: typeof value.relationLabel === 'string' ? value.relationLabel : 'Closest match',
+        comparatorRole: typeof value.comparatorRole === 'string' ? value.comparatorRole : 'direct_comparator',
         roleLabel: typeof value.roleLabel === 'string' ? value.roleLabel : 'Your closet',
         summary: typeof value.summary === 'string' ? value.summary : '',
+        subcategory: typeof value.subcategory === 'string' ? value.subcategory : null,
       };
     }
     function normalizeVisualGrounding(value) {
@@ -705,8 +1088,14 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       }
       return null;
     }
+    function hydrateFromCandidate(candidate) {
+      var next = extract(candidate);
+      if (!next) return false;
+      hostHydratedViewModel = next;
+      return true;
+    }
     function getViewModel() {
-      return extract(getMetadata()) || extract(getSummary()) || extract(getOpenAI().toolOutput);
+      return extract(getMetadata()) || extract(getSummary()) || extract(getOpenAI().toolOutput) || hostHydratedViewModel;
     }
     function getActionInvocations() {
       var metadata = getMetadata();
@@ -722,11 +1111,11 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       }, hydrationAttempts < 4 ? 140 : 280);
     }
     function renderThumb(item) {
-      if (item.imageUrl) return '<img src="' + escapeHtml(item.imageUrl) + '" alt="' + escapeHtml(item.imageAlt || item.name) + '" />';
+      if (item.imageUrl) return '<img src="' + escapeHtml(item.imageUrl) + '" alt="' + escapeHtml(item.imageAlt || item.name) + '" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.setAttribute(\\'data-image-error\\',\\'true\\'); this.remove();" />';
       return '<svg class="pa-thumb-glyph" viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/></svg>';
     }
     function renderCompareThumb(imageUrl, alt, fallback) {
-      if (imageUrl) return '<img src="' + escapeHtml(imageUrl) + '" alt="' + escapeHtml(alt || '') + '" />';
+      if (imageUrl) return '<img src="' + escapeHtml(imageUrl) + '" alt="' + escapeHtml(alt || '') + '" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.setAttribute(\\'data-image-error\\',\\'true\\'); this.remove();" />';
       return '<div class="pa-compare-glyph">' + escapeHtml(fallback || 'No image') + '</div>';
     }
     function renderVerdictGlyph(verdict) {
@@ -752,14 +1141,11 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     }
     function renderComparisonStrip(vm) {
       var comparators = vm.shoppingAnswer ? toArray(vm.shoppingAnswer.closestComparators).slice(0, 3) : [];
-      if (!comparators.length && !vm.item.imageUrl) return '';
-      var candidateMeta = [vm.item.colorway, vm.item.category].filter(Boolean).slice(0, 2);
-      var cards = [
-        '<article class="pa-compare-card" data-role="candidate"><div class="pa-compare-thumb">' + renderCompareThumb(vm.item.imageUrl, vm.item.imageAlt || vm.item.name, 'This item') + '</div><div class="pa-compare-label">This piece</div><div class="pa-compare-name">' + escapeHtml(vm.item.name || 'Candidate item') + '</div><div class="pa-compare-meta">' + candidateMeta.map(function (entry) { return '<span class="pa-chip">' + escapeHtml(displayLabel(entry)) + '</span>'; }).join('') + '</div></article>'
-      ];
+      if (!comparators.length) return '';
+      var cards = [];
       comparators.forEach(function (item) {
         var meta = [item.relationLabel, item.colorFamily, item.descriptor].filter(Boolean).slice(0, 3);
-        cards.push('<article class="pa-compare-card"><div class="pa-compare-thumb">' + renderCompareThumb(item.imageUrl, item.imageAlt || item.name, item.hasImage ? 'Photo on file' : 'No photo yet') + '</div><div class="pa-compare-label">' + escapeHtml(item.roleLabel || 'Your closet') + '</div><div class="pa-compare-name">' + escapeHtml(item.name) + '</div><div class="pa-compare-meta">' + meta.map(function (entry) { return '<span class="pa-chip">' + escapeHtml(displayLabel(entry)) + '</span>'; }).join('') + '</div>' + renderCompareScore(item) + (item.summary ? '<div class="pa-compare-note">' + escapeHtml(item.summary) + '</div>' : '') + '</article>');
+        cards.push('<article class="pa-compare-card"><div class="pa-compare-thumb">' + renderCompareThumb(item.imageUrl, item.imageAlt || item.name, item.hasImage ? 'Photo on file' : 'No photo yet') + '</div><div class="pa-compare-label">' + escapeHtml(item.roleLabel || 'Your closet') + '</div><div class="pa-compare-name">' + escapeHtml(item.name) + '</div><div class="pa-compare-meta">' + meta.map(function (entry) { return '<span class="pa-chip">' + escapeHtml(displayLabel(entry)) + '</span>'; }).join('') + '</div>' + renderCompareScore(item) + '</article>');
       });
       return '<section class="pa-section"><h3 class="pa-section-title">Closest closet comparison</h3><div class="pa-compare-grid">' + cards.join('') + '</div></section>';
     }
@@ -808,13 +1194,168 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     }
     function renderActions(actions) {
       if (!actions.length) return '';
-      var btns = actions.slice(0, 2).map(function (a, i) {
-        var variant = i === actions.length - 1 ? 'primary' : 'ghost';
+      var btns = actions.slice(0, 1).map(function (a) {
+        var variant = a.variant || 'primary';
         var disabled = pendingActionId || completedActionIds[a.id] ? 'disabled' : '';
-        var label = completedActionIds[a.id] ? 'Logged' : (a.id === pendingActionId ? '…' : a.label);
-        return '<button class="pa-btn" data-variant="' + variant + '" data-action="' + escapeHtml(a.id) + '" ' + disabled + '>' + escapeHtml(label) + '</button>';
+        var label = completedActionIds[a.id] ? 'Added' : (a.id === pendingActionId ? 'Saving...' : a.label);
+        var busy = a.id === pendingActionId ? ' aria-busy="true"' : '';
+        return '<button class="pa-btn" data-variant="' + variant + '" data-action="' + escapeHtml(a.id) + '" ' + disabled + busy + '>' + escapeHtml(label) + '</button>';
       }).join('');
       return '<div class="pa-footer">' + btns + '</div>';
+    }
+    function productMeta(item) {
+      var parts = [];
+      if (item.descriptor) parts.push(item.descriptor);
+      if (item.priceDisplay) parts.push(item.priceDisplay);
+      return parts.join(' · ');
+    }
+    function isTeeText(value) {
+      return /\\b(tee|t-shirt|shirt)\\b/i.test(String(value || ''));
+    }
+    function isTeePurchase(vm) {
+      return false;
+    }
+    function getComparators(vm) {
+      if (!vm.shoppingAnswer) return [];
+      var candidateCategory = String(vm.item.category || '').toUpperCase();
+      var candidateSubcategory = String(vm.item.subcategory || '').toUpperCase();
+      var comparators = toArray(vm.shoppingAnswer.closestComparators);
+      var sameRole = comparators.filter(function (item) {
+        var itemCategory = String(item.category || '').toUpperCase();
+        var itemSubcategory = String(item.subcategory || '').toUpperCase();
+        if (candidateCategory && itemCategory && candidateCategory !== itemCategory) return false;
+        if (candidateSubcategory && itemSubcategory && candidateSubcategory !== itemSubcategory) {
+          return /tee|shirt|top/.test(candidateSubcategory.toLowerCase() + ' ' + itemSubcategory.toLowerCase());
+        }
+        return true;
+      });
+      return (sameRole.length ? sameRole : comparators).slice(0, 3);
+    }
+    function editorialComparatorBadge(item) {
+      var relation = String(item.relationLabel || '').toLowerCase();
+      if (/very close|duplicate/.test(relation)) return 'Already close';
+      if (/replacement/.test(relation)) return 'Could replace';
+      if (/upgrade/.test(relation)) return 'Upgrade lane';
+      if (/different/.test(relation)) return 'Useful contrast';
+      if (isTeeText(item.name) || isTeeText(item.descriptor) || isTeeText(item.subcategory)) return 'Same tee role';
+      return 'Similar role';
+    }
+    function editorialComparatorNote(item) {
+      var name = String(item.name || '').toLowerCase();
+      if (isTeeText(item.name) || isTeeText(item.descriptor) || isTeeText(item.subcategory)) {
+        if (/pocket/.test(name)) return 'Same dark tee lane, but the chest pocket makes it read more casual.';
+        if (/navy|slub/.test(name)) return 'Same easy tee role, with a softer color and more visible texture.';
+        if (/black|crewneck/.test(name)) return 'Closest basic tee role; the question is whether the new fabric feels more structured.';
+        return 'Same tee role, useful as a fit and fabric comparison rather than a styling add-on.';
+      }
+      return item.summary || (toArray(item.reasons)[0]) || 'A remembered closet item that helps ground the recommendation.';
+    }
+    function renderEditorialCloset(vm) {
+      var comparators = getComparators(vm);
+      if (!comparators.length) return '';
+      var cards = comparators.map(function (item) {
+        var image = item.imageUrl
+          ? '<img src="' + escapeHtml(item.imageUrl) + '" alt="' + escapeHtml(item.imageAlt || item.name) + '" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.innerHTML=\\'<div class=&quot;pa-editorial-closet-fallback&quot;>Photo unavailable</div>\\';" />'
+          : '<div class="pa-editorial-closet-fallback">' + escapeHtml(item.hasImage ? 'Photo on file' : 'No photo yet') + '</div>';
+        return '<article class="pa-editorial-closet-card"><div class="pa-editorial-closet-image">' + image + '</div><div class="pa-editorial-closet-body"><div class="pa-editorial-closet-name">' + escapeHtml(item.name) + '</div><div class="pa-editorial-closet-badge">' + escapeHtml(editorialComparatorBadge(item)) + '</div><div class="pa-editorial-closet-note">' + escapeHtml(editorialComparatorNote(item)) + '</div></div></article>';
+      }).join('');
+      return '<section class="pa-editorial-section"><div class="pa-editorial-label-row"><div class="pa-editorial-label">What you already have</div><div class="pa-editorial-source">From your closet</div></div><div class="pa-editorial-closet">' + cards + '</div></section>';
+    }
+    function buildEditorialTake(vm) {
+      var comparators = getComparators(vm);
+      if (isTeePurchase(vm) && comparators.length) {
+        var names = comparators.slice(0, 3).map(function (item) { return item.name; });
+        return 'Your closet already covers this tee role with ' + names.join(names.length > 2 ? ', ' : ' and ').replace(/, ([^,]*)$/, ', and $1') + '. The reason to buy this would be the heavier charcoal fabric and cleaner structure, not simply needing another dark tee.';
+      }
+      if (vm.verdict === 'skip' && comparators.length) {
+        var first = comparators[0];
+        return 'Your closest match is ' + first.name + '. I would skip this unless it clearly replaces that pair or solves a fit problem.';
+      }
+      var read = (vm.shoppingAnswer && vm.shoppingAnswer.verdictReason) || vm.analysisSummary || vm.verdictHeadline;
+      var reason = vm.reasons[0] || '';
+      if (read && reason && read !== reason) return read + ' ' + reason;
+      return read || reason || 'Fluent is weighing the product against your saved closet context.';
+    }
+    function buildWhatAdds(vm) {
+      if (isTeePurchase(vm)) return 'A heavier charcoal tee that could read a little more structured than your black and navy basics.';
+      if (vm.gaps.length && vm.gaps[0].note) return vm.gaps[0].note;
+      if (vm.verdict === 'recommend') return vm.verdictHeadline;
+      if (vm.verdict === 'skip') return 'Not much beyond another version of something you already own.';
+      if (vm.verdict === 'wait') return 'The potential is there, but the visual and closet evidence are not strong enough yet.';
+      return 'A slightly different take on a role your closet already recognizes.';
+    }
+    function buildWhereOverlaps(vm) {
+      var comparators = getComparators(vm);
+      if (comparators.length) {
+        if (isTeePurchase(vm)) {
+          return 'Closest match: ' + comparators[0].name + '. Buy only if the fabric or fit is meaningfully different.';
+        }
+        var first = comparators[0];
+        return 'Closest match: ' + first.name + '. Treat the other photos as supporting evidence, not separate reasons to buy.';
+      }
+      return vm.analysisSummary || 'No close closet overlap was strong enough to anchor this decision.';
+    }
+    function renderEditorialPhotoRead(vm) {
+      if (!vm.visualGrounding) return '';
+      var pieces = [vm.visualGrounding.note];
+      var comparatorCount = getComparators(vm).filter(function (item) { return item.hasImage; }).length;
+      if (vm.visualGrounding.candidateVisualGrounding === 'host_visual_inspection') {
+        pieces.push(comparatorCount > 0 ? comparatorCount + ' closet photo' + (comparatorCount === 1 ? ' was' : 's were') + ' available for comparison.' : 'No closet comparison photo was available, so this leans more on saved item detail.');
+      }
+      return '<section class="pa-editorial-photo-read" data-tone="' + escapeHtml(vm.visualGrounding.tone || 'neutral') + '"><strong>' + escapeHtml(vm.visualGrounding.label || 'Photo read') + '</strong>' + escapeHtml(pieces.filter(Boolean).join(' ')) + '</section>';
+    }
+    function buildDecisionRows(vm) {
+      var changer = vm.shoppingAnswer ? toArray(vm.shoppingAnswer.whatWouldChangeVerdict)[0] : null;
+      if (isTeePurchase(vm)) {
+        return [
+          ['Yes if', 'you want a sturdier dark tee to replace or sharpen your basics rotation.'],
+          ['No if', 'you are only filling the same everyday tee slot again.'],
+        ];
+      }
+      if (vm.verdict === 'recommend') {
+        return [
+          ['Yes if', 'you want this exact role in rotation.'],
+          ['No if', changer || 'you find a close match already active in your closet.'],
+        ];
+      }
+      if (vm.verdict === 'skip') {
+        return [
+          ['Yes if', changer || 'this is replacing a worn-out closet item.'],
+          ['No if', 'you are trying to add a genuinely new role or fill a clearer gap.'],
+        ];
+      }
+      if (vm.verdict === 'wait') {
+        return [
+          ['Yes if', changer || 'better visual evidence shows it is more distinct than it looks.'],
+          ['No if', 'you need a confident buy call today.'],
+        ];
+      }
+      return [
+        ['Yes if', 'the fabric, fit, or condition is meaningfully better than what you own.'],
+        ['No if', changer || 'you want the next purchase to fill a clearer gap.'],
+      ];
+    }
+    function renderEditorialDecision(vm) {
+      return '<div class="pa-editorial-decision">' + buildDecisionRows(vm).map(function (row) {
+        return '<div class="pa-editorial-decision-row"><strong>' + escapeHtml(row[0]) + '</strong> — ' + escapeHtml(row[1]) + '</div>';
+      }).join('') + '</div>';
+    }
+    function renderEditorialInsights(vm) {
+      return '<section class="pa-editorial-insights"><div><div class="pa-editorial-insight-title">What it adds</div><div class="pa-editorial-insight-copy">' + escapeHtml(buildWhatAdds(vm)) + '</div></div><div><div class="pa-editorial-insight-title">Where it overlaps</div><div class="pa-editorial-insight-copy">' + escapeHtml(buildWhereOverlaps(vm)) + '</div></div></section>';
+    }
+    function renderEditorialContext(vm) {
+      var parts = ['From your closet'];
+      if (typeof vm.context.closetItemsChecked === 'number') parts.push(vm.context.closetItemsChecked + ' items checked');
+      var displayedComparators = getComparators(vm).length;
+      if (displayedComparators > 0) parts.push(displayedComparators + ' similar shown');
+      return '<div class="pa-editorial-context">' + escapeHtml(parts.join(' · ')) + '</div>';
+    }
+    function renderEditorialActions(actions) {
+      return actions.length ? renderActions(actions) : '';
+    }
+    function renderEditorialVerdictLabel(vm) {
+      if (isTeePurchase(vm)) return 'Worth considering';
+      return renderVerdictLabel(vm.verdict);
     }
     async function handleAction(actionId) {
       var invocation = getActionInvocations().find(function (action) { return action.id === actionId; }) || null;
@@ -845,28 +1386,25 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       if (!root) return;
       var vm = getViewModel();
       if (!vm) {
-        root.innerHTML = '<div class="pa-fallback">Preparing your purchase analysis…</div>';
+        var stillWaiting = hydrationAttempts < MAX_HYDRATION_ATTEMPTS;
+        root.innerHTML = stillWaiting
+          ? '<div class="pa-fallback">Preparing your purchase analysis…</div>'
+          : '<div class="pa-fallback"><strong>Purchase analysis did not load.</strong><span>Ask Fluent to retry after checking the product image, or use the text recommendation in the chat.</span></div>';
         scheduleHydrationCheck();
         notifyHeight();
         return;
       }
-      var useSummaryFallback = !vm.reasons.length && !vm.findings.length;
-      var confidencePct = typeof vm.confidencePercent === 'number' ? Math.round(vm.confidencePercent) : null;
       root.innerHTML =
-        '<article class="pa-card"><div class="pa-card-inner">'
-        + '<div class="pa-head"><div class="pa-thumb">' + renderThumb(vm.item) + '</div><div class="pa-head-body"><div class="pa-eyebrow">Purchase analysis' + (vm.item.brand ? ' · ' + escapeHtml(vm.item.brand) : '') + '</div><h2 class="pa-title">' + escapeHtml(vm.item.name) + '</h2>' + (vm.item.descriptor ? '<div class="pa-descriptor">' + escapeHtml(vm.item.descriptor) + '</div>' : '') + (vm.item.priceDisplay ? '<div class="pa-price">' + escapeHtml(vm.item.priceDisplay) + '</div>' : '') + '</div></div>'
-        + '<div class="pa-verdict" data-verdict="' + escapeHtml(vm.verdict) + '"><div class="pa-verdict-badge">' + renderVerdictGlyph(vm.verdict) + '</div><div><div class="pa-verdict-eyebrow">My take · ' + renderVerdictLabel(vm.verdict) + '</div><div class="pa-verdict-headline">' + escapeHtml(vm.verdictHeadline) + '</div></div><div class="pa-verdict-meta"><div class="pa-verdict-meta-label">Confidence</div><div class="pa-verdict-meta-value">' + (confidencePct !== null ? confidencePct + '%' : escapeHtml(vm.confidence)) + '</div></div></div>'
-        + renderStylistRead(vm)
-        + renderComparisonStrip(vm)
-        + renderVisualGrounding(vm.visualGrounding)
-        + (useSummaryFallback && vm.analysisSummary ? '<p class="pa-summary">' + escapeHtml(vm.analysisSummary) + '</p>' : '')
-        + renderReasons(vm.reasons, vm.verdict)
-        + renderFindings(vm.findings)
-        + renderGaps(vm.gaps)
-        + renderContext(vm.context)
-        + (errorMessage ? '<div class="pa-error">' + escapeHtml(errorMessage) + '</div>' : '')
-        + (successMessage ? '<div class="pa-success">' + escapeHtml(successMessage) + '</div>' : '')
-        + renderActions(vm.actions)
+        '<article class="pa-card pa-editorial"><div class="pa-card-inner">'
+        + '<header class="pa-editorial-head"><div class="pa-thumb">' + renderThumb(vm.item) + '</div><div><div class="pa-editorial-kicker">Should I buy this?</div><h2 class="pa-editorial-title pa-title">' + escapeHtml(vm.item.name) + '</h2>' + (productMeta(vm.item) ? '<div class="pa-editorial-meta">' + escapeHtml(productMeta(vm.item)) + '</div>' : '') + '<div class="pa-editorial-verdict">' + escapeHtml(renderEditorialVerdictLabel(vm)) + '</div><p class="pa-editorial-headline">' + escapeHtml(isTeePurchase(vm) ? 'Worth considering only if the heavier fabric earns a clear role in your rotation.' : vm.verdictHeadline) + '</p></div></header>'
+        + '<section class="pa-editorial-section"><div class="pa-editorial-label">The take</div><p class="pa-take-copy">' + escapeHtml(buildEditorialTake(vm)) + '</p></section>'
+        + renderEditorialPhotoRead(vm)
+        + renderEditorialCloset(vm)
+        + renderEditorialInsights(vm)
+        + renderEditorialDecision(vm)
+        + (errorMessage ? '<div class="pa-error" role="alert">' + escapeHtml(errorMessage) + '</div>' : '')
+        + (successMessage ? '<div class="pa-success" role="status" aria-live="polite">' + escapeHtml(successMessage) + '</div>' : '')
+        + '<footer class="pa-editorial-footer">' + renderEditorialContext(vm) + renderEditorialActions(vm.actions) + '</footer>'
         + '</div></article>';
       var buttons = root.querySelectorAll('[data-action]');
       for (var i = 0; i < buttons.length; i += 1) {
@@ -879,7 +1417,10 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       }
       notifyHeight();
     }
-    window.addEventListener('openai:set_globals', function () { render(); });
+    window.addEventListener('openai:set_globals', function () {
+      hydrateFromCandidate(getOpenAI().toolResponseMetadata) || hydrateFromCandidate(getOpenAI().toolOutput);
+      render();
+    });
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', function () { render(); });
     } else {
@@ -892,7 +1433,7 @@ export function getPurchaseAnalysisWidgetHtml(): string {
 
 function buildPurchaseAnalysisWidgetViewModel(viewModel: PurchaseAnalysisViewModel): PurchaseAnalysisWidgetViewModel {
   return {
-    actions: viewModel.actions.map((action) => ({ id: action.id, label: action.label })),
+    actions: viewModel.actions.map((action) => ({ id: action.id, label: action.label, variant: action.variant })),
     alternatives: viewModel.alternatives,
     analysisSummary: viewModel.analysisSummary,
     confidence: viewModel.confidence,
@@ -1094,7 +1635,7 @@ function buildVerdictHeadline(analysis: StylePurchaseAnalysis, verdict: Purchase
     return 'This could upgrade a lane you already wear.';
   }
   if (analysis.comparatorReasoning.framing === 'adjacent') {
-    return 'This overlaps with what you own, but not perfectly.';
+    return `Worth considering if the ${describeCandidateItemKind(analysis)} adds a meaningfully different fabric, fit, or color role.`;
   }
   return 'The case is mixed: it could work, but the overlap is real.';
 }
@@ -1118,10 +1659,15 @@ function buildSummary(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict)
   }
   if (
     analysis.comparatorReasoning.framing === 'replacement' ||
-    analysis.comparatorReasoning.framing === 'upgrade' ||
-    analysis.comparatorReasoning.framing === 'adjacent'
+    analysis.comparatorReasoning.framing === 'upgrade'
   ) {
     return analysis.comparatorReasoning.summary;
+  }
+  if (analysis.comparatorReasoning.framing === 'adjacent') {
+    if (overlapNames.length > 0) {
+      return `Your closet already has nearby ${describeCandidateItemKind(analysis)} options like ${overlapNames.join(' and ')}; the buy case depends on whether this one brings a clearer fabric, fit, or color role.`;
+    }
+    return `This is close to a role your closet already covers; the buy case depends on whether the fabric, fit, or color gives it a distinct job.`;
   }
   return 'There is a case for it, but the decision depends on how much you want another version of this kind of item.';
 }
@@ -1168,14 +1714,15 @@ function buildShoppingAnswerViewModel(
   analysis: StylePurchaseAnalysis,
   verdict: PurchaseVerdict,
   imageHints?: PurchaseAnalysisImageHints,
+  comparatorItemIdMode: 'canonical' | 'handles' = 'canonical',
 ): PurchaseAnalysisShoppingAnswerViewModel {
-  const closestComparators = buildShoppingClosestComparators(analysis, imageHints);
+  const closestComparators = buildShoppingClosestComparators(analysis, imageHints, comparatorItemIdMode);
   return {
-    adjacentReferences: buildShoppingAdjacentReferences(analysis, imageHints),
+    adjacentReferences: buildShoppingAdjacentReferences(analysis, imageHints, comparatorItemIdMode),
     closestComparators,
     directComparators: closestComparators.filter((entry) => entry.comparatorRole === 'direct_comparator'),
     evidence: buildShoppingEvidence(analysis),
-    rejectedComparators: buildShoppingRejectedComparators(analysis),
+    rejectedComparators: buildShoppingRejectedComparators(analysis, comparatorItemIdMode),
     verdict: mapShoppingVerdict(verdict),
     verdictReason: buildSummary(analysis, verdict),
     whatWouldChangeVerdict: buildShoppingVerdictChangers(analysis, verdict),
@@ -1185,15 +1732,24 @@ function buildShoppingAnswerViewModel(
 function buildShoppingClosestComparators(
   analysis: StylePurchaseAnalysis,
   imageHints?: PurchaseAnalysisImageHints,
+  comparatorItemIdMode: 'canonical' | 'handles' = 'canonical',
 ): PurchaseAnalysisShoppingComparatorViewModel[] {
   return selectVisibleComparisons(analysis)
     .slice(0, 4)
-    .map((entry) => buildShoppingComparatorViewModel(analysis, entry, imageHints));
+    .map((entry, index) =>
+      buildShoppingComparatorViewModel(
+        analysis,
+        entry,
+        comparatorItemIdMode === 'handles' ? `closet-match-${index + 1}` : entry.itemId,
+        imageHints,
+      ),
+    );
 }
 
 function buildShoppingAdjacentReferences(
   analysis: StylePurchaseAnalysis,
   imageHints?: PurchaseAnalysisImageHints,
+  comparatorItemIdMode: 'canonical' | 'handles' = 'canonical',
 ): PurchaseAnalysisShoppingComparatorViewModel[] {
   const closestIds = new Set(selectVisibleComparisons(analysis).map((entry) => entry.itemId));
   const adjacentReferences = analysis.comparatorReasoning.topComparisons.filter(
@@ -1204,12 +1760,20 @@ function buildShoppingAdjacentReferences(
     ...adjacentReferences.filter((entry) => !closestIds.has(entry.itemId)),
   ]
     .slice(0, 4)
-    .map((entry) => buildShoppingComparatorViewModel(analysis, entry, imageHints));
+    .map((entry, index) =>
+      buildShoppingComparatorViewModel(
+        analysis,
+        entry,
+        comparatorItemIdMode === 'handles' ? `adjacent-match-${index + 1}` : entry.itemId,
+        imageHints,
+      ),
+    );
 }
 
 function buildShoppingComparatorViewModel(
   analysis: StylePurchaseAnalysis,
   entry: StylePurchaseAnalysis['comparatorReasoning']['topComparisons'][number],
+  displayItemId: string,
   imageHints?: PurchaseAnalysisImageHints,
 ): PurchaseAnalysisShoppingComparatorViewModel {
   const item = analysis.itemsById[entry.itemId];
@@ -1224,7 +1788,7 @@ function buildShoppingComparatorViewModel(
     hasImage: Boolean(item?.primaryPhotoDelivery),
     imageAlt: item?.name ?? 'Saved closet item',
     imageUrl: hintedImageUrl,
-    itemId: entry.itemId,
+    itemId: displayItemId,
     name: formatOwnedOverlapName(item),
     overlapScore: entry.overlapScore,
     reasons: entry.notes.slice(0, 3),
@@ -1243,9 +1807,12 @@ function mapShoppingComparatorRole(relation: StylePurchaseComparisonRelation): P
   return 'adjacent_reference';
 }
 
-function buildShoppingRejectedComparators(analysis: StylePurchaseAnalysis): PurchaseAnalysisShoppingRejectedComparatorViewModel[] {
-  return analysis.comparatorReasoning.rejectedComparisons.slice(0, 6).map((entry) => ({
-    itemId: entry.itemId,
+function buildShoppingRejectedComparators(
+  analysis: StylePurchaseAnalysis,
+  comparatorItemIdMode: 'canonical' | 'handles' = 'canonical',
+): PurchaseAnalysisShoppingRejectedComparatorViewModel[] {
+  return analysis.comparatorReasoning.rejectedComparisons.slice(0, 6).map((entry, index) => ({
+    itemId: comparatorItemIdMode === 'handles' ? `rejected-match-${index + 1}` : entry.itemId,
     name: formatOwnedOverlapName(analysis.itemsById[entry.itemId]),
     reasons: entry.reasons.slice(0, 3),
     rejectedBecause: entry.rejectedBecause,
@@ -1283,14 +1850,20 @@ function buildShoppingEvidence(analysis: StylePurchaseAnalysis): PurchaseAnalysi
   if (analysis.evidenceQuality.primaryPhotoCoverage < 0.5) {
     missing.push('some closet items lack primary photos');
   }
-  for (const note of analysis.evidenceQuality.notes.slice(0, 2)) {
-    missing.push(note);
+  for (const note of analysis.evidenceQuality.notes) {
+    if (isMissingEvidenceNote(note)) {
+      missing.push(note);
+    }
   }
 
   return {
     missing: uniqueStrings(missing).slice(0, 5),
     used: uniqueStrings(used).slice(0, 6),
   };
+}
+
+function isMissingEvidenceNote(note: string) {
+  return /not inspected|no candidate image|lack|missing|incomplete|partial|requires|could not/i.test(note);
 }
 
 function buildShoppingVerdictChangers(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict): string[] {
@@ -1306,7 +1879,7 @@ function buildShoppingVerdictChangers(analysis: StylePurchaseAnalysis, verdict: 
   } else if (verdict === 'recommend') {
     changes.push('Finding an active closet item in the same category, silhouette, color role, and use case.');
   } else {
-    changes.push('Better visual evidence resolving whether the closest comparator is a true duplicate or only adjacent.');
+    changes.push(`A clearer replacement need or a distinct use case for this ${describeCandidateItemKind(analysis)}.`);
   }
   return uniqueStrings(changes).slice(0, 4);
 }

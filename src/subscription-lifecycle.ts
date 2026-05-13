@@ -116,12 +116,19 @@ export function evaluateSubscriptionLifecycle(
         retentionDeadline,
       };
     case 'suspended':
-    case 'deletion_requested':
       return {
         access: 'suspended',
         currentState: record.currentState,
         graceDeadline,
         message: 'This Fluent account is suspended or pending deletion. Contact support if you need access restored.',
+        retentionDeadline,
+      };
+    case 'deletion_requested':
+      return {
+        access: 'suspended',
+        currentState: record.currentState,
+        graceDeadline,
+        message: 'This Fluent account has a deletion request in progress. Contact support if you want to cancel or confirm the request.',
         retentionDeadline,
       };
     case 'deleted':
@@ -132,12 +139,52 @@ export function evaluateSubscriptionLifecycle(
         message: 'This Fluent account has been deleted.',
         retentionDeadline,
       };
-    default:
+    case 'waitlisted':
       return {
-        access: 'full_access',
+        access: 'blocked',
         currentState: record.currentState,
         graceDeadline,
-        message: 'Your Fluent account has full access.',
+        message: 'This Fluent account is still on the early-access waitlist. There is nothing to fix in ChatGPT yet.',
+        retentionDeadline,
+      };
+    case 'invited':
+      return {
+        access: 'blocked',
+        currentState: record.currentState,
+        graceDeadline,
+        message: 'Your Fluent invite is waiting for you to accept it before the account can be used.',
+        retentionDeadline,
+      };
+    case 'invite_accepted':
+      return {
+        access: 'blocked',
+        currentState: record.currentState,
+        graceDeadline,
+        message: 'Your Fluent invite is accepted, but account setup is not finished yet.',
+        retentionDeadline,
+      };
+    case 'account_created':
+      return {
+        access: 'blocked',
+        currentState: record.currentState,
+        graceDeadline,
+        message: 'Your Fluent account exists, but setup is still being finished.',
+        retentionDeadline,
+      };
+    case 'checkout_required':
+      return {
+        access: 'blocked',
+        currentState: record.currentState,
+        graceDeadline,
+        message: 'Your Fluent account needs account setup or billing completed on meetfluent.app before the account is available.',
+        retentionDeadline,
+      };
+    default:
+      return {
+        access: 'blocked',
+        currentState: record.currentState,
+        graceDeadline,
+        message: 'Fluent does not recognize this account state yet. Contact support before relying on account access.',
         retentionDeadline,
       };
   }

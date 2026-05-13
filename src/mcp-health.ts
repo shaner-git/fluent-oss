@@ -4,6 +4,10 @@ import { z } from 'zod';
 import { buildMutationProvenance, FLUENT_HEALTH_READ_SCOPE, FLUENT_HEALTH_WRITE_SCOPE, requireScope } from './auth';
 import {
   buildHealthMutationAck,
+  formatHealthBlockProjectionText,
+  formatHealthBlockText,
+  formatHealthContextText,
+  formatHealthTodayContextText,
   HealthService,
   summarizeHealthBlock,
   summarizeHealthBlockProjection,
@@ -219,7 +223,8 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
     'health_get_context',
     {
       annotations: { idempotentHint: true, readOnlyHint: true },
-      description: 'Fetch current Health context with active goals, active block state, and recent activity.',
+      description:
+        'Fetch current Health training context with active goals, active block state, and recent activity. This is text-first fitness guidance only, not medical diagnosis, treatment, or nutrition prescription.',
       inputSchema: {
         view: readViewSchema,
       },
@@ -230,8 +235,8 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       const context = await health.getContext();
       const summary = summarizeHealthContext(context);
       return toolResult(context, {
-        structuredContent: view === 'full' ? undefined : summary,
-        textData: view === 'full' ? context : summary,
+        structuredContent: view === 'full' ? undefined : redactHealthSummary(summary),
+        textData: view === 'full' ? context : formatHealthContextText(context),
       });
     },
   );
@@ -240,7 +245,8 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
     'health_get_today_context',
     {
       annotations: { idempotentHint: true, readOnlyHint: true },
-      description: 'Fetch today’s planned Health session and any lightweight completion signals already recorded.',
+      description:
+        `Fetch today’s planned Health training session and any lightweight completion signals already recorded. Use this text-first tool for ordinary asks like "show today's training", "what is my workout today?", or "what training do I have today?" rather than opening Fluent Home. This is fitness training context only, not medical diagnosis, treatment, or nutrition prescription.`,
       inputSchema: {
         date: z.string().optional(),
         view: readViewSchema,
@@ -252,8 +258,8 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       const context = await health.getTodayContext(date);
       const summary = summarizeHealthTodayContext(context);
       return toolResult(context, {
-        structuredContent: view === 'full' ? undefined : summary,
-        textData: view === 'full' ? context : summary,
+        structuredContent: view === 'full' ? undefined : redactHealthSummary(summary),
+        textData: view === 'full' ? context : formatHealthTodayContextText(context),
       });
     },
   );
@@ -284,7 +290,8 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
     'health_get_active_block',
     {
       annotations: { idempotentHint: true, readOnlyHint: true },
-      description: 'Fetch the active Health training block with inline sessions.',
+      description:
+        'Fetch the active Health training block with inline sessions for fitness planning. This is text-first training context only, not medical diagnosis, treatment, or nutrition prescription.',
       inputSchema: {
         date: z.string().optional(),
         view: readViewSchema,
@@ -296,8 +303,8 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       const block = await health.getActiveBlock(date);
       const summary = summarizeHealthBlock(block);
       return toolResult(block, {
-        structuredContent: view === 'summary' ? summary ?? undefined : undefined,
-        textData: view === 'full' ? block : summary,
+        structuredContent: view === 'summary' ? redactHealthSummary(summary) ?? undefined : undefined,
+        textData: view === 'full' ? block : formatHealthBlockText(summary ?? null),
       });
     },
   );
@@ -318,8 +325,8 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       const block = await health.getBlock(block_id);
       const summary = summarizeHealthBlock(block);
       return toolResult(block, {
-        structuredContent: view === 'summary' ? summary ?? undefined : undefined,
-        textData: view === 'full' ? block : summary,
+        structuredContent: view === 'summary' ? redactHealthSummary(summary) ?? undefined : undefined,
+        textData: view === 'full' ? block : formatHealthBlockText(summary ?? null),
       });
     },
   );
@@ -328,7 +335,8 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
     'health_get_block_projection',
     {
       annotations: { idempotentHint: true, readOnlyHint: true },
-      description: 'Project the current or requested Health week from the active block.',
+      description:
+        'Project the current or requested Health week from the active block for fitness planning. This is text-first training context only, not medical diagnosis, treatment, or nutrition prescription.',
       inputSchema: {
         block_id: z.string().optional(),
         date: z.string().optional(),
@@ -346,8 +354,8 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       });
       const summary = summarizeHealthBlockProjection(projection);
       return toolResult(projection, {
-        structuredContent: view === 'summary' ? summary ?? undefined : undefined,
-        textData: view === 'full' ? projection : summary,
+        structuredContent: view === 'summary' ? redactHealthSummary(summary) ?? undefined : undefined,
+        textData: view === 'full' ? projection : formatHealthBlockProjectionText(projection),
       });
     },
   );
@@ -692,4 +700,27 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       });
     },
   );
+}
+
+function redactHealthSummary<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactHealthSummary(entry)) as T;
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  const output: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (
+      key === 'id' ||
+      key === 'goalId' ||
+      key === 'blockId' ||
+      key === 'blockSessionId' ||
+      key === 'blockState'
+    ) {
+      continue;
+    }
+    output[key] = redactHealthSummary(entry);
+  }
+  return output as T;
 }

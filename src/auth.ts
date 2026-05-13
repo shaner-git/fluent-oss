@@ -23,6 +23,7 @@ export interface FluentAuthProps {
   name?: string;
   oauthClientId?: string;
   oauthClientName?: string;
+  oauthClientRedirectUris?: string[];
   profileId?: string;
   scope?: string[];
   tenantId?: string;
@@ -76,6 +77,16 @@ export function requireAnyScope(scopes: readonly string[]): FluentAuthProps {
     throw new Error(
       `This operation requires one of the following scopes: ${scopes.join(', ')}.`,
     );
+  }
+  return props;
+}
+
+export function requireScopes(scopes: readonly string[]): FluentAuthProps {
+  const props = getFluentAuthProps();
+  const grantedScopes = props.scope ?? [];
+  const missingScopes = scopes.filter((scope) => !grantedScopes.includes(scope));
+  if (missingScopes.length) {
+    throw new Error(`This operation requires the following scopes: ${missingScopes.join(', ')}.`);
   }
   return props;
 }

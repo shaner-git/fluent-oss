@@ -2,7 +2,7 @@
 
 This page is generated from `contracts/fluent-contract.v1.json` plus an explicit preview list for rich surfaces that are not yet in the public contract.
 
-Current contract version: `2026-04-26.fluent-core-v1.48`
+Current contract version: `2026-05-12.fluent-core-v1.66`
 
 ## Meals
 
@@ -29,6 +29,7 @@ Meals currently ships a broad canonical planning and execution surface, plus a n
 - `meals_get_meal_memory`
 - `meals_list_feedback`
 - `meals_generate_grocery_plan`
+- `meals_get_current_grocery_list`
 - `meals_get_grocery_plan`
 - `meals_prepare_order`
 - `meals_patch_recipe`
@@ -56,7 +57,7 @@ Meals currently ships a broad canonical planning and execution surface, plus a n
 Current host guidance:
 
 - ChatGPT/App-SDK-style hosts can use the current Meals render tools.
-- Claude should prefer `meals_get_recipe`, `meals_get_grocery_plan`, and inventory reads, then render host-native visuals.
+- Claude should prefer `meals_get_recipe`, `meals_get_current_grocery_list`, and inventory reads, then render host-native visuals. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail.
 - OpenClaw should use the plain-MCP Meals data tools rather than depending on Fluent widget rendering.
 
 Preview only:

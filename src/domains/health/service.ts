@@ -22,6 +22,10 @@ import {
 } from './helpers';
 import {
   buildHealthMutationAck,
+  formatHealthBlockProjectionText,
+  formatHealthBlockText,
+  formatHealthContextText,
+  formatHealthTodayContextText,
   summarizeHealthBlock,
   summarizeHealthBlockProjection,
   summarizeHealthBlockReview,
@@ -69,6 +73,10 @@ import type {
 
 export {
   buildHealthMutationAck,
+  formatHealthBlockProjectionText,
+  formatHealthBlockText,
+  formatHealthContextText,
+  formatHealthTodayContextText,
   summarizeHealthBlock,
   summarizeHealthBlockProjection,
   summarizeHealthBlockReview,
@@ -281,10 +289,11 @@ export class HealthService {
         `SELECT id
          FROM health_training_blocks
          WHERE tenant_id = ? AND profile_id = ?
+           AND start_date <= ?
          ORDER BY start_date DESC, updated_at DESC
          LIMIT 1`,
       )
-      .bind(this.tenantId, this.profileId)
+      .bind(this.tenantId, this.profileId, resolvedToday)
       .first<{ id: string }>();
 
     return fallback?.id ? this.getBlockById(fallback.id) : null;
@@ -1730,6 +1739,18 @@ function normalizePlanEntryDetails(value: unknown): HealthPlanEntryDetailsRecord
   }
 
   const normalizeBlock = (entry: unknown): HealthSessionBlockRecord | null => {
+    if (typeof entry === 'string') {
+      const label = normalizeText(entry);
+      return label
+        ? {
+            exercises: [label],
+            label,
+            notes: null,
+            reps: '',
+            sets: '',
+          }
+        : null;
+    }
     const block = asRecord(entry);
     const label = normalizeText(block?.label as string | null | undefined);
     const sets = normalizeText(block?.sets as string | null | undefined);

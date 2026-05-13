@@ -29,6 +29,7 @@ async function main() {
     await composesCarryForwardWithPantrySufficiency();
     await excludesItemsAlreadyInRetailerCart();
     await treatsPersistedInCartActionsAsAlreadyInRetailerCart();
+    await ignoresExpiredBrowserCartSyncActions();
     await blocksOrderingForPantryChecks();
     await resolvesPantryChecksWithHaveEnough();
     await resolvesPantryChecksWithDontHaveIt();
@@ -261,6 +262,58 @@ async function treatsPersistedInCartActionsAsAlreadyInRetailerCart() {
     assert.equal(prepared.remainingToBuy.some((item) => item.displayName === 'tortillas'), false);
     assert.equal(prepared.alreadyInRetailerCart.some((item) => item.displayName === 'tortillas'), true);
     assert.equal(prepared.alreadyInRetailerCart.find((item) => item.displayName === 'tortillas')?.matchedCartTitle, 'tortillas');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function ignoresExpiredBrowserCartSyncActions() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const weekStart = '2026-06-04';
+    await createSingleRecipePlan(service, {
+      weekStart,
+      recipeId: 'order-preflight-stale-cart-tortillas',
+      recipeName: 'Stale Cart Taco Plan',
+      ingredient: { item: 'tortillas', quantity: 1, unit: 'count' },
+      mealType: 'dinner',
+    });
+
+    const generated = await service.generateGroceryPlan({ weekStart, provenance });
+    const tortillaLine = generated.raw.items.find((item) => item.normalizedName === 'tortillas');
+    assert.ok(tortillaLine);
+
+    await service.upsertGroceryPlanAction({
+      weekStart,
+      itemKey: tortillaLine!.itemKey,
+      actionStatus: 'in_cart',
+      metadata: {
+        kind: 'browser_cart_sync',
+        retailer: 'voila',
+        shoppingSession: {
+          expiresAt: '2026-01-01T00:00:00.000Z',
+          runId: 'old-cart-run',
+          syncedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      notes: 'Old browser sync.',
+      provenance,
+    });
+
+    const plan = await service.getGroceryPlan(weekStart);
+    const actionableLine = plan?.raw.items.find((item) => item.itemKey === tortillaLine!.itemKey);
+    assert.equal(actionableLine?.actionStatus, null);
+    assert.equal(
+      actionableLine?.note,
+      'Cart state came from an old shopping session; confirm before treating it as still in cart.',
+    );
+
+    const prepared = await service.prepareOrder({ weekStart, retailer: 'voila' });
+    assert.equal(prepared.safeToOrder, true);
+    assert.equal(prepared.alreadyInRetailerCart.some((item) => item.displayName === 'tortillas'), false);
+    assert.equal(prepared.remainingToBuy.some((item) => item.displayName === 'tortillas'), true);
   } finally {
     runtime.sqliteDb.close();
   }

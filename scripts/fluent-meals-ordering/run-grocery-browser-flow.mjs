@@ -56,6 +56,7 @@ export async function runGroceryBrowserFlow(options = {}) {
     skillRoot,
     options.reportPath || path.join(FLUENT_MEALS_OVERNIGHT_REPORT_DIR, `browser-flow-${store}-${todayDateStamp()}.json`),
   );
+  const localRunId = path.basename(reportPath, path.extname(reportPath));
   const headless = parseBoolean(options.headless, false);
   const keepOpen = parseBoolean(options.keepOpen, false);
   const useChrome = parseBoolean(options.useChrome, false);
@@ -277,6 +278,7 @@ export async function runGroceryBrowserFlow(options = {}) {
       baseUrl,
       cartItems,
       retailer: store,
+      runId: localRunId,
       weekStart,
     });
     finishStage('reconcile_current_cart_state', currentCartSync.ok === true, currentCartSync);
@@ -348,6 +350,7 @@ export async function runGroceryBrowserFlow(options = {}) {
       baseUrl,
       cartItems: updatedCartItems,
       retailer: store,
+      runId: localRunId,
       weekStart,
     });
     finishStage('reconcile_updated_cart_state', updatedCartSync.ok === true, updatedCartSync);
@@ -751,6 +754,7 @@ async function syncCartStateToHosted(options) {
       cartItems: options.cartItems,
       groceryPlan,
       retailer: options.retailer,
+      runId: options.runId,
     });
 
     let deleteCount = 0;

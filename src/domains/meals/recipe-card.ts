@@ -1,6 +1,8 @@
 import type { MealRecipeRecord } from './types';
 
-export const MEALS_RECIPE_CARD_WIDGET_VERSION = 'v7';
+export const MEALS_RECIPE_CARD_CACHED_TEMPLATE_URI = 'ui://widget/fluent-recipe-card-v8.html';
+export const MEALS_RECIPE_CARD_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-recipe-card-v9.html';
+export const MEALS_RECIPE_CARD_WIDGET_VERSION = 'v10';
 export const MEALS_RECIPE_CARD_TEMPLATE_URI = `ui://widget/fluent-recipe-card-${MEALS_RECIPE_CARD_WIDGET_VERSION}.html`;
 
 export interface RecipeCardIngredientViewModel {
@@ -123,7 +125,7 @@ export function getRecipeCardWidgetHtml(): string {
     --recipe-accent: #2f6feb;
     --recipe-border: rgba(0, 0, 0, 0.08);
     --recipe-border-strong: rgba(0, 0, 0, 0.14);
-    --recipe-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.06);
+    --recipe-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 14px rgba(0, 0, 0, 0.05);
     --recipe-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", sans-serif;
   }
 
@@ -144,7 +146,7 @@ export function getRecipeCardWidgetHtml(): string {
 
   .recipe-card {
     border: 1px solid var(--recipe-border);
-    border-radius: 16px;
+    border-radius: 10px;
     background: var(--recipe-surface);
     padding: 18px 20px;
     box-shadow: var(--recipe-shadow);
@@ -196,7 +198,7 @@ export function getRecipeCardWidgetHtml(): string {
     padding: 10px 12px;
     border-radius: 10px;
     background: var(--recipe-surface-alt);
-    margin-bottom: 18px;
+    margin-bottom: 0;
   }
 
   .recipe-stat {
@@ -236,6 +238,60 @@ export function getRecipeCardWidgetHtml(): string {
     border-radius: 10px;
     background: var(--recipe-surface);
     border: 1px solid var(--recipe-border);
+  }
+
+  .recipe-start-strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: center;
+    padding: 14px 16px;
+    border: 1px solid var(--recipe-border-strong);
+    border-radius: 10px;
+    background: #fbfbfc;
+  }
+
+  .recipe-start-label {
+    margin: 0 0 4px;
+    font-size: 11px;
+    line-height: 1.3;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--recipe-muted);
+    font-weight: 600;
+  }
+
+  .recipe-start-title {
+    margin: 0 0 4px;
+    font-size: 14px;
+    line-height: 1.35;
+    font-weight: 600;
+    color: var(--recipe-ink);
+  }
+
+  .recipe-start-detail {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--recipe-ink-soft);
+  }
+
+  .recipe-start-button {
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(47, 111, 235, 0.2);
+    background: var(--recipe-accent);
+    color: #fff;
+    font-size: 14px;
+    line-height: 1.2;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
   }
 
   .recipe-cook-mode-label {
@@ -282,8 +338,8 @@ export function getRecipeCardWidgetHtml(): string {
   }
 
   .recipe-cook-mode-nav button {
-    width: 28px;
-    height: 28px;
+    width: 36px;
+    height: 36px;
     border-radius: 999px;
     background: var(--recipe-surface);
     color: var(--recipe-ink-soft);
@@ -338,7 +394,8 @@ export function getRecipeCardWidgetHtml(): string {
     border: 0;
     background: transparent;
     color: var(--recipe-muted);
-    padding: 6px 12px;
+    min-height: 36px;
+    padding: 8px 12px;
     border-radius: 8px;
     font-size: 12px;
     line-height: 1.2;
@@ -376,8 +433,8 @@ export function getRecipeCardWidgetHtml(): string {
   }
 
   .recipe-servings button {
-    width: 24px;
-    height: 24px;
+    width: 36px;
+    height: 36px;
     display: grid;
     place-items: center;
     font-size: 16px;
@@ -496,7 +553,7 @@ export function getRecipeCardWidgetHtml(): string {
   }
 
   .recipe-fallback {
-    border-radius: 16px;
+    border-radius: 10px;
     padding: 20px;
     border: 1px solid var(--recipe-border);
     background: var(--recipe-surface);
@@ -513,6 +570,7 @@ export function getRecipeCardWidgetHtml(): string {
   }
 
   .recipe-foot-button {
+    min-height: 40px;
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -546,6 +604,14 @@ export function getRecipeCardWidgetHtml(): string {
     .recipe-column-head,
     .recipe-servings-row {
       flex-wrap: wrap;
+    }
+
+    .recipe-start-strip {
+      grid-template-columns: 1fr;
+    }
+
+    .recipe-start-button {
+      width: 100%;
     }
   }
 </style>
@@ -718,7 +784,7 @@ export function getRecipeCardWidgetHtml(): string {
         stats.push({ label: 'Serves', value: escapeHtml(currentServings), unit: null });
       }
       if (price) {
-        stats.push({ label: 'Cost', value: escapeHtml(price), unit: '/ea' });
+        stats.push({ label: 'Cost', value: escapeHtml(price), unit: 'per serving' });
       }
 
       return [
@@ -727,7 +793,7 @@ export function getRecipeCardWidgetHtml(): string {
           return [
             '<div class="recipe-stat">',
             '<span class="recipe-stat-label">' + stat.label + '</span>',
-            '<span class="recipe-stat-value">' + stat.value + (stat.unit ? '<em>' + stat.unit + '</em>' : '') + '</span>',
+            '<span class="recipe-stat-value">' + stat.value + (stat.unit ? ' <em>' + stat.unit + '</em>' : '') + '</span>',
             '</div>',
           ].join('');
         }).join(''),
@@ -761,7 +827,7 @@ export function getRecipeCardWidgetHtml(): string {
 
         return [
           '<div class="recipe-ingredient">',
-          '<span class="recipe-ingredient-qty">' + escapeHtml(quantityParts.join(' ') || '—') + '</span>',
+          '<span class="recipe-ingredient-qty">' + escapeHtml(quantityParts.join(' ') || 'as needed') + '</span>',
           '<span class="recipe-ingredient-name">' + escapeHtml(ingredient.item) + (note ? '<span class="recipe-ingredient-note">' + escapeHtml(note) + '</span>' : '') + '</span>',
           '</div>',
         ].join('');
@@ -892,11 +958,29 @@ export function getRecipeCardWidgetHtml(): string {
       ].join('');
     }
 
+    function buildStartStrip(viewModel) {
+      if (!Array.isArray(viewModel.steps) || viewModel.steps.length === 0) {
+        return '';
+      }
+
+      var firstStep = viewModel.steps[0];
+      return [
+        '<section class="recipe-start-strip" aria-label="Start cooking">',
+        '<div>',
+        '<p class="recipe-start-label">Start here</p>',
+        '<h2 class="recipe-start-title">' + escapeHtml(firstStep.title || 'Step ' + firstStep.index) + '</h2>',
+        '<p class="recipe-start-detail">' + escapeHtml(firstStep.detail) + '</p>',
+        '</div>',
+        '<button type="button" class="recipe-start-button" data-action="toggle-cook-mode">' + buildIconPlay() + '<span>Start cook mode</span></button>',
+        '</section>',
+      ].join('');
+    }
+
     function renderFallback(summary) {
       var title = summary && summary.title ? summary.title : 'Recipe card';
       var description = summary && summary.recipeId
-        ? 'The recipe summary loaded, but the richer widget payload is still syncing.'
-        : 'Recipe card data is still loading.';
+        ? 'I found the recipe, but I need to reopen the full card before this is cookable.'
+        : 'I could not open the full recipe card yet.';
 
       root.innerHTML = [
         '<article class="recipe-fallback">',
@@ -909,10 +993,10 @@ export function getRecipeCardWidgetHtml(): string {
     }
 
     function bindClick(selector, handler) {
-      var element = root.querySelector(selector);
-      if (element) {
+      var elements = root.querySelectorAll(selector);
+      elements.forEach(function (element) {
         element.addEventListener('click', handler);
-      }
+      });
     }
 
     function bindActions(viewModel, state) {
@@ -1001,6 +1085,7 @@ export function getRecipeCardWidgetHtml(): string {
       var currentServings = Number.isFinite(state.servings) ? state.servings : viewModel.servings;
       var stats = buildStats(viewModel, currentServings);
       var notesPanel = hasNotes(viewModel) ? renderNotesPanel(viewModel) : '';
+      var startStrip = !state.cookMode ? buildStartStrip(viewModel) : '';
       var unitToggle = [
         '<div class="recipe-unit-toggle" role="tablist" aria-label="Ingredient units">',
         '<button type="button" data-action="unit-imperial" aria-pressed="' + escapeHtml(state.unitSystem === 'imperial') + '">Imperial</button>',
@@ -1030,6 +1115,7 @@ export function getRecipeCardWidgetHtml(): string {
         '<p class="recipe-blurb">' + escapeHtml(deck) + '</p>',
         stats,
         '</section>',
+        startStrip,
         state.cookMode ? buildCookMode(viewModel, state) : '',
         '<section class="recipe-body">',
         '<div>',

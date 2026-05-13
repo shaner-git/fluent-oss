@@ -113,7 +113,8 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     rules: [
       'Treat the grocery plan as planning state, not the final retailer order.',
       'For ordinary ChatGPT grocery-list asks, meals_render_grocery_list_v2 is the preferred rich surface when available.',
-      'For generic clients, use meals_get_grocery_plan and answer in text.',
+      'For Claude, Codex, OpenClaw, and generic clients, use meals_get_current_grocery_list and answer in text or host-native visuals.',
+      'Use meals_get_grocery_plan only when the user asks for a specific week-scoped grocery plan or raw planning/audit data.',
       'Use meals_prepare_order before retailer execution or order handoff.',
       'Use pantry sufficiency confirmations for low-risk pantry blockers; avoid them for fresh proteins, dairy, eggs, bread, or produce that needs quantity-aware review.',
     ],
@@ -126,6 +127,7 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     ],
     preferredTools: [
       'meals_render_grocery_list_v2',
+      'meals_get_current_grocery_list',
       'meals_get_grocery_plan',
       'meals_prepare_order',
       'meals_get_inventory_summary',

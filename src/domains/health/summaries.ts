@@ -132,6 +132,26 @@ export function summarizeHealthBlockProjection(projection: HealthBlockProjection
   };
 }
 
+export function formatHealthBlockText(block: HealthBlockSummaryRecord | null): string {
+  if (!block) {
+    return [
+      'Health training block',
+      'No training plan is active yet.',
+      "Set a simple weekly plan first, then I can show today's session.",
+      healthBoundaryText(),
+    ].join('\n');
+  }
+
+  return [
+    'Health training block',
+    `${block.name} is ${block.status}.`,
+    `Plan: ${formatCount(block.daysPerWeek, 'day')}/week, ${formatCount(block.sessionCount, 'session')} across ${formatDateRange(block.startDate, block.endDate)}.`,
+    block.sessionLengthMinutes ? `Session target: about ${block.sessionLengthMinutes} minutes.` : null,
+    block.equipmentAccess ? `Equipment: ${block.equipmentAccess}.` : null,
+    healthBoundaryText(),
+  ].filter((line): line is string => Boolean(line)).join('\n');
+}
+
 export function summarizeHealthContext(context: HealthContextRecord) {
   return {
     activeGoalCount: context.activeGoals.length,
@@ -144,6 +164,26 @@ export function summarizeHealthContext(context: HealthContextRecord) {
     recentWorkoutCount: context.recentWorkoutCount,
     trainingSupportSummary: context.trainingSupportSummary,
   };
+}
+
+export function formatHealthContextText(context: HealthContextRecord): string {
+  const activeBlock = context.activeBlock
+    ? `${context.activeBlock.name}, ${formatCount(context.activeBlock.daysPerWeek, 'day')}/week`
+    : 'no active training block';
+  const recentTraining = context.recentWorkoutCount
+    ? `recent workout history is available${context.lastWorkoutDate ? `; last session was ${context.lastWorkoutDate}` : ''}`
+    : 'workout history will get more useful after the next session';
+
+  return [
+    'Health context',
+    `Current setup: ${context.preferencesReady ? 'preferences are saved' : 'preferences are not saved yet'}; ${activeBlock}.`,
+    `Recent training: ${recentTraining}.`,
+    `Goal context: ${formatGoalContext(context.activeGoals.length)}.`,
+    context.trainingSupportSummary
+      ? `Weekly shape: ${formatCount(context.trainingSupportSummary.daysPerWeek, 'day')}/week; ${context.trainingSupportSummary.weekComplexity} complexity.`
+      : null,
+    healthBoundaryText(),
+  ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
 export function summarizeHealthTodayContext(context: HealthTodayContextRecord) {
@@ -174,6 +214,61 @@ export function summarizeHealthTodayContext(context: HealthTodayContextRecord) {
       : null,
     trainingSupportSummary: context.trainingSupportSummary,
   };
+}
+
+export function formatHealthTodayContextText(context: HealthTodayContextRecord): string {
+  const session = context.resolvedSession ?? context.projectedSession;
+  const title = session?.title ?? null;
+  const status = session?.status ?? null;
+  const details = session?.details ?? null;
+  const plan = context.activeBlock
+    ? `${context.activeBlock.name}, ${formatCount(context.activeBlock.daysPerWeek, 'day')}/week`
+    : 'no active training block';
+  const logged = context.loggedWorkouts.length
+    ? 'today already has workout notes'
+    : 'nothing recorded yet';
+
+  return [
+    "Today's training",
+    title
+      ? `${title}${status ? ` (${status})` : ''} for ${context.date}.`
+      : `No training is planned for ${context.date}.`,
+    `Plan: ${plan}.`,
+    details?.sessionGoal ? `Goal: ${details.sessionGoal}.` : null,
+    formatWarmupLine(details?.warmup ?? []),
+    formatBlocksLine('Main work', details?.mainBlocks ?? []),
+    formatBlocksLine('Secondary work', details?.secondaryBlocks ?? []),
+    formatConditioningLine(details?.conditioningBlock ?? null),
+    formatListLine('Substitutions', details?.substitutionHints ?? [], 2),
+    formatListLine('Coach notes', details?.coachNotes ?? [], 2),
+    `Today's notes: ${logged}.`,
+    !title ? "Set or activate a weekly training plan, then I can turn this into today's session." : null,
+    context.nextTrainingDate && !title ? `Next training date: ${context.nextTrainingDate}.` : null,
+    `Goal context: ${formatGoalContext(context.activeGoals.length)}.`,
+    healthBoundaryText(),
+  ].filter((line): line is string => Boolean(line)).join('\n');
+}
+
+export function formatHealthBlockProjectionText(projection: HealthBlockProjectionRecord | null): string {
+  if (!projection) {
+    return [
+      'Health training week',
+      'No training week is active yet.',
+      'Create or activate a training plan before projecting the week.',
+      healthBoundaryText(),
+    ].join('\n');
+  }
+
+  const session = projection.resolvedSession ?? projection.projectedTodaySession;
+  return [
+    'Health training week',
+    `Week: ${formatDateRange(projection.weekStart, projection.weekEnd)}.`,
+    projection.block ? `Block: ${projection.block.name}, ${formatCount(projection.block.daysPerWeek, 'day')}/week.` : 'Block: none active.',
+    `Sessions: ${formatCount(projection.sessions.length, 'planned session')}.`,
+    session ? `Today: ${session.title} (${session.status}).` : 'Today: no training planned.',
+    projection.nextTrainingDate ? `Next training date: ${projection.nextTrainingDate}.` : null,
+    healthBoundaryText(),
+  ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
 export function summarizeHealthReviewContext(context: HealthReviewContextRecord) {
@@ -214,4 +309,51 @@ export function summarizeWorkoutLog(log: HealthWorkoutLogRecord) {
     id: log.id,
     titleSnapshot: log.titleSnapshot,
   };
+}
+
+function formatCount(count: number, singular: string): string {
+  return `${count} ${count === 1 ? singular : `${singular}s`}`;
+}
+
+function formatGoalContext(count: number): string {
+  if (count > 1) return 'goals are set for the current training direction';
+  if (count === 1) return 'a goal is set for the current training direction';
+  return 'set a goal when you want sharper training guidance';
+}
+
+function formatDateRange(start: string, end: string): string {
+  return start === end ? start : `${start} to ${end}`;
+}
+
+function healthBoundaryText(): string {
+  return 'I can help with training, not medical diagnosis, treatment, or nutrition prescriptions.';
+}
+
+function formatWarmupLine(warmup: string[]): string | null {
+  return warmup.length ? `Warmup: ${warmup.slice(0, 3).join('; ')}.` : null;
+}
+
+function formatBlocksLine(label: string, blocks: Array<{ label: string; sets: string; reps: string; exercises: string[] }>): string | null {
+  if (!blocks.length) {
+    return null;
+  }
+  const rendered = blocks.slice(0, 3).map((block) => {
+    const prescription = [block.sets, block.reps].filter(Boolean).join(' x ');
+    const exercises = block.exercises.slice(0, 4).join(', ');
+    const parts = [block.label, prescription, exercises].filter(Boolean);
+    return parts.length === 1 ? parts[0] : parts.join(': ');
+  });
+  return `${label}: ${rendered.join(' | ')}.`;
+}
+
+function formatConditioningLine(block: { mode: string; durationMinutes: number | null; target: string | null } | null): string | null {
+  if (!block) {
+    return null;
+  }
+  const duration = block.durationMinutes ? `${block.durationMinutes} min` : null;
+  return `Conditioning: ${[block.mode, duration, block.target].filter(Boolean).join(', ')}.`;
+}
+
+function formatListLine(label: string, values: string[], limit: number): string | null {
+  return values.length ? `${label}: ${values.slice(0, limit).join('; ')}.` : null;
 }

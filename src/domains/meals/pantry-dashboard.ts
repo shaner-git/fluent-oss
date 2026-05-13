@@ -1,4 +1,6 @@
-export const MEALS_PANTRY_DASHBOARD_TEMPLATE_URI = 'ui://widget/fluent-pantry-dashboard-v1.html';
+export const MEALS_PANTRY_DASHBOARD_WIDGET_VERSION = 'v14';
+export const MEALS_PANTRY_DASHBOARD_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-pantry-dashboard-v13.html';
+export const MEALS_PANTRY_DASHBOARD_TEMPLATE_URI = `ui://widget/fluent-pantry-dashboard-${MEALS_PANTRY_DASHBOARD_WIDGET_VERSION}.html`;
 
 /**
  * Pantry Dashboard — v1 ("grounded in what actually happened")
@@ -63,7 +65,9 @@ export interface PantryStapleViewModel {
   id: string;
   name: string;
   qty: string | null;
+  quantity: number | null;
   state: StapleState;
+  unit: string | null;
 }
 
 export interface PantryDashboardActionViewModel {
@@ -71,7 +75,9 @@ export interface PantryDashboardActionViewModel {
     | 'mark_used_up'
     | 'undo_used_up'
     | 'update_staple'
+    | 'set_staple'
     | 'add_staple'
+    | 'remove_staple'
     | 'suggest_recipes'
     | 'plan_meals';
   label: string;
@@ -131,10 +137,31 @@ export function buildPantryDashboardStructuredContent(
   );
   return {
     boughtRecentlyCount: widget.boughtRecently.length,
-    dashboardId: widget.id,
     experience: 'pantry_dashboard',
     likelyOpenCount: widget.likelyOpen.length,
-    pantryDashboard: widget,
+    pantryDashboardSummary: {
+      boughtRecently: widget.boughtRecently.map((item) => ({
+        daysAgo: item.daysAgo,
+        name: item.name,
+        note: item.note,
+      })),
+      likelyOpen: widget.likelyOpen.map((item) => ({
+        lastAppearedIn: item.lastAppearedIn,
+        lastSeenRelative: item.lastSeenRelative,
+        name: item.name,
+      })),
+      recentShops: widget.recentShops.map((shop) => ({
+        date: shop.date,
+        daysAgo: shop.daysAgo,
+        itemCount: shop.items.length,
+        store: shop.store,
+      })),
+      staples: widget.staples.map((staple) => ({
+        name: staple.name,
+        qty: staple.qty,
+        state: staple.state,
+      })),
+    },
     recentShopCount: widget.recentShops.length,
     shopItemCount: totalShopItems,
     stapleCount: widget.staples.length,
@@ -152,7 +179,7 @@ export function buildPantryDashboardMetadata(
     experience: 'pantry_dashboard',
     pantryDashboard: widget,
     title: widget.headline,
-    version: 'v1',
+    version: MEALS_PANTRY_DASHBOARD_WIDGET_VERSION,
   };
 }
 
@@ -470,6 +497,13 @@ export function getPantryDashboardWidgetHtml(): string {
     gap: 6px;
   }
 
+  .pd-staple-wrap {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    background: var(--pd-surface);
+  }
+
   .pd-staple {
     display: inline-flex;
     align-items: baseline;
@@ -483,6 +517,27 @@ export function getPantryDashboardWidgetHtml(): string {
     font-family: var(--pd-sans);
     font-weight: 500;
   }
+
+  .pd-staple-wrap .pd-staple {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: 0;
+  }
+
+  .pd-staple-remove {
+    width: 28px;
+    min-height: 28px;
+    border: 1px solid var(--pd-border);
+    border-top-right-radius: 999px;
+    border-bottom-right-radius: 999px;
+    background: var(--pd-surface);
+    color: var(--pd-muted);
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+  }
+
+  .pd-staple-remove:disabled { opacity: 0.45; cursor: progress; }
 
   .pd-staple[data-state="low"] {
     background: var(--pd-warn-bg);
@@ -504,6 +559,47 @@ export function getPantryDashboardWidgetHtml(): string {
 
   .pd-staple[data-state="low"] .pd-staple-qty { color: var(--pd-warn-ink); }
 
+  .pd-staple-edit {
+    display: inline-grid;
+    grid-template-columns: minmax(84px, 1fr) 72px 78px 86px auto auto;
+    align-items: center;
+    gap: 6px;
+    padding: 5px;
+    border: 1px solid var(--pd-border);
+    border-radius: 10px;
+    background: var(--pd-surface);
+    max-width: 100%;
+  }
+
+  .pd-staple-edit-name {
+    min-width: 0;
+    padding: 0 4px;
+    color: var(--pd-ink);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pd-staple-edit input,
+  .pd-staple-edit select {
+    min-width: 0;
+    border: 1px solid var(--pd-border);
+    border-radius: 8px;
+    background: var(--pd-surface-alt);
+    color: var(--pd-ink);
+    font-family: var(--pd-sans);
+    font-size: 12px;
+    padding: 6px 7px;
+  }
+
+  .pd-staple-edit input:focus,
+  .pd-staple-edit select:focus {
+    outline: 2px solid rgba(103, 79, 55, 0.18);
+    border-color: var(--pd-border-strong);
+  }
+
   .pd-staple-add {
     display: inline-flex;
     align-items: center;
@@ -516,6 +612,49 @@ export function getPantryDashboardWidgetHtml(): string {
     font-size: 12px;
     font-family: var(--pd-sans);
     font-weight: 500;
+  }
+
+  .pd-staple-form {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px;
+    border: 1px solid var(--pd-border);
+    border-radius: 999px;
+    background: var(--pd-surface);
+  }
+
+  .pd-staple-input {
+    width: 150px;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--pd-ink);
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 6px;
+  }
+
+  .pd-staple-mini {
+    border: 0;
+    border-radius: 999px;
+    padding: 5px 8px;
+    background: var(--pd-accent);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .pd-staple-mini--ghost {
+    background: var(--pd-surface-alt);
+    color: var(--pd-muted);
+  }
+
+  .pd-staple-hint {
+    flex-basis: 100%;
+    font-size: 12px;
+    color: #9b4a32;
   }
 
   /* Honesty footer */
@@ -651,6 +790,8 @@ export function getPantryDashboardWidgetHtml(): string {
     .pd-cols { grid-template-columns: 1fr; gap: 16px; }
     .pd-shop-head { grid-template-columns: auto 1fr auto; gap: 10px; }
     .pd-shop-chev { display: none; }
+    .pd-staple-edit { grid-template-columns: minmax(120px, 1fr) 70px 76px; }
+    .pd-staple-edit .pd-staple-mini { min-height: 30px; }
   }
 </style>
 <script>
@@ -658,7 +799,12 @@ export function getPantryDashboardWidgetHtml(): string {
     var root = document.getElementById('pantry-dashboard-root');
     var hydrationTimer = null;
     var hydrationAttempts = 0;
+    var lastHydratedSnapshotId = null;
+    var lastHydratedSnapshotFingerprint = null;
     var MAX_HYDRATION_ATTEMPTS = 20;
+    var bridgeRpcId = 0;
+    var bridgeReady = null;
+    var bridgePending = Object.create(null);
     var DEFAULT_STATE = {
       actionResult: null,
       errorMessage: null,
@@ -666,6 +812,11 @@ export function getPantryDashboardWidgetHtml(): string {
       snapshot: null,
       expandedShopIndex: 0,
       doneItems: {},
+      addingStaple: false,
+      stapleDraftError: null,
+      editingStapleId: null,
+      stapleEditError: null,
+      stapleEditDrafts: {},
     };
 
     var ICONS = {
@@ -683,6 +834,87 @@ export function getPantryDashboardWidgetHtml(): string {
     function getOpenAI() { return window.openai || {}; }
     function getSummary() { return getOpenAI().toolOutput || null; }
 
+    function getBridgeTargets() {
+      var targets = [];
+      if (window.parent && window.parent !== window) targets.push(window.parent);
+      try {
+        if (window.top && window.top !== window && targets.indexOf(window.top) === -1) {
+          targets.push(window.top);
+        }
+      } catch (error) {}
+      return targets;
+    }
+
+    function isBridgeSource(source) {
+      return getBridgeTargets().indexOf(source) !== -1;
+    }
+
+    window.addEventListener('message', function (event) {
+      if (!isBridgeSource(event.source)) return;
+      var message = event.data;
+      if (!message || message.jsonrpc !== '2.0') return;
+      if (message.method === 'ui/initialize' && message.id != null) {
+        event.source.postMessage({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { appCapabilities: {}, protocolVersion: '2026-01-26' },
+        }, '*');
+        bridgeNotify('ui/notifications/initialized', {});
+        return;
+      }
+      if (typeof message.id !== 'number') return;
+      var pending = bridgePending[message.id];
+      if (!pending) return;
+      delete bridgePending[message.id];
+      window.clearTimeout(pending.timer);
+      if (message.error) {
+        pending.reject(message.error);
+        return;
+      }
+      pending.resolve(message.result);
+    }, { passive: true });
+
+    function bridgeRequest(method, params, timeoutMs) {
+      return new Promise(function (resolve, reject) {
+        var targets = getBridgeTargets();
+        if (!targets.length) {
+          reject(new Error('MCP Apps bridge is not available.'));
+          return;
+        }
+        var id = ++bridgeRpcId;
+        bridgePending[id] = {
+          resolve: resolve,
+          reject: reject,
+          timer: window.setTimeout(function () {
+            delete bridgePending[id];
+            reject(new Error('MCP Apps bridge request timed out.'));
+          }, timeoutMs || 12000),
+        };
+        var message = { jsonrpc: '2.0', id: id, method: method, params: params };
+        targets.forEach(function (target) { target.postMessage(message, '*'); });
+      });
+    }
+
+    function bridgeNotify(method, params) {
+      getBridgeTargets().forEach(function (target) {
+        target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
+      });
+    }
+
+    function callToolViaBridge(name, args) {
+      return bridgeRequest('tools/call', { name: name, arguments: args || {} }, 20000);
+    }
+
+    function callTool(name, args) {
+      var openai = getOpenAI();
+      var compatibilityCall = typeof openai.callTool === 'function' ? openai.callTool.bind(openai) : null;
+      if (compatibilityCall) return compatibilityCall(name, args);
+      if (getBridgeTargets().length) {
+        return callToolViaBridge(name, args);
+      }
+      return Promise.reject(new Error('Widget tool calls are not available in this host yet.'));
+    }
+
     function getState() {
       var s = getOpenAI().widgetState || {};
       return {
@@ -691,13 +923,19 @@ export function getPantryDashboardWidgetHtml(): string {
         pendingActionId: typeof s.pendingActionId === 'string' ? s.pendingActionId : null,
         snapshot: s.snapshot && typeof s.snapshot === 'object' ? s.snapshot : null,
         expandedShopIndex: typeof s.expandedShopIndex === 'number' ? s.expandedShopIndex : 0,
-        doneItems: s.doneItems && typeof s.doneItems === 'object' ? s.doneItems : {}
+        doneItems: s.doneItems && typeof s.doneItems === 'object' ? s.doneItems : {},
+        addingStaple: s.addingStaple === true,
+        stapleDraftError: typeof s.stapleDraftError === 'string' ? s.stapleDraftError : null,
+        editingStapleId: typeof s.editingStapleId === 'string' ? s.editingStapleId : null,
+        stapleEditError: typeof s.stapleEditError === 'string' ? s.stapleEditError : null,
+        stapleEditDrafts: s.stapleEditDrafts && typeof s.stapleEditDrafts === 'object' ? s.stapleEditDrafts : {}
       };
     }
 
     function setState(next) {
-      getOpenAI().setWidgetState && getOpenAI().setWidgetState(next);
-      render(next);
+      var merged = Object.assign({}, getState(), next || {});
+      getOpenAI().setWidgetState && getOpenAI().setWidgetState(merged);
+      render(merged);
     }
 
     function escapeHtml(value) {
@@ -723,7 +961,12 @@ export function getPantryDashboardWidgetHtml(): string {
       if (!value.recentShops && !value.likelyOpen && !value.staples && !value.boughtRecently) return null;
       return {
         actions: toArray(value.actions).map(function (a) {
-          return { id: a.id, label: typeof a.label === 'string' ? a.label : '' };
+          return {
+            args: a && typeof a.args === 'object' && a.args ? a.args : {},
+            id: a.id,
+            label: typeof a.label === 'string' ? a.label : '',
+            toolName: typeof a.toolName === 'string' ? a.toolName : ''
+          };
         }),
         boughtRecently: toArray(value.boughtRecently).map(function (b) {
           return {
@@ -753,6 +996,7 @@ export function getPantryDashboardWidgetHtml(): string {
             daysAgo: typeof shop.daysAgo === 'number' ? shop.daysAgo : null,
             items: toArray(shop.items).map(function (it) {
               return {
+                id: typeof it.id === 'string' ? it.id : '',
                 name: typeof it.name === 'string' ? it.name : '',
                 qty: typeof it.qty === 'string' ? it.qty : null,
                 forMeal: typeof it.forMeal === 'string' ? it.forMeal : null,
@@ -767,7 +1011,9 @@ export function getPantryDashboardWidgetHtml(): string {
             id: typeof s.id === 'string' ? s.id : '',
             name: typeof s.name === 'string' ? s.name : '',
             qty: typeof s.qty === 'string' ? s.qty : null,
-            state: state
+            quantity: typeof s.quantity === 'number' && isFinite(s.quantity) ? s.quantity : null,
+            state: state,
+            unit: typeof s.unit === 'string' ? s.unit : null
           };
         }),
         subheadline: typeof value.subheadline === 'string' ? value.subheadline : '',
@@ -806,13 +1052,34 @@ export function getPantryDashboardWidgetHtml(): string {
       var next = extract(candidate);
       if (!next) return false;
       var s = getState();
+      var fingerprint = '';
+      try {
+        fingerprint = JSON.stringify(next);
+      } catch (err) {
+        fingerprint = next.id || '';
+      }
+      if (
+        fingerprint &&
+        lastHydratedSnapshotFingerprint === fingerprint &&
+        (lastHydratedSnapshotId === next.id || (s.snapshot && s.snapshot.id === next.id))
+      ) {
+        render(s.snapshot ? s : Object.assign({}, s, { snapshot: next }));
+        return true;
+      }
+      lastHydratedSnapshotId = next.id;
+      lastHydratedSnapshotFingerprint = fingerprint;
       setState({
         actionResult: s.actionResult,
         errorMessage: s.errorMessage,
         pendingActionId: s.pendingActionId,
         snapshot: next,
         expandedShopIndex: s.expandedShopIndex,
-        doneItems: s.doneItems
+        doneItems: s.doneItems,
+        addingStaple: s.addingStaple,
+        stapleDraftError: s.stapleDraftError,
+        editingStapleId: s.editingStapleId,
+        stapleEditError: s.stapleEditError,
+        stapleEditDrafts: s.stapleEditDrafts
       });
       return true;
     }
@@ -844,6 +1111,84 @@ export function getPantryDashboardWidgetHtml(): string {
       return null;
     }
 
+    function cloneSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== 'object') return null;
+      try {
+        return JSON.parse(JSON.stringify(snapshot));
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function formatQuantity(quantity, unit) {
+      var pieces = [];
+      if (typeof quantity === 'number' && isFinite(quantity)) pieces.push(String(quantity));
+      if (typeof unit === 'string' && unit.trim()) pieces.push(unit.trim());
+      return pieces.length ? pieces.join(' ') : null;
+    }
+
+    function refreshLocalTotals(snapshot) {
+      if (!snapshot || typeof snapshot !== 'object') return snapshot;
+      var recentShops = Array.isArray(snapshot.recentShops) ? snapshot.recentShops : [];
+      var staples = Array.isArray(snapshot.staples) ? snapshot.staples : [];
+      var shopItemCount = recentShops.reduce(function (count, shop) {
+        return count + (shop && Array.isArray(shop.items) ? shop.items.length : 0);
+      }, 0);
+      snapshot.totalsLabel = shopItemCount + ' recent item' + (shopItemCount === 1 ? '' : 's')
+        + ' · ' + staples.length + ' staple' + (staples.length === 1 ? '' : 's');
+      return snapshot;
+    }
+
+    function makeStapleDraft(staple) {
+      return {
+        quantity: staple && staple.quantity != null ? String(staple.quantity) : '',
+        unit: staple && typeof staple.unit === 'string' ? staple.unit : '',
+        state: staple && (staple.state === 'low' || staple.state === 'out') ? staple.state : 'ok'
+      };
+    }
+
+    function clearStapleEditDraft(drafts, stapleId) {
+      var next = Object.assign({}, drafts || {});
+      if (stapleId) delete next[stapleId];
+      return next;
+    }
+
+    function applyLocalMutation(snapshot, actionId, args) {
+      var next = cloneSnapshot(snapshot);
+      if (!next || !Array.isArray(next.staples)) return null;
+
+      if (actionId === 'set_staple') {
+        var stapleId = args && typeof args.staple_id === 'string' ? args.staple_id : '';
+        var quantity = args && typeof args.staple_quantity === 'number' && isFinite(args.staple_quantity)
+          ? args.staple_quantity
+          : null;
+        var unit = args && typeof args.staple_unit === 'string' ? args.staple_unit.trim() : '';
+        var stapleState = args && (args.staple_state === 'low' || args.staple_state === 'out')
+          ? args.staple_state
+          : 'ok';
+        next.staples = next.staples.map(function (staple) {
+          if (!staple || staple.id !== stapleId) return staple;
+          return Object.assign({}, staple, {
+            qty: stapleState === 'out' ? 'out' : formatQuantity(quantity, unit),
+            quantity: quantity,
+            state: stapleState,
+            unit: unit || null
+          });
+        });
+        return refreshLocalTotals(next);
+      }
+
+      if (actionId === 'remove_staple') {
+        var removeId = args && typeof args.staple_id === 'string' ? args.staple_id : '';
+        next.staples = next.staples.filter(function (staple) {
+          return !staple || staple.id !== removeId;
+        });
+        return refreshLocalTotals(next);
+      }
+
+      return null;
+    }
+
     async function callServerAction(actionId, extraArgs) {
       var state = getState();
       var viewModel = getViewModel(state);
@@ -856,7 +1201,10 @@ export function getPantryDashboardWidgetHtml(): string {
         || extract(getSummary())
         || extract(getOpenAI().toolOutput)
         || viewModel;
-      var action = findAction(fullVm, actionId) || findAction({ actions: metadataActions }, actionId);
+      var action = findAction(fullVm, actionId);
+      if (!action || !action.toolName) {
+        action = findAction({ actions: metadataActions }, actionId);
+      }
       if (!action || !action.toolName) return;
 
       setState({
@@ -869,25 +1217,37 @@ export function getPantryDashboardWidgetHtml(): string {
       });
 
       try {
-        if (!getOpenAI().callTool) throw new Error('Widget tool calls are not available in this host yet.');
-        var args = Object.assign({}, action.args || {}, extraArgs || {}, { dashboard_id: viewModel.id });
-        var response = await getOpenAI().callTool(action.toolName, args);
+        var args = Object.assign({}, action.args || {}, extraArgs || {});
+        var response = await callTool(action.toolName, args);
         if (
           actionId === 'mark_used_up' ||
           actionId === 'undo_used_up' ||
           actionId === 'update_staple' ||
-          actionId === 'add_staple'
+          actionId === 'set_staple' ||
+          actionId === 'add_staple' ||
+          actionId === 'remove_staple'
         ) {
-          var refreshed = await getOpenAI().callTool('meals_render_pantry_dashboard', {});
-          hydrateFromCandidate(refreshed);
+          try {
+            var refreshed = await callTool('meals_render_pantry_dashboard', {});
+            hydrateFromCandidate(refreshed);
+          } catch (refreshErr) {}
         }
+        var current = getState();
+        var localSnapshot = applyLocalMutation(current.snapshot || viewModel, actionId, args);
         setState({
           actionResult: extractActionResult(response),
           errorMessage: null,
           pendingActionId: null,
-          snapshot: getState().snapshot,
-          expandedShopIndex: getState().expandedShopIndex,
-          doneItems: getState().doneItems
+          snapshot: localSnapshot || current.snapshot,
+          expandedShopIndex: current.expandedShopIndex,
+          doneItems: current.doneItems,
+          addingStaple: actionId === 'add_staple' ? false : current.addingStaple,
+          stapleDraftError: null,
+          editingStapleId: actionId === 'set_staple' || actionId === 'remove_staple' ? null : current.editingStapleId,
+          stapleEditError: null,
+          stapleEditDrafts: actionId === 'set_staple' || actionId === 'remove_staple'
+            ? clearStapleEditDraft(current.stapleEditDrafts, args && typeof args.staple_id === 'string' ? args.staple_id : '')
+            : current.stapleEditDrafts
         });
       } catch (err) {
         var cur = getState();
@@ -897,7 +1257,12 @@ export function getPantryDashboardWidgetHtml(): string {
           pendingActionId: null,
           snapshot: cur.snapshot,
           expandedShopIndex: cur.expandedShopIndex,
-          doneItems: cur.doneItems
+          doneItems: cur.doneItems,
+          addingStaple: cur.addingStaple,
+          stapleDraftError: null,
+          editingStapleId: cur.editingStapleId,
+          stapleEditError: actionId === 'set_staple' ? (err && err.message ? err.message : 'Could not save this staple right now.') : cur.stapleEditError,
+          stapleEditDrafts: cur.stapleEditDrafts
         });
       }
     }
@@ -1010,7 +1375,7 @@ export function getPantryDashboardWidgetHtml(): string {
       }).join('');
     }
 
-    function renderStaples(staples, allowUpdate, allowAdd) {
+    function renderStaples(staples, allowUpdate, allowAdd, state) {
       var pills = staples.map(function (s) {
         var qtyText = s.state === 'out' ? 'out' : (s.qty || '') + (s.state === 'low' ? ' · low' : '');
         if (!allowUpdate) {
@@ -1021,16 +1386,55 @@ export function getPantryDashboardWidgetHtml(): string {
             '</span>'
           ].join('');
         }
+        if (state && state.editingStapleId === s.id) {
+          var pendingSave = state.pendingActionId === 'set_staple';
+          var draft = state.stapleEditDrafts && state.stapleEditDrafts[s.id]
+            ? state.stapleEditDrafts[s.id]
+            : makeStapleDraft(s);
+          var draftState = draft.state === 'low' || draft.state === 'out' ? draft.state : 'ok';
+          return [
+            '<span class="pd-staple-edit" data-editing-staple-id="' + escapeHtml(s.id) + '">',
+              '<span class="pd-staple-edit-name">' + escapeHtml(s.name) + '</span>',
+              '<input data-staple-qty-input type="number" min="0" step="0.25" inputmode="decimal" value="' + escapeHtml(draft.quantity == null ? '' : draft.quantity) + '" aria-label="Quantity for ' + escapeHtml(s.name) + '" />',
+              '<input data-staple-unit-input type="text" autocomplete="off" value="' + escapeHtml(draft.unit || '') + '" placeholder="unit" aria-label="Unit for ' + escapeHtml(s.name) + '" />',
+              '<select data-staple-state-input aria-label="Pantry state for ' + escapeHtml(s.name) + '">',
+                '<option value="ok"' + (draftState === 'ok' ? ' selected' : '') + '>Ok</option>',
+                '<option value="low"' + (draftState === 'low' ? ' selected' : '') + '>Low</option>',
+                '<option value="out"' + (draftState === 'out' ? ' selected' : '') + '>Out</option>',
+              '</select>',
+              '<button type="button" class="pd-staple-mini" data-action-id="set_staple_submit" data-edit-staple-id="' + escapeHtml(s.id) + '"' + (pendingSave ? ' disabled' : '') + '>Save</button>',
+              '<button type="button" class="pd-staple-mini pd-staple-mini--ghost" data-action-id="set_staple_cancel">Cancel</button>',
+              state.stapleEditError ? '<span class="pd-staple-hint">' + escapeHtml(state.stapleEditError) + '</span>' : '',
+            '</span>'
+          ].join('');
+        }
+        var pendingRemove = state && state.pendingActionId === 'remove_staple';
         return [
-          '<button type="button" class="pd-staple" data-state="' + s.state + '" data-staple-id="' + escapeHtml(s.id) + '">',
-            '<span>' + escapeHtml(s.name) + '</span>',
-            '<span class="pd-staple-qty">' + escapeHtml(qtyText) + '</span>',
-          '</button>'
+          '<span class="pd-staple-wrap">',
+            '<button type="button" class="pd-staple" data-state="' + s.state + '" data-staple-id="' + escapeHtml(s.id) + '">',
+              '<span>' + escapeHtml(s.name) + '</span>',
+              '<span class="pd-staple-qty">' + escapeHtml(qtyText) + '</span>',
+            '</button>',
+            '<button type="button" class="pd-staple-remove" data-remove-staple-id="' + escapeHtml(s.id) + '" aria-label="Remove ' + escapeHtml(s.name) + ' from tracked staples"' + (pendingRemove ? ' disabled' : '') + '>',
+              svgIcon(ICONS.x, 12, 2),
+            '</button>',
+          '</span>'
         ].join('');
       }).join('');
       if (allowAdd) {
-        pills += '<button type="button" class="pd-staple-add" data-action-id="add_staple">'
-          + svgIcon(ICONS.plus, 11, 2.2) + '<span>Add staple</span></button>';
+        if (state && state.addingStaple) {
+          pills += '<span class="pd-staple-form">'
+            + '<input class="pd-staple-input" data-add-staple-input type="text" autocomplete="off" placeholder="Staple name" aria-label="Staple name" />'
+            + '<button type="button" class="pd-staple-mini" data-action-id="add_staple_submit">Add</button>'
+            + '<button type="button" class="pd-staple-mini pd-staple-mini--ghost" data-action-id="add_staple_cancel">Cancel</button>'
+            + '</span>';
+          if (state.stapleDraftError) {
+            pills += '<span class="pd-staple-hint">' + escapeHtml(state.stapleDraftError) + '</span>';
+          }
+        } else {
+          pills += '<button type="button" class="pd-staple-add" data-action-id="add_staple_open">'
+            + svgIcon(ICONS.plus, 11, 2.2) + '<span>Add staple</span></button>';
+        }
       }
       return pills;
     }
@@ -1096,21 +1500,139 @@ export function getPantryDashboardWidgetHtml(): string {
       for (var k = 0; k < actions.length; k += 1) {
         actions[k].addEventListener('click', function (e) {
           var actionId = e.currentTarget.getAttribute('data-action-id');
-          if (actionId === 'add_staple') {
-            var stapleName = window.prompt('Add a staple to track', '');
-            if (!stapleName || !stapleName.trim()) return;
-            callServerAction(actionId, { staple_name: stapleName.trim() });
+          if (actionId === 'add_staple_open') {
+            setState({ addingStaple: true, stapleDraftError: null, editingStapleId: null, stapleEditError: null });
+            return;
+          }
+          if (actionId === 'add_staple_cancel') {
+            setState({ addingStaple: false, stapleDraftError: null });
+            return;
+          }
+          if (actionId === 'add_staple_submit') {
+            submitAddStaple();
+            return;
+          }
+          if (actionId === 'set_staple_cancel') {
+            var cancelState = getState();
+            setState({
+              editingStapleId: null,
+              stapleEditError: null,
+              stapleEditDrafts: clearStapleEditDraft(cancelState.stapleEditDrafts, cancelState.editingStapleId)
+            });
+            return;
+          }
+          if (actionId === 'set_staple_submit') {
+            submitSetStaple(e.currentTarget.getAttribute('data-edit-staple-id'));
             return;
           }
           callServerAction(actionId);
         });
       }
+      var input = root.querySelector('[data-add-staple-input]');
+      if (input) {
+        input.focus();
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            submitAddStaple();
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setState({ addingStaple: false, stapleDraftError: null });
+          }
+        });
+      }
       var staples = root.querySelectorAll('[data-staple-id]');
       for (var m = 0; m < staples.length; m += 1) {
         staples[m].addEventListener('click', function (e) {
-          callServerAction('update_staple', { staple_id: e.currentTarget.getAttribute('data-staple-id') });
+          var stapleId = e.currentTarget.getAttribute('data-staple-id');
+          var viewModel = getViewModel(getState());
+          var selected = null;
+          if (viewModel && Array.isArray(viewModel.staples)) {
+            for (var si = 0; si < viewModel.staples.length; si += 1) {
+              if (viewModel.staples[si] && viewModel.staples[si].id === stapleId) {
+                selected = viewModel.staples[si];
+                break;
+              }
+            }
+          }
+          var current = getState();
+          var nextDrafts = Object.assign({}, current.stapleEditDrafts || {});
+          nextDrafts[stapleId] = makeStapleDraft(selected);
+          setState({
+            addingStaple: false,
+            stapleDraftError: null,
+            editingStapleId: stapleId,
+            stapleEditError: null,
+            stapleEditDrafts: nextDrafts
+          });
         });
       }
+      var removeStaples = root.querySelectorAll('[data-remove-staple-id]');
+      for (var r = 0; r < removeStaples.length; r += 1) {
+        removeStaples[r].addEventListener('click', function (e) {
+          callServerAction('remove_staple', { staple_id: e.currentTarget.getAttribute('data-remove-staple-id') });
+        });
+      }
+      var editWrap = root.querySelector('[data-editing-staple-id]');
+      if (editWrap) {
+        var editStapleId = editWrap.getAttribute('data-editing-staple-id');
+        var editInputs = editWrap.querySelectorAll('[data-staple-qty-input], [data-staple-unit-input], [data-staple-state-input]');
+        for (var ei = 0; ei < editInputs.length; ei += 1) {
+          editInputs[ei].addEventListener('input', function () { updateStapleDraft(editStapleId); });
+          editInputs[ei].addEventListener('change', function () { updateStapleDraft(editStapleId); });
+        }
+      }
+    }
+
+    function updateStapleDraft(stapleId) {
+      if (!stapleId) return;
+      var qtyInput = root.querySelector('[data-staple-qty-input]');
+      var unitInput = root.querySelector('[data-staple-unit-input]');
+      var stateInput = root.querySelector('[data-staple-state-input]');
+      var current = getState();
+      var nextDrafts = Object.assign({}, current.stapleEditDrafts || {});
+      nextDrafts[stapleId] = {
+        quantity: qtyInput && typeof qtyInput.value === 'string' ? qtyInput.value : '',
+        unit: unitInput && typeof unitInput.value === 'string' ? unitInput.value : '',
+        state: stateInput && stateInput.value ? stateInput.value : 'ok'
+      };
+      getOpenAI().setWidgetState && getOpenAI().setWidgetState(Object.assign({}, current, { stapleEditDrafts: nextDrafts }));
+    }
+
+    function submitSetStaple(stapleId) {
+      var qtyInput = root.querySelector('[data-staple-qty-input]');
+      var unitInput = root.querySelector('[data-staple-unit-input]');
+      var stateInput = root.querySelector('[data-staple-state-input]');
+      var draft = getState().stapleEditDrafts && getState().stapleEditDrafts[stapleId]
+        ? getState().stapleEditDrafts[stapleId]
+        : null;
+      var rawQty = draft && typeof draft.quantity === 'string'
+        ? draft.quantity.trim()
+        : (qtyInput && qtyInput.value ? qtyInput.value.trim() : '');
+      var quantity = rawQty ? Number(rawQty) : null;
+      if (rawQty && (!isFinite(quantity) || quantity < 0)) {
+        setState({ editingStapleId: stapleId, stapleEditError: 'Use a zero or positive quantity.' });
+        return;
+      }
+      callServerAction('set_staple', {
+        staple_id: stapleId,
+        staple_quantity: quantity,
+        staple_unit: draft && typeof draft.unit === 'string'
+          ? draft.unit.trim()
+          : (unitInput && unitInput.value ? unitInput.value.trim() : ''),
+        staple_state: draft && draft.state ? draft.state : (stateInput && stateInput.value ? stateInput.value : 'ok')
+      });
+    }
+
+    function submitAddStaple() {
+      var input = root.querySelector('[data-add-staple-input]');
+      var stapleName = input && input.value ? input.value.trim() : '';
+      if (!stapleName) {
+        setState({ addingStaple: true, stapleDraftError: 'Enter a staple name first.' });
+        return;
+      }
+      callServerAction('add_staple', { staple_name: stapleName });
     }
 
     function renderFallback(summary) {
@@ -1139,6 +1661,7 @@ export function getPantryDashboardWidgetHtml(): string {
       var planAction = findAction(viewModel, 'plan_meals');
 
       var updateStapleAction = findAction(viewModel, 'update_staple');
+      var setStapleAction = findAction(viewModel, 'set_staple');
       var addStapleAction = findAction(viewModel, 'add_staple');
       var suggestBtn = suggestAction
         ? '<button type="button" class="pd-btn pd-btn--ghost" data-action-id="suggest_recipes">' + svgIcon(ICONS.info, 14, 1.6) + '<span>' + escapeHtml(suggestAction.label) + '</span></button>'
@@ -1183,10 +1706,10 @@ export function getPantryDashboardWidgetHtml(): string {
               '<span class="pd-chip">' + svgIcon(ICONS.pin, 10, 2.2) + '<span>You tell me</span></span>',
               '<span class="pd-chip-meta">Staples you track by hand</span>',
             '</div>',
-            '<div class="pd-section-sub">' + (updateStapleAction || addStapleAction
-              ? 'The handful of items too common to ground from receipts. Tap to update.'
+            '<div class="pd-section-sub">' + (updateStapleAction || setStapleAction || addStapleAction
+              ? 'The handful of items too common to ground from receipts. Tap to edit quantity, unit, or state.'
               : 'The handful of items too common to ground from receipts.') + '</div>',
-            '<div class="pd-staples">' + renderStaples(viewModel.staples, !!updateStapleAction, !!addStapleAction) + '</div>',
+            '<div class="pd-staples">' + renderStaples(viewModel.staples, !!(updateStapleAction || setStapleAction), !!addStapleAction, state) + '</div>',
           '</section>',
 
           renderActionResult(state.actionResult),
@@ -1221,7 +1744,7 @@ export function getPantryDashboardWidgetHtml(): string {
     }, { passive: true });
 
     window.addEventListener('message', function (event) {
-      if (event.source !== window.parent) return;
+      if (!isBridgeSource(event.source)) return;
       var message = event.data;
       if (!message || message.jsonrpc !== '2.0') return;
       if (message.method === 'ui/notifications/tool-result' || message.method === 'ui/notifications/tool-input') {

@@ -312,6 +312,82 @@ export interface GroceryPlanSummaryRecord {
   }>;
 }
 
+export type CurrentGroceryListObjectRole = 'living_grocery_list';
+export type CurrentGroceryListWeekRelation = 'contains_today' | 'future' | 'past' | 'unknown';
+export type CurrentGroceryListTrustState =
+  | 'ready_to_shop'
+  | 'review_before_shopping'
+  | 'confirm_what_you_have'
+  | 'list_may_be_out_of_date';
+
+export interface CurrentGroceryListSourceRecord {
+  kind: 'accepted_meal_plan' | 'draft_meal_plan' | 'manual_item' | 'grocery_plan' | 'inventory' | 'shopping_session';
+  id: string | null;
+  label: string;
+  status?: string | null;
+  weekStart?: string | null;
+}
+
+export interface CurrentGroceryListRecord {
+  objectRole: CurrentGroceryListObjectRole;
+  listId: string;
+  version: string;
+  title: string;
+  subtitle: string;
+  weekStart: string;
+  weekRelation: CurrentGroceryListWeekRelation;
+  selectionReason: string | null;
+  trustState: CurrentGroceryListTrustState;
+  trustLabel: 'Ready to shop' | 'Check before shopping' | 'List may be out of date';
+  sourceProvenance: CurrentGroceryListSourceRecord[];
+  stale: boolean;
+  staleReasons: string[];
+  generatedAt: string | null;
+  updatedAt: string | null;
+  counts: {
+    manualIntentCount: number;
+    planItemCount: number;
+    unresolvedCount: number;
+    resolvedCount: number;
+    toBuyCount: number;
+    checkAtHomeCount: number;
+    inCartCount: number;
+  };
+  groceryPlan: GroceryPlanRecord | null;
+  intents: GroceryIntentRecord[];
+  preparedOrder: PreparedOrderRecord | null;
+}
+
+export interface CurrentGroceryListSummaryRecord {
+  objectRole: CurrentGroceryListObjectRole;
+  listId: string;
+  version: string;
+  title: string;
+  subtitle: string;
+  weekStart: string;
+  weekRelation: CurrentGroceryListWeekRelation;
+  selectionReason: string | null;
+  trustState: CurrentGroceryListTrustState;
+  trustLabel: CurrentGroceryListRecord['trustLabel'];
+  stale: boolean;
+  staleReasons: string[];
+  counts: CurrentGroceryListRecord['counts'];
+  sourceProvenance: CurrentGroceryListSourceRecord[];
+  toBuyPreview: Array<{
+    displayName: string;
+    quantity: number | null;
+    unit: string | null;
+  }>;
+  checkAtHomePreview: Array<{
+    displayName: string;
+    reason: string;
+  }>;
+  manualItemPreview: Array<{
+    displayName: string;
+    status: string;
+  }>;
+}
+
 export interface PreparedOrderItemRecord {
   displayName: string;
   quantity: number | null;

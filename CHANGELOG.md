@@ -16,10 +16,10 @@ First public Fluent open-source runtime release.
 
 ### Supported Contract Version
 
-- minimum supported contract version: `2026-04-26.fluent-core-v1.48`
+- minimum supported contract version: `2026-05-12.fluent-core-v1.66`
 - frozen contract artifact: [contracts/fluent-contract.v1.json](./contracts/fluent-contract.v1.json)
 - contract notes: [docs/fluent-contract-v1.md](./docs/fluent-contract-v1.md)
-- contract change: removes the legacy `meals_render_grocery_list` alias and `grocery_list_widget` capability; `meals_render_grocery_list_v2` remains the supported grocery-list render surface.
+- contract change: current app-surface contract is v1.57, with Grocery v60 as the living-list render surface, Recipe v8, Home v14, Style purchase-analysis v18, and older widget resources retained only for compatibility.
 
 ### Supported Setup Matrix
 

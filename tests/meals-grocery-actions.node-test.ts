@@ -36,10 +36,17 @@ async function main() {
     await planScopedIntentsDoNotReuseOlderOpenIntentIds();
     await substitutionsPersistRecipeMemorySignals();
     await pantryCheckItemsCanBeConfirmedOrPromotedToBuyList();
+    await rejectsOrphanGroceryPlanActions();
     await sufficiencyConfirmationsStayOnActivePantryLines();
+    await sufficiencyConfirmationsDoNotUpdateKitchenMemoryByDefault();
+    await coverageLifecycleMetadataDoesNotRefreshInventoryWithoutExplicitRememberFlag();
     await coverageActionsRefreshInventoryEvidence();
+    await rejectsInventoryActionsWhenGroceryPlanMissingWithoutGenerating();
+    await exposesCurrentGroceryListLifecycleState();
+    await currentGroceryListDefaultsToMostRecentPastListInsteadOfFuturePlaceholder();
     await regeneratesLegacyGroceryPlanRowsForUpdatedMealPlans();
     await rejectsSufficiencyConfirmationsForNonPantryItems();
+    await rejectsInvalidGroceryPlanActionStatus();
   } finally {
     while (tempRoots.length > 0) {
       const root = tempRoots.pop();
@@ -713,6 +720,50 @@ async function sufficiencyConfirmationsStayOnActivePantryLines() {
   }
 }
 
+async function rejectsOrphanGroceryPlanActions() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const weekStart = '2026-05-24';
+    await createSingleRecipePlan(service, {
+      weekStart,
+      recipeId: 'grocery-actions-orphan-write',
+      recipeName: 'Orphan Write Plan',
+      ingredient: { item: 'limes', quantity: 4, unit: 'count' },
+      mealType: 'dinner',
+    });
+    await service.generateGroceryPlan({ weekStart, provenance });
+
+    for (const actionStatus of ['needs_purchase', 'confirmed', 'skipped'] as const) {
+      await assert.rejects(
+        service.upsertGroceryPlanAction({
+          weekStart,
+          itemKey: 'ghost-lime::count',
+          actionStatus,
+          provenance,
+        }),
+        /Could not find grocery-plan item ghost-lime::count/i,
+      );
+    }
+
+    await assert.rejects(
+      service.upsertGroceryPlanAction({
+        weekStart,
+        itemKey: 'ghost-lime::count',
+        actionStatus: 'substituted',
+        substituteDisplayName: 'lemons',
+        provenance,
+      }),
+      /Could not find grocery-plan item ghost-lime::count/i,
+    );
+
+    assert.equal((await service.listGroceryPlanActions(weekStart)).length, 0);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
 async function coverageActionsRefreshInventoryEvidence() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
@@ -735,6 +786,14 @@ async function coverageActionsRefreshInventoryEvidence() {
       weekStart,
       itemKey: pepperLine!.itemKey,
       actionStatus: 'have_enough',
+      metadata: {
+        fluentLifecycle: {
+          action: 'already_have_enough',
+          memoryEffect: 'kitchen_memory',
+          objectRole: 'living_grocery_list',
+          rememberInventory: true,
+        },
+      },
       provenance,
     });
 
@@ -742,6 +801,192 @@ async function coverageActionsRefreshInventoryEvidence() {
     assert.equal(pantryPepper?.status, 'present');
     assert.equal(pantryPepper?.source, 'grocery_plan_action');
     assert.ok(typeof pantryPepper?.confirmedAt === 'string' && pantryPepper.confirmedAt.length > 0);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function coverageLifecycleMetadataDoesNotRefreshInventoryWithoutExplicitRememberFlag() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const weekStart = '2026-05-27';
+    await createSingleRecipePlan(service, {
+      weekStart,
+      recipeId: 'grocery-actions-memory-effect-only',
+      recipeName: 'Memory Effect Only Plan',
+      ingredient: { item: 'smoked paprika', quantity: 5, unit: 'g', ordering_policy: 'pantry_item' },
+      mealType: 'dinner',
+    });
+
+    const generated = await service.generateGroceryPlan({ weekStart, provenance });
+    const paprikaLine = generated.raw.items.find((item) => item.normalizedName === 'smoked paprika');
+    assert.ok(paprikaLine);
+
+    await service.upsertGroceryPlanAction({
+      weekStart,
+      itemKey: paprikaLine!.itemKey,
+      actionStatus: 'have_enough',
+      metadata: {
+        fluentLifecycle: {
+          action: 'already_have_enough',
+          memoryEffect: 'kitchen_memory',
+          objectRole: 'living_grocery_list',
+        },
+      },
+      provenance,
+    });
+
+    const pantryPaprika = (await service.getInventory()).find((item) => item.normalizedName === 'smoked paprika');
+    assert.equal(pantryPaprika, undefined);
+    const prepared = await service.prepareOrder({ weekStart });
+    assert.equal(prepared.alreadyCoveredByInventory.some((item) => item.displayName === 'smoked paprika'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function sufficiencyConfirmationsDoNotUpdateKitchenMemoryByDefault() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const weekStart = '2026-05-28';
+    await createSingleRecipePlan(service, {
+      weekStart,
+      recipeId: 'grocery-actions-list-only-pepper',
+      recipeName: 'List Only Pepper Plan',
+      ingredient: { item: 'white pepper', quantity: 4, unit: 'g', ordering_policy: 'pantry_item' },
+      mealType: 'dinner',
+    });
+
+    const generated = await service.generateGroceryPlan({ weekStart, provenance });
+    const pepperLine = generated.raw.items.find((item) => item.normalizedName === 'white pepper');
+    assert.ok(pepperLine);
+
+    await service.upsertGroceryPlanAction({
+      weekStart,
+      itemKey: pepperLine!.itemKey,
+      actionStatus: 'have_enough',
+      provenance,
+    });
+
+    const pantryPepper = (await service.getInventory()).find((item) => item.normalizedName === 'white pepper');
+    assert.equal(pantryPepper, undefined);
+    const prepared = await service.prepareOrder({ weekStart });
+    assert.equal(prepared.alreadyCoveredByInventory.some((item) => item.displayName === 'white pepper'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function rejectsInventoryActionsWhenGroceryPlanMissingWithoutGenerating() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const weekStart = '2026-05-29';
+    await createSingleRecipePlan(service, {
+      weekStart,
+      recipeId: 'grocery-actions-no-implicit-generation',
+      recipeName: 'No Implicit Grocery Generation',
+      ingredient: { item: 'red onion', quantity: 1, unit: 'count' },
+      mealType: 'dinner',
+    });
+
+    assert.equal(await service.getGroceryPlan(weekStart), null);
+    await assert.rejects(
+      service.upsertGroceryPlanAction({
+        weekStart,
+        itemKey: 'red onion::count',
+        actionStatus: 'purchased',
+        provenance,
+      }),
+      /Could not find grocery-plan item/i,
+    );
+    assert.equal(await service.getGroceryPlan(weekStart), null);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function exposesCurrentGroceryListLifecycleState() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const weekStart = '2026-05-18';
+    await createSingleRecipePlan(service, {
+      weekStart,
+      recipeId: 'grocery-actions-current-list-state',
+      recipeName: 'Current List State Plan',
+      ingredient: { item: 'green onion', quantity: 2, unit: 'count' },
+      mealType: 'dinner',
+    });
+
+    await service.generateGroceryPlan({ weekStart, provenance });
+    await service.upsertGroceryIntent({
+      displayName: 'dish soap',
+      status: 'pending',
+      targetWindow: weekStart,
+      provenance,
+    });
+
+    const currentList = await service.getCurrentGroceryList({ weekStart, today: '2026-05-09' });
+    assert.equal(currentList.objectRole, 'living_grocery_list');
+    assert.equal(currentList.listId, 'current-grocery-list:primary');
+    assert.equal(currentList.weekRelation, 'future');
+    assert.equal(currentList.stale, true);
+    assert.ok(currentList.staleReasons.some((reason) => reason.includes('future meal-plan needs')));
+    assert.equal(currentList.trustLabel, 'List may be out of date');
+    assert.equal(currentList.counts.manualIntentCount, 1);
+    assert.ok(currentList.sourceProvenance.some((source) => source.kind === 'accepted_meal_plan'));
+    assert.ok(currentList.sourceProvenance.some((source) => source.kind === 'grocery_plan'));
+    assert.ok(currentList.sourceProvenance.some((source) => source.kind === 'manual_item'));
+    assert.ok(currentList.version.length > 0);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function currentGroceryListDefaultsToMostRecentPastListInsteadOfFuturePlaceholder() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const pastWeekStart = '2026-04-27';
+    const futureWeekStart = '2026-05-11';
+    await createSingleRecipePlan(service, {
+      weekStart: pastWeekStart,
+      recipeId: 'grocery-actions-current-list-past',
+      recipeName: 'Past Full Grocery List',
+      ingredient: { item: 'salmon fillets', quantity: 640, unit: 'g' },
+      mealType: 'dinner',
+    });
+    await createSingleRecipePlan(service, {
+      weekStart: futureWeekStart,
+      recipeId: 'grocery-actions-current-list-future',
+      recipeName: 'Future Placeholder Grocery List',
+      ingredient: { item: 'plain greek yogurt', quantity: 490, unit: 'g' },
+      mealType: 'breakfast',
+    });
+
+    await service.generateGroceryPlan({ weekStart: pastWeekStart, provenance });
+    await service.generateGroceryPlan({ weekStart: futureWeekStart, provenance });
+
+    const currentList = await service.getCurrentGroceryList({ today: '2026-05-09' });
+    assert.equal(currentList.weekStart, pastWeekStart);
+    assert.equal(currentList.weekRelation, 'past');
+    assert.equal(currentList.stale, true);
+    assert.equal(
+      currentList.selectionReason,
+      `No current-week grocery list exists, so Fluent is showing the most recent list from ${pastWeekStart}.`,
+    );
+    assert.ok(currentList.staleReasons.some((reason) => reason.includes('most recent list')));
+    assert.ok(currentList.sourceProvenance.some((source) => source.weekStart === pastWeekStart));
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'salmon fillets'), true);
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'plain greek yogurt'), false);
   } finally {
     runtime.sqliteDb.close();
   }
@@ -773,6 +1018,25 @@ async function rejectsSufficiencyConfirmationsForNonPantryItems() {
         provenance,
       }),
       /pantry sufficiency confirmation is not supported/i,
+    );
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function rejectsInvalidGroceryPlanActionStatus() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    await assert.rejects(
+      service.upsertGroceryPlanAction({
+        weekStart: '2026-06-30',
+        itemKey: 'avocado::g',
+        actionStatus: 'not_a_real_status' as never,
+        provenance,
+      }),
+      /Unsupported grocery-plan action status/i,
     );
   } finally {
     runtime.sqliteDb.close();

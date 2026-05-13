@@ -710,6 +710,7 @@ CREATE INDEX IF NOT EXISTS idx_meal_feedback_entry ON meal_feedback(meal_plan_en
 CREATE INDEX IF NOT EXISTS idx_meal_plan_reviews_week_start ON meal_plan_reviews(tenant_id, week_start);
 CREATE INDEX IF NOT EXISTS idx_grocery_intents_status ON grocery_intents(tenant_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_grocery_intents_name ON grocery_intents(tenant_id, normalized_name, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_grocery_plans_tenant_week_unique ON meal_grocery_plans(tenant_id, week_start);
 CREATE INDEX IF NOT EXISTS idx_meal_grocery_plans_week_start ON meal_grocery_plans(tenant_id, week_start);
 CREATE INDEX IF NOT EXISTS idx_meal_plan_generations_week_start ON meal_plan_generations(tenant_id, week_start);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_grocery_plan_actions_unique ON meal_grocery_plan_actions(tenant_id, week_start, item_key);

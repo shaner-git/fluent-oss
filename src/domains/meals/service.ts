@@ -39,6 +39,7 @@ import { canonicalizeInventoryItem, normalizeUnit } from './units';
 import type {
   ConfirmedOrderSyncRecord,
   ConfirmedOrderSyncStatus,
+  CurrentGroceryListRecord,
   DomainEventRecord,
   FeedbackValue,
   GroceryPlanActionRecord,
@@ -96,6 +97,7 @@ export {
   deriveExecutionSupportSummary,
   summarizeDomainEvent,
   summarizeDomainEvents,
+  summarizeCurrentGroceryList,
   summarizeGroceryPlan,
   summarizeMealPlan,
   summarizeMealPreferences,
@@ -108,6 +110,15 @@ const PREPARED_ORDER_SUFFICIENCY_STATUSES: GroceryPlanSufficiencyStatus[] = [
   'have_enough',
   'have_some_need_to_buy',
   'dont_have_it',
+];
+const GROCERY_PLAN_ACTION_STATUSES: GroceryPlanActionRecord['actionStatus'][] = [
+  'purchased',
+  'in_cart',
+  'skipped',
+  'substituted',
+  'confirmed',
+  'needs_purchase',
+  ...PREPARED_ORDER_SUFFICIENCY_STATUSES,
 ];
 
 export class MealsService {
@@ -1525,6 +1536,120 @@ export class MealsService {
     return this.applyGroceryPlanActions(basePlan, await this.listGroceryPlanActions(weekStart));
   }
 
+  async getCurrentGroceryList(input: { weekStart?: string | null; today?: string | null } = {}): Promise<CurrentGroceryListRecord> {
+    const today = input.today?.trim() || (await this.currentDateString());
+    const explicitWeekStart = input.weekStart?.trim() || null;
+    const anchor = await this.resolveCurrentGroceryListAnchor({ explicitWeekStart, today });
+    const weekStart = anchor.weekStart;
+    const groceryPlan = anchor.groceryPlan;
+    const selectedPlan =
+      anchor.plan ??
+      (groceryPlan?.mealPlanId ? await this.getPlanById(groceryPlan.mealPlanId) : null) ??
+      (await this.getPlanByWeek(weekStart));
+    const intents = await this.listGroceryIntents();
+    const preparedOrder = groceryPlan ? await this.prepareOrder({ weekStart }) : null;
+    const actions = groceryPlan ? await this.listGroceryPlanActions(weekStart) : [];
+    const weekRelation = this.resolveWeekRelation(weekStart, today);
+    const sourceProvenance: CurrentGroceryListRecord['sourceProvenance'] = [];
+    const staleReasons: string[] = [];
+
+    if (selectedPlan) {
+      sourceProvenance.push({
+        id: selectedPlan.id,
+        kind: selectedPlan.status === 'draft' ? 'draft_meal_plan' : 'accepted_meal_plan',
+        label: selectedPlan.status === 'draft' ? `From draft meal plan for ${selectedPlan.weekStart}` : `From accepted meal plan for ${selectedPlan.weekStart}`,
+        status: selectedPlan.status,
+        weekStart: selectedPlan.weekStart,
+      });
+    }
+    if (groceryPlan) {
+      sourceProvenance.push({
+        id: groceryPlan.id,
+        kind: 'grocery_plan',
+        label: `Derived grocery needs for ${groceryPlan.weekStart}`,
+        weekStart: groceryPlan.weekStart,
+      });
+    }
+
+    const relevantIntents = intents.filter((intent) => this.intentBelongsToCurrentList(intent, weekStart, groceryPlan?.mealPlanId ?? selectedPlan?.id ?? null));
+    if (relevantIntents.length > 0) {
+      sourceProvenance.push({
+        id: null,
+        kind: 'manual_item',
+        label: `${relevantIntents.length} added item${relevantIntents.length === 1 ? '' : 's'}`,
+        weekStart: null,
+      });
+    }
+
+    const staleInCartCount = actions.filter((action) => action.actionStatus === 'in_cart' && this.isStaleCartAction(action)).length;
+    if (staleInCartCount > 0) {
+      staleReasons.push(`${staleInCartCount} cart item${staleInCartCount === 1 ? '' : 's'} came from an old shopping session.`);
+    }
+    if (anchor.selectionReason) {
+      staleReasons.push(anchor.selectionReason);
+    }
+    if (weekRelation === 'future') {
+      staleReasons.push('This list includes future meal-plan needs.');
+    }
+    if (weekRelation === 'past') {
+      staleReasons.push('This list is tied to a past meal-plan week.');
+    }
+    if (selectedPlan?.status === 'draft') {
+      staleReasons.push('This list is based on a draft meal plan.');
+    }
+
+    const trustState = this.resolveCurrentGroceryListTrustState({
+      groceryPlan,
+      preparedOrder,
+      staleReasons,
+    });
+    const trustLabel = this.currentGroceryListTrustLabel(trustState);
+    const updatedAt = this.latestGroceryListTimestamp(groceryPlan, actions, relevantIntents);
+    const version = await hashStableJson({
+      actions: actions.map((action) => [action.itemKey, action.actionStatus, action.updatedAt, action.metadata]),
+      groceryPlanGeneratedAt: groceryPlan?.generatedAt ?? null,
+      intents: relevantIntents.map((intent) => [intent.id, intent.status, intent.updatedAt]),
+      trustState,
+      weekRelation,
+      weekStart,
+    });
+
+    return {
+      counts: {
+        checkAtHomeCount: preparedOrder?.unresolvedItems.length ?? 0,
+        inCartCount: preparedOrder?.alreadyInRetailerCart.length ?? 0,
+        manualIntentCount: relevantIntents.length,
+        planItemCount: groceryPlan?.raw.items.length ?? 0,
+        resolvedCount: groceryPlan?.raw.resolvedItems.length ?? 0,
+        toBuyCount: preparedOrder?.remainingToBuy.length ?? groceryPlan?.raw.items.length ?? 0,
+        unresolvedCount: preparedOrder?.unresolvedItems.length ?? 0,
+      },
+      generatedAt: groceryPlan?.generatedAt ?? null,
+      groceryPlan,
+      intents: relevantIntents,
+      listId: `current-grocery-list:${this.tenantId}`,
+      objectRole: 'living_grocery_list',
+      preparedOrder,
+      selectionReason: anchor.selectionReason,
+      sourceProvenance,
+      stale: staleReasons.length > 0,
+      staleReasons,
+      subtitle: this.buildCurrentGroceryListSubtitle({
+        relevantIntents,
+        selectedPlan,
+        trustLabel,
+        weekRelation,
+      }),
+      title: 'Grocery list',
+      trustLabel,
+      trustState,
+      updatedAt,
+      version,
+      weekRelation,
+      weekStart,
+    };
+  }
+
   async prepareOrder(input: PrepareOrderInput): Promise<PreparedOrderRecord> {
     const generatedAt = new Date().toISOString();
     const retailer = input.retailer?.trim() ? input.retailer.trim().toLowerCase() : null;
@@ -1823,7 +1948,7 @@ export class MealsService {
         `INSERT INTO meal_grocery_plans (
           id, tenant_id, profile_id, week_start, meal_plan_id, raw_json, source_snapshot_json, generated_at, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM meal_grocery_plans WHERE tenant_id = ? AND week_start = ?), CURRENT_TIMESTAMP), ?)
-        ON CONFLICT(week_start) DO UPDATE SET
+        ON CONFLICT(tenant_id, week_start) DO UPDATE SET
           id = excluded.id,
           tenant_id = excluded.tenant_id,
           profile_id = excluded.profile_id,
@@ -1907,16 +2032,13 @@ export class MealsService {
   }
 
   async upsertGroceryPlanAction(input: UpsertGroceryPlanActionInput): Promise<ApplyGroceryPlanActionResult> {
+    if (!this.isGroceryPlanActionStatus(input.actionStatus)) {
+      throw new Error(`Unsupported grocery-plan action status: ${String(input.actionStatus)}.`);
+    }
     const isSufficiencyAction = PREPARED_ORDER_SUFFICIENCY_STATUSES.includes(
       input.actionStatus as GroceryPlanSufficiencyStatus,
     );
-    const targetItem =
-      isSufficiencyAction ||
-      input.actionStatus === 'purchased' ||
-      input.actionStatus === 'substituted' ||
-      input.actionStatus === 'in_cart'
-        ? await this.resolveGroceryPlanItemForAction(input.weekStart, input.itemKey)
-        : null;
+    const targetItem = await this.resolveGroceryPlanItemForAction(input.weekStart, input.itemKey);
     if (
       input.actionStatus === 'substituted' &&
       !input.substituteItemKey &&
@@ -1941,22 +2063,16 @@ export class MealsService {
       throw new Error('Sufficiency confirmations cannot include substitute fields or substitute intents.');
     }
 
+    if (!targetItem) {
+      throw new Error(`Could not find grocery-plan item ${input.itemKey} for ${input.actionStatus} action.`);
+    }
+
     if (isSufficiencyAction) {
-      if (!targetItem) {
-        throw new Error(`Could not find grocery-plan item ${input.itemKey} for sufficiency confirmation.`);
-      }
       if (!this.isPreparedOrderSufficiencyEligible(targetItem)) {
         throw new Error(
           `${targetItem.name} still requires quantity-aware review before ordering; pantry sufficiency confirmation is not supported for this item.`,
         );
       }
-    }
-
-    if (input.actionStatus === 'purchased' && !targetItem) {
-      throw new Error(`Could not find grocery-plan item ${input.itemKey} for purchased receipt confirmation.`);
-    }
-    if (input.actionStatus === 'in_cart' && !targetItem) {
-      throw new Error(`Could not find grocery-plan item ${input.itemKey} for cart tracking.`);
     }
 
     const existing = await this.getGroceryPlanAction(input.weekStart, input.itemKey);
@@ -2016,7 +2132,11 @@ export class MealsService {
         provenance: input.provenance,
       });
     }
-    if ((input.actionStatus === 'confirmed' || input.actionStatus === 'have_enough') && targetItem) {
+    if (
+      (input.actionStatus === 'confirmed' || input.actionStatus === 'have_enough') &&
+      targetItem &&
+      this.shouldRefreshInventoryFromCoveredAction(input.metadata)
+    ) {
       await this.refreshInventoryEvidenceFromCoveredAction({
         confirmedAt: now,
         targetItem,
@@ -2260,21 +2380,10 @@ export class MealsService {
     weekStart: string,
     itemKey: string,
   ): Promise<GroceryPlanRecord['raw']['items'][number] | GroceryPlanRecord['raw']['resolvedItems'][number] | null> {
-    const plan =
-      (await this.getGroceryPlan(weekStart)) ??
-      (await this.generateGroceryPlan({
-        weekStart,
-        provenance: {
-          actorEmail: null,
-          actorName: null,
-          confidence: null,
-          scopes: [],
-          sessionId: null,
-          sourceAgent: 'meals-service',
-          sourceSkill: 'fluent-meals',
-          sourceType: 'system',
-        },
-      }));
+    const plan = await this.getGroceryPlan(weekStart);
+    if (!plan) {
+      return null;
+    }
 
     return (
       plan.raw.items.find((item) => item.itemKey === itemKey) ??
@@ -2299,6 +2408,7 @@ export class MealsService {
     }
 
     const actionMap = new Map(actions.map((action) => [action.itemKey, action]));
+    const appliedActionKeys = new Set<string>();
     const actionableItems: typeof plan.raw.items = [];
     const resolvedItems: typeof plan.raw.resolvedItems = [];
 
@@ -2306,6 +2416,15 @@ export class MealsService {
       const action = actionMap.get(item.itemKey);
       if (!action) {
         actionableItems.push(item);
+        continue;
+      }
+      appliedActionKeys.add(action.itemKey);
+      if (this.isStaleCartAction(action)) {
+        actionableItems.push({
+          ...item,
+          note: item.note ?? 'Cart state came from an old shopping session; confirm before treating it as still in cart.',
+          substitute: null,
+        });
         continue;
       }
 
@@ -2354,6 +2473,16 @@ export class MealsService {
         resolvedItems.push(item);
         continue;
       }
+      appliedActionKeys.add(action.itemKey);
+      if (this.isStaleCartAction(action)) {
+        actionableItems.push({
+          ...item,
+          note: item.note ?? 'Cart state came from an old shopping session; confirm before treating it as still in cart.',
+          inventoryStatus: item.inventoryStatus === 'sufficient' ? 'missing' : item.inventoryStatus,
+          substitute: null,
+        });
+        continue;
+      }
 
       if (action.actionStatus === 'needs_purchase') {
         actionableItems.push({
@@ -2384,7 +2513,7 @@ export class MealsService {
       ...plan,
       raw: {
         ...plan.raw,
-        actionsAppliedCount: actions.length,
+        actionsAppliedCount: appliedActionKeys.size,
         items: actionableItems,
         resolvedItems,
       },
@@ -2405,10 +2534,259 @@ export class MealsService {
     return PREPARED_ORDER_SUFFICIENCY_STATUSES.includes(value as GroceryPlanSufficiencyStatus);
   }
 
+  private isGroceryPlanActionStatus(value: unknown): value is GroceryPlanActionRecord['actionStatus'] {
+    return typeof value === 'string' && GROCERY_PLAN_ACTION_STATUSES.includes(value as GroceryPlanActionRecord['actionStatus']);
+  }
+
   private isPreparedOrderSufficiencyEligible(
     item: GroceryPlanRecord['raw']['items'][number] | GroceryPlanRecord['raw']['resolvedItems'][number],
   ) {
     return item.inventoryStatus === 'check_pantry' || item.orderingPolicy === 'pantry_item';
+  }
+
+  private resolveWeekRelation(weekStart: string, today: string): CurrentGroceryListRecord['weekRelation'] {
+    const weekStartDate = Date.parse(`${weekStart}T00:00:00.000Z`);
+    const todayDate = Date.parse(`${today}T00:00:00.000Z`);
+    if (!Number.isFinite(weekStartDate) || !Number.isFinite(todayDate)) {
+      return 'unknown';
+    }
+    const weekEndDate = weekStartDate + 6 * 24 * 60 * 60 * 1000;
+    if (todayDate < weekStartDate) {
+      return 'future';
+    }
+    if (todayDate > weekEndDate) {
+      return 'past';
+    }
+    return 'contains_today';
+  }
+
+  private async resolveCurrentGroceryListAnchor(input: {
+    explicitWeekStart: string | null;
+    today: string;
+  }): Promise<{
+    groceryPlan: GroceryPlanRecord | null;
+    plan: MealPlanRecord | null;
+    selectionReason: string | null;
+    weekStart: string;
+  }> {
+    if (input.explicitWeekStart) {
+      const groceryPlan = await this.getGroceryPlan(input.explicitWeekStart);
+      const plan =
+        (groceryPlan?.mealPlanId ? await this.getPlanById(groceryPlan.mealPlanId) : null) ??
+        (await this.getPlanByWeek(input.explicitWeekStart));
+      return {
+        groceryPlan,
+        plan,
+        selectionReason: null,
+        weekStart: input.explicitWeekStart,
+      };
+    }
+
+    const currentWeekStart = this.startOfWeekIso(input.today);
+    const currentPlan = await this.getPlanContainingDate(input.today);
+    if (currentPlan?.weekStart) {
+      return {
+        groceryPlan: await this.getGroceryPlan(currentPlan.weekStart),
+        plan: currentPlan,
+        selectionReason: null,
+        weekStart: currentPlan.weekStart,
+      };
+    }
+
+    const currentWeekGroceryPlan = await this.getGroceryPlan(currentWeekStart);
+    if (currentWeekGroceryPlan) {
+      const plan =
+        (currentWeekGroceryPlan.mealPlanId ? await this.getPlanById(currentWeekGroceryPlan.mealPlanId) : null) ??
+        (await this.getPlanByWeek(currentWeekStart));
+      return {
+        groceryPlan: currentWeekGroceryPlan,
+        plan,
+        selectionReason: null,
+        weekStart: currentWeekStart,
+      };
+    }
+
+    const latestPastWeekStart = await this.findNearestGroceryPlanWeek({
+      direction: 'past_or_current',
+      weekStart: currentWeekStart,
+    });
+    if (latestPastWeekStart) {
+      const groceryPlan = await this.getGroceryPlan(latestPastWeekStart);
+      const plan =
+        (groceryPlan?.mealPlanId ? await this.getPlanById(groceryPlan.mealPlanId) : null) ??
+        (await this.getPlanByWeek(latestPastWeekStart));
+      return {
+        groceryPlan,
+        plan,
+        selectionReason: `No current-week grocery list exists, so Fluent is showing the most recent list from ${latestPastWeekStart}.`,
+        weekStart: latestPastWeekStart,
+      };
+    }
+
+    const nextFutureWeekStart = await this.findNearestGroceryPlanWeek({
+      direction: 'future',
+      weekStart: currentWeekStart,
+    });
+    if (nextFutureWeekStart) {
+      const groceryPlan = await this.getGroceryPlan(nextFutureWeekStart);
+      const plan =
+        (groceryPlan?.mealPlanId ? await this.getPlanById(groceryPlan.mealPlanId) : null) ??
+        (await this.getPlanByWeek(nextFutureWeekStart));
+      return {
+        groceryPlan,
+        plan,
+        selectionReason: `No current or past grocery list exists, so Fluent is showing upcoming meal-plan needs from ${nextFutureWeekStart}.`,
+        weekStart: nextFutureWeekStart,
+      };
+    }
+
+    return {
+      groceryPlan: null,
+      plan: null,
+      selectionReason: 'No current grocery list exists yet for this week.',
+      weekStart: currentWeekStart,
+    };
+  }
+
+  private async getPlanContainingDate(today: string): Promise<MealPlanRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT id
+         FROM meal_plans
+         WHERE tenant_id = ?
+           AND status IN ('active', 'approved')
+           AND week_start <= ?
+           AND (week_end IS NULL OR week_end >= ?)
+         ORDER BY week_start DESC
+         LIMIT 1`,
+      )
+      .bind(this.tenantId, today, today)
+      .first<{ id: string }>();
+
+    return row?.id ? this.getPlanById(row.id) : null;
+  }
+
+  private async findNearestGroceryPlanWeek(input: {
+    direction: 'past_or_current' | 'future';
+    weekStart: string;
+  }): Promise<string | null> {
+    const operator = input.direction === 'past_or_current' ? '<=' : '>';
+    const ordering = input.direction === 'past_or_current' ? 'DESC' : 'ASC';
+    const row = await this.db
+      .prepare(
+        `SELECT week_start
+         FROM meal_grocery_plans
+         WHERE tenant_id = ?
+           AND week_start ${operator} ?
+         ORDER BY week_start ${ordering}
+         LIMIT 1`,
+      )
+      .bind(this.tenantId, input.weekStart)
+      .first<{ week_start: string }>();
+
+    return row?.week_start ?? null;
+  }
+
+  private resolveCurrentGroceryListTrustState(input: {
+    groceryPlan: GroceryPlanRecord | null;
+    preparedOrder: PreparedOrderRecord | null;
+    staleReasons: string[];
+  }): CurrentGroceryListRecord['trustState'] {
+    if (input.staleReasons.length > 0) {
+      return 'list_may_be_out_of_date';
+    }
+    if (!input.groceryPlan) {
+      return 'review_before_shopping';
+    }
+    if ((input.preparedOrder?.unresolvedItems.length ?? 0) > 0) {
+      return 'confirm_what_you_have';
+    }
+    return input.preparedOrder?.safeToOrder ? 'ready_to_shop' : 'review_before_shopping';
+  }
+
+  private currentGroceryListTrustLabel(
+    trustState: CurrentGroceryListRecord['trustState'],
+  ): CurrentGroceryListRecord['trustLabel'] {
+    switch (trustState) {
+      case 'ready_to_shop':
+        return 'Ready to shop';
+      case 'confirm_what_you_have':
+        return 'Check before shopping';
+      case 'list_may_be_out_of_date':
+        return 'List may be out of date';
+      case 'review_before_shopping':
+      default:
+        return 'Check before shopping';
+    }
+  }
+
+  private buildCurrentGroceryListSubtitle(input: {
+    relevantIntents: GroceryIntentRecord[];
+    selectedPlan: MealPlanRecord | null;
+    trustLabel: CurrentGroceryListRecord['trustLabel'];
+    weekRelation: CurrentGroceryListRecord['weekRelation'];
+  }): string {
+    const parts: string[] = [input.trustLabel];
+    if (input.selectedPlan?.weekStart) {
+      parts.push(
+        input.weekRelation === 'future'
+          ? `includes next plan (${input.selectedPlan.weekStart})`
+          : `from meal plan ${input.selectedPlan.weekStart}`,
+      );
+    }
+    if (input.relevantIntents.length > 0) {
+      parts.push(`${input.relevantIntents.length} added item${input.relevantIntents.length === 1 ? '' : 's'}`);
+    }
+    return parts.join(' · ');
+  }
+
+  private latestGroceryListTimestamp(
+    groceryPlan: GroceryPlanRecord | null,
+    actions: GroceryPlanActionRecord[],
+    intents: GroceryIntentRecord[],
+  ): string | null {
+    const timestamps = [
+      groceryPlan?.generatedAt ?? null,
+      ...actions.map((action) => action.updatedAt ?? action.createdAt ?? null),
+      ...intents.map((intent) => intent.updatedAt ?? intent.createdAt ?? null),
+    ]
+      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+      .sort((left, right) => left.localeCompare(right));
+    return timestamps.length > 0 ? timestamps[timestamps.length - 1] : null;
+  }
+
+  private intentBelongsToCurrentList(intent: GroceryIntentRecord, weekStart: string, currentPlanId: string | null): boolean {
+    if (intent.status === 'deleted' || intent.status === 'archived') {
+      return false;
+    }
+    if (intent.mealPlanId && currentPlanId && intent.mealPlanId !== currentPlanId) {
+      return false;
+    }
+    if (!intent.targetWindow) {
+      return true;
+    }
+    return normalizeText(intent.targetWindow).includes(normalizeText(weekStart));
+  }
+
+  private startOfWeekIso(dateString: string): string {
+    const date = new Date(`${dateString}T00:00:00.000Z`);
+    const day = date.getUTCDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    date.setUTCDate(date.getUTCDate() + diff);
+    return date.toISOString().slice(0, 10);
+  }
+
+  private isStaleCartAction(action: GroceryPlanActionRecord): boolean {
+    if (action.actionStatus !== 'in_cart') {
+      return false;
+    }
+    const metadata = asRecord(action.metadata);
+    if (metadata?.kind !== 'browser_cart_sync') {
+      return false;
+    }
+    const shoppingSession = asRecord(metadata.shoppingSession);
+    const expiresAt = typeof shoppingSession?.expiresAt === 'string' ? shoppingSession.expiresAt : null;
+    return Boolean(expiresAt && Date.parse(expiresAt) <= Date.now());
   }
 
   private resolvePreparedOrderSufficiencyDecision(
@@ -2419,6 +2797,12 @@ export class MealsService {
       return null;
     }
     return this.isPreparedOrderSufficiencyEligible(item) ? action.actionStatus : null;
+  }
+
+  private shouldRefreshInventoryFromCoveredAction(metadata: unknown): boolean {
+    const record = asRecord(metadata);
+    const lifecycle = asRecord(record?.fluentLifecycle) ?? asRecord(record?.lifecycle);
+    return record?.rememberInventory === true || lifecycle?.rememberInventory === true;
   }
 
   private latestInventoryTimestamp(inventory: InventoryRecord[]): string | null {

@@ -77,7 +77,8 @@ Default low-cost tools:
 - `meals_get_inventory_summary`
 - `meals_generate_plan`
 - `meals_generate_grocery_plan`
-- `meals_get_grocery_plan` with `view: "summary"`
+- `meals_get_current_grocery_list` with `view: "summary"` for ordinary grocery-list/status asks
+- `meals_get_grocery_plan` with `view: "summary"` only for explicit week-scoped/raw plan detail
 - `meals_prepare_order`
 
 When the user says they are already cooking a planned meal or have started prep:
@@ -97,7 +98,7 @@ Host presentation rule:
 
 - OpenClaw does not ship a documented Fluent visual equivalent by default in this package.
 - For recipe-first turns, prefer `meals_get_recipe` and answer in text.
-- For grocery-list-first turns, prefer `meals_get_grocery_plan` and answer in text.
+- For grocery-list-first turns, prefer `meals_get_current_grocery_list` and answer in text.
 - Do not default to `meals_render_recipe_card` or `meals_render_grocery_list_v2` in OpenClaw.
 - For simple data questions, do not over-render.
 
@@ -114,9 +115,10 @@ Recipe presentation pattern:
 
 Grocery-list presentation pattern:
 
-- when the user is asking for the actionable grocery view itself, such as "What's on my grocery list?", "What do I still need to buy?", or "Show me this week's grocery list", prefer `meals_get_grocery_plan` and answer in text
+- when the user is asking for the actionable grocery view itself, such as "What's on my grocery list?", "What do I still need to buy?", or "Show me this week's grocery list", prefer `meals_get_current_grocery_list` and answer in text
 - do not require a raw grocery-plan read first for those ordinary grocery-list asks when a summary read is enough
 - gather or reconcile extra grocery state first only when the turn specifically needs underlying plan detail, reconciliation detail, or intent debugging:
+  - `meals_get_current_grocery_list`
   - `meals_get_grocery_plan`
   - `meals_prepare_order`
   - `meals_list_grocery_intents`

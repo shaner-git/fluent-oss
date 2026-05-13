@@ -52,7 +52,7 @@ export function renderDomainSurfacesMarkdown(): string {
     'Current host guidance:',
     '',
     '- ChatGPT/App-SDK-style hosts can use the current Meals render tools.',
-    '- Claude should prefer `meals_get_recipe`, `meals_get_grocery_plan`, and inventory reads, then render host-native visuals.',
+    '- Claude should prefer `meals_get_recipe`, `meals_get_current_grocery_list`, and inventory reads, then render host-native visuals. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail.',
     '- OpenClaw should use the plain-MCP Meals data tools rather than depending on Fluent widget rendering.',
     '',
     'Preview only:',

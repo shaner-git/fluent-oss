@@ -77,7 +77,8 @@ Default low-cost tools:
 - `meals_get_inventory_summary`
 - `meals_generate_plan`
 - `meals_generate_grocery_plan`
-- `meals_get_grocery_plan` with `view: "summary"`
+- `meals_get_current_grocery_list` with `view: "summary"` for ordinary grocery-list/status asks
+- `meals_get_grocery_plan` with `view: "summary"` only for explicit week-scoped/raw plan detail
 - `meals_prepare_order`
 
 When the user says they are already cooking a planned meal or have started prep:
@@ -113,19 +114,22 @@ Grocery-list presentation pattern:
 - when the user is asking for the actionable grocery view itself, such as "What's on my grocery list?", "What do I still need to buy?", "Show me this week's grocery list", or "Show me my shopping list", prefer the interactive HTML visualizer as the default path in rich Claude hosts
 - treat "yes", "pull it up", "bring up the grocery list", "show it", and similar confirmations after an assistant offers to show the grocery list as grocery-list-first turns; do not answer with another offer or a text-only summary when `visualize:show_widget` is available
 - in rich Claude hosts, load and follow `fluent-visual-sync` before the first grocery checklist render in a session; the user should not need to name the skill explicitly
-- if a visualizer call fails or the user says they cannot see it on mobile, fall back to canonical grocery data plus a compact text checklist; do not create a local artifact with fake or copy-only sync unless the user explicitly asks for a standalone file
+- for parity/release checks, "prepared visual rendering" is not enough: the assistant must actually call `visualize:show_widget` and the run must show a mounted visual, or it must plainly say that the visualizer did not render before falling back to text
+- if a visualizer call fails, does not mount, or the user says they cannot see it on mobile, fall back to canonical grocery data plus a compact text checklist; do not create a local artifact with fake or copy-only sync unless the user explicitly asks for a standalone file
 - do not require the user to ask for a "card" or "surface" explicitly when the turn is clearly grocery-list-first
 - do not default to `meals_render_grocery_list_v2` in Claude
 - if `meals_render_grocery_list_v2` appears in `tools/list`, tool discovery, or prompt context, treat it as ChatGPT/App SDK-only and ignore it for Claude
 - default Claude grocery flow in rich hosts:
-  1. call `meals_get_grocery_plan` with `view: "full"` for the relevant week, defaulting to the current week
-  2. group items by `inventoryStatus` into:
+  1. call `meals_get_current_grocery_list` with `view: "full"` for the current living list; pass `week_start` only when the user explicitly names a week
+  2. use the response `selectionReason`, `weekRelation`, `trustLabel`, and `sourceProvenance` to tell the user what list is being shown, especially when Fluent falls back to a past list or future plan needs
+  3. group items from the current list/grocery plan by `inventoryStatus` into:
      - `missing` for need to buy
      - `present_without_quantity` for have but quantity unknown
      - `intent` for explicit next-order requests
      - `check_pantry` for pantry verification
-  3. before the first render in a session, load `visualize:read_me` with `modules: ["interactive"]`
-  4. render the grocery list through `visualize:show_widget`
+  4. before the first render in a session, load `visualize:read_me` with `modules: ["interactive"]`
+  5. render the grocery list through `visualize:show_widget`
+  6. do not describe the visual as shown, prepared, or rendered unless the widget is actually mounted; if it is not mounted, say that the visualizer did not render and give the text checklist from the same `meals_get_current_grocery_list` response
 - gather or reconcile extra grocery state first only when the turn specifically needs underlying plan detail, reconciliation detail, or intent debugging:
   - `meals_prepare_order`
   - `meals_list_grocery_intents`
@@ -173,8 +177,9 @@ Claude grocery guidance:
 - for grocery-list-first turns in rich hosts, prefer `visualize:show_widget` as the default rendering path
 - if the previous assistant turn offered to show the grocery list and the user accepts, render the widget immediately; do not require a second explicit visual request
 - load and follow `fluent-visual-sync` before rendering the first grocery checklist in a session so the widget includes the sync round-trip, stable item keys, and supported action statuses
+- for release parity, count only a visible mounted visual or an explicit visualizer failure as valid evidence; a text response that says the visual was prepared is a failed visual pass
 - if `visualize:show_widget` is unavailable, say that plainly and provide a text checklist from fresh Fluent data; avoid switching to file artifacts or JSX snippets as the default fallback because they break the Fluent writeback expectation
-- render from `meals_get_grocery_plan` full data grouped by:
+- render from `meals_get_current_grocery_list` full data grouped by:
   - `missing`
   - `present_without_quantity`
   - `intent`
@@ -444,10 +449,10 @@ Use this HTML and JS shape as the default starting point for `visualize:show_wid
     };
 
     const groupLabels = {
-      missing: 'Need to buy',
-      present_without_quantity: 'Qty unknown',
+      missing: 'To buy',
+      present_without_quantity: 'Check amount',
       intent: 'Intents',
-      check_pantry: 'Pantry checks'
+      check_pantry: 'Check at home'
     };
 
     const metricCards = document.getElementById('metric-cards');
@@ -525,8 +530,8 @@ Use this HTML and JS shape as the default starting point for `visualize:show_wid
     });
 
     [
-      { label: 'Mark all purchased', prompt: 'Mark the grocery list as purchased for this week.' },
-      { label: 'Regenerate plan', prompt: 'Regenerate the grocery plan for this week.' },
+      { label: 'Mark bought', prompt: 'Mark the grocery list as bought for this week.' },
+      { label: 'Refresh list', prompt: 'Refresh my grocery list from Fluent.' },
       ...data.anomalyActions
     ].forEach((action) => {
       const button = document.createElement('button');

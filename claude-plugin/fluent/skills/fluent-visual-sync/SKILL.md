@@ -38,7 +38,7 @@ The visualizer runs as sandboxed HTML with no direct MCP access. Persistence is 
 
 1. Widget renders checklist with local-only check state.
 2. Each clickable row toggles a CSS class on the row element.
-3. A `Sync checked items to Fluent ↗` button calls `sendPrompt()` with a serialized summary of what's checked, scoped by section and week.
+3. A `Save checked items to Fluent ↗` button calls `sendPrompt()` with a serialized summary of what's checked, scoped by section and week.
 4. `sendPrompt` injects that summary into the chat as if the user typed it.
 5. On the next turn, the assistant parses that summary and calls `meals_upsert_grocery_plan_action` for each item.
 
@@ -46,18 +46,20 @@ This is a **pull-to-sync** model rather than optimistic-write. It loses immediac
 
 ## Data fetch (assistant side, before render)
 
-Before calling `visualize:show_widget`, fetch the grocery plan:
+Before calling `visualize:show_widget`, fetch the current living grocery list:
 
 ```
-Fluent:meals_get_grocery_plan(week_start=<runtime-computed>, view="full")
+Fluent:meals_get_current_grocery_list(view="full")
 ```
 
-Week computation rules:
+Week and selection rules:
 
-- Compute the week at call time from the user's timezone.
-- Week starts Monday.
-- Sunday still belongs to the current week.
-- Do not hardcode the date in the skill or widget template.
+- Do not compute a future week yourself for ordinary "show my grocery list" asks.
+- Let `meals_get_current_grocery_list` choose the current living list and read its `selectionReason`, `weekRelation`, `trustLabel`, and `sourceProvenance`.
+- Pass `week_start` only when the user explicitly names a week.
+- If `selectionReason` is non-null, show it in plain language before or above the visual.
+
+For release/parity checks, the visual step is only successful when `visualize:show_widget` is actually called and the host mounts a visible interactive visual. Do not say the visual is shown, prepared, or rendered unless that happened. If the visualizer is unavailable, the call fails, or the widget does not mount, say plainly that the visualizer did not render and then provide a compact text checklist from the same `meals_get_current_grocery_list` response.
 
 From the response, extract for each item:
 
@@ -66,12 +68,12 @@ From the response, extract for each item:
 - `quantity` + `unit` — for the right-aligned qty column.
 - `inventoryStatus` — routes item to one of three sections:
   - `missing`, `intent` → **To buy**
-  - `present_without_quantity` → **Verify quantity**
-  - `check_pantry` → **Check pantry**
+  - `present_without_quantity` → **Check amount**
+  - `check_pantry` → **Check at home**
 - `sourceRecipeNames`, `preferredBrands`, `blockedSubstituteTerms`, `note` — surface concisely in the row subtitle when present.
 - Flag `intent` items with a badge.
 
-Items whose `actionStatus` is already set should not clutter the primary working list. Render them in a separate **Covered** section at the bottom of the widget:
+Items whose `actionStatus` is already set should not clutter the primary working list. Render them in a separate **Done** section at the bottom of the widget:
 
 - collapsed by default
 - expandable on demand
@@ -81,8 +83,8 @@ Items whose `actionStatus` is already set should not clutter the primary working
 The active working sections remain:
 
 - `To buy`
-- `Verify quantity`
-- `Check pantry`
+- `Check amount`
+- `Check at home`
 
 ## Widget contract
 
@@ -96,7 +98,7 @@ const ITEMS = {
   buy:    [ { key, name, qty, meta?, badge?, actionStatus? }, ... ],
   verify: [ ... ],
   pantry: [ ... ],
-  covered: [ ... ],
+  done: [ ... ],
 };
 ```
 
@@ -115,16 +117,16 @@ Carry the precomputed value as `actionStatus` and onto each rendered row via `da
 - Row click toggles `.checked` class. Do not try to persist immediately.
 - `.checked` rows get strikethrough, muted text, and a filled checkbox.
 - Top metric cards show unresolved counts per section; update on every toggle.
-- Add a bottom `Covered` disclosure with a toggle like `Show covered (N)` / `Hide covered`.
-- The `Covered` section stays collapsed by default so resolved rows remain available without distracting from the active list.
+- Add a bottom `Done` disclosure with a toggle like `Show Done (N)` / `Hide Done`.
+- The `Done` section stays collapsed by default so resolved rows remain available without distracting from the active list.
 
 ### Action buttons
 
 At the bottom of the widget, expose at least these two buttons:
 
 ```html
-<button onclick="sendPrompt('Sync my grocery checkboxes to Fluent for week ' + ITEMS.weekStart + ': ' + getCheckedSummary())">
-  Sync checked items to Fluent ↗
+<button onclick="sendPrompt('Save my grocery list changes to Fluent for week ' + ITEMS.weekStart + ': ' + getCheckedSummary())">
+  Save checked items to Fluent ↗
 </button>
 <button onclick="sendPrompt('Show me recipes that use the items I still need to buy')">
   Show recipes for unchecked items ↗
@@ -150,19 +152,19 @@ Sections with no checked items are omitted. If nothing is checked, return `"noth
 
 Keep the section labels and punctuation stable. Do not invent a variant punctuation or label scheme in the widget.
 
-Use display names first so the chat remains readable, but include bracketed `key=` and `action_status=` fields so writeback can use stable identifiers. Older widgets may send names only; support that fallback by resolving names against the current grocery plan.
+Use display names first so the chat remains readable, but include bracketed `key=` and `action_status=` fields so writeback can use stable identifiers. Older widgets may send names only; support that fallback by resolving names against the current grocery list.
 
 ## Sync parsing (assistant side, next turn)
 
-When the assistant receives a message matching `Sync my grocery checkboxes to Fluent for week <YYYY-MM-DD>: <summary>`:
+When the assistant receives a message matching `Save my grocery list changes to Fluent for week <YYYY-MM-DD>: <summary>`:
 
 1. Parse the callback according to the summary serialization above.
-2. Reuse the in-context plan only if it is still present for the same week; otherwise re-fetch the grocery plan for that week with `view: "full"` before writing anything. The callback is not safe to apply against stale or missing plan context.
+2. Reuse the in-context current list only if it is still present for the same week; otherwise re-fetch with `meals_get_current_grocery_list` and `view: "full"` before writing anything. The callback is not safe to apply against stale or missing list context.
 3. Prefer bracketed `key=` and `action_status=` fields from the callback when present; verify the key exists in the current grocery plan for that week before writing.
 4. For older name-only callbacks, resolve each parsed display name against the current grocery plan before choosing `action_status`.
 5. Map name-only statuses with the same supported-action logic used to build the widget:
    - `purchased` → `action_status="purchased"`
-   - `have enough of` / `pantry confirmed` → use the item's supported `have_it` action from the full plan when available; otherwise use `have_enough` only for pantry-sufficiency-eligible lines and `confirmed` for quantity-aware or non-pantry lines
+   - `already have enough` / `pantry confirmed` → use the item's supported `already_have_enough` action from the full plan when available; otherwise use `have_enough` only for pantry-sufficiency-eligible lines and `confirmed` for quantity-aware or non-pantry lines
 6. Call `meals_upsert_grocery_plan_action` once per item with:
    ```
    week_start=<resolved week>
@@ -210,7 +212,7 @@ Follow visualizer design conventions loaded from `visualize:read_me` with `modul
 ## Full widget skeleton
 
 ```html
-<h2 class="sr-only">Interactive grocery checklist for the week of <WEEK>, grouped by to-buy, verify-quantity, and check-pantry.</h2>
+<h2 class="sr-only">Interactive grocery checklist for the week of <WEEK>, grouped by to-buy, check-amount, and check-at-home.</h2>
 
 <style>
   /* keep under ~40 lines; see interactive module for full token set */
@@ -223,8 +225,8 @@ Follow visualizer design conventions loaded from `visualize:read_me` with `modul
 
 <div class="gl-metrics">
   <div class="gl-metric"><div class="gl-metric-label">To buy</div><div class="gl-metric-value" id="m-buy">0</div></div>
-  <div class="gl-metric"><div class="gl-metric-label">Verify quantity</div><div class="gl-metric-value" id="m-verify">0</div></div>
-  <div class="gl-metric"><div class="gl-metric-label">Check pantry</div><div class="gl-metric-value" id="m-pantry">0</div></div>
+  <div class="gl-metric"><div class="gl-metric-label">Check amount</div><div class="gl-metric-value" id="m-verify">0</div></div>
+  <div class="gl-metric"><div class="gl-metric-label">Check at home</div><div class="gl-metric-value" id="m-pantry">0</div></div>
 </div>
 
 <div class="gl-section" data-section="buy">
@@ -237,33 +239,33 @@ Follow visualizer design conventions loaded from `visualize:read_me` with `modul
 
 <!-- repeat for verify and pantry -->
 
-<div class="gl-section gl-covered">
-  <button type="button" class="gl-covered-toggle" onclick="toggleCovered()">
-    <span>Covered (<span id="c-covered">0</span>)</span>
-    <span id="covered-toggle-copy">Show</span>
+<div class="gl-section gl-done">
+  <button type="button" class="gl-done-toggle" onclick="toggleDone()">
+    <span>Done (<span id="c-done">0</span>)</span>
+    <span id="done-toggle-copy">Show</span>
   </button>
-  <div id="list-covered" hidden></div>
+  <div id="list-done" hidden></div>
 </div>
 
 <div class="gl-actions">
-  <button onclick="sendPrompt('Sync my grocery checkboxes to Fluent for week ' + ITEMS.weekStart + ': ' + getCheckedSummary())">Sync checked items to Fluent ↗</button>
+  <button onclick="sendPrompt('Save my grocery list changes to Fluent for week ' + ITEMS.weekStart + ': ' + getCheckedSummary())">Save checked items to Fluent ↗</button>
   <button onclick="sendPrompt('Show me recipes that use the items I still need to buy')">Show recipes for unchecked items ↗</button>
 </div>
 
 <script>
-  const ITEMS = { weekStart: "2026-04-13", buy: [...], verify: [...], pantry: [...], covered: [...] };
-  let coveredExpanded = false;
+  const ITEMS = { weekStart: "2026-04-13", buy: [...], verify: [...], pantry: [...] , done: [...] };
+  let doneExpanded = false;
 
   function renderRow(item, section) { /* ... */ }
   function render() { /* renders all sections + binds click handlers */ }
   function updateCounts() { /* updates metric cards + section counts */ }
-  function toggleCovered() { coveredExpanded = !coveredExpanded; render(); }
+  function toggleDone() { doneExpanded = !doneExpanded; render(); }
 
   window.getCheckedSummary = function() {
     const summary = { purchased: [], verified: [], pantryConfirmed: [] };
     document.querySelectorAll('.gl-row.checked').forEach(row => {
       const section = row.dataset.section;
-      if (section === 'covered') return;
+      if (section === 'done') return;
       const name = row.querySelector('.gl-name').childNodes[0].textContent.trim();
       const key = row.dataset.itemKey;
       const actionStatus = row.dataset.actionStatus;

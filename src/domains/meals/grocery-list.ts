@@ -1,5 +1,9 @@
-export const MEALS_GROCERY_LIST_WIDGET_VERSION = 'v55';
+export const MEALS_GROCERY_LIST_WIDGET_VERSION = 'v61';
 export const MEALS_GROCERY_SMOKE_WIDGET_VERSION = 'v1';
+export const MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v57.html';
+export const MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v58.html';
+export const MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v59.html';
+export const MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v60.html';
 export const MEALS_GROCERY_LIST_TEMPLATE_URI = `ui://widget/fluent-grocery-list-${MEALS_GROCERY_LIST_WIDGET_VERSION}.html`;
 export const MEALS_GROCERY_SMOKE_TEMPLATE_URI = `ui://widget/fluent-grocery-smoke-${MEALS_GROCERY_SMOKE_WIDGET_VERSION}.html`;
 
@@ -9,7 +13,7 @@ export interface GroceryListRecipeReferenceViewModel {
 }
 
 export interface GroceryListActionViewModel {
-  id: 'have_it' | 'need_to_buy' | 'undo';
+  id: 'already_have_enough' | 'mark_bought' | 'need_to_buy' | 'undo';
   label: string;
   toolName: string;
   args: Record<string, unknown>;
@@ -83,22 +87,47 @@ export interface GroceryListSummaryViewModel {
   verifyCount: number;
 }
 
+export interface GroceryListSourceViewModel {
+  kind: string;
+  label: string;
+  status?: string | null;
+  weekStart?: string | null;
+}
+
 export interface GroceryListViewModel {
   bucketOrder: Array<'need_to_buy' | 'verify_pantry' | 'covered'>;
   buckets: GroceryListBucketViewModel[];
+  listId: string | null;
+  objectRole: 'living_grocery_list';
+  sourceProvenance: GroceryListSourceViewModel[];
+  stale: boolean;
+  staleReasons: string[];
   subtitle: string;
   summary: GroceryListSummaryViewModel;
   title: string;
+  trustLabel: string | null;
+  trustState: string | null;
+  version: string | null;
   weekStart: string;
+  weekRelation: string | null;
 }
 
 export interface GroceryListWidgetViewModel {
   bucketOrder: GroceryListViewModel['bucketOrder'];
   buckets: GroceryListWidgetBucketViewModel[];
+  listId: string | null;
+  objectRole: GroceryListViewModel['objectRole'];
+  sourceProvenance: GroceryListSourceViewModel[];
+  stale: boolean;
+  staleReasons: string[];
   subtitle: string;
   summary: GroceryListSummaryViewModel;
   title: string;
+  trustLabel: string | null;
+  trustState: string | null;
+  version: string | null;
   weekStart: string;
+  weekRelation: string | null;
 }
 
 export interface GroceryListPublicItemViewModel {
@@ -140,41 +169,68 @@ export interface GroceryListInteractiveBucketViewModel {
 export interface GroceryListPublicViewModel {
   bucketOrder: GroceryListViewModel['bucketOrder'];
   buckets: GroceryListPublicBucketViewModel[];
+  listId: string | null;
+  objectRole: GroceryListViewModel['objectRole'];
+  sourceProvenance: GroceryListSourceViewModel[];
+  stale: boolean;
+  staleReasons: string[];
   subtitle: string;
   summary: GroceryListSummaryViewModel;
   title: string;
+  trustLabel: string | null;
+  trustState: string | null;
+  version: string | null;
   weekStart: string;
+  weekRelation: string | null;
 }
 
 export interface GroceryListInteractiveViewModel {
   bucketOrder: GroceryListInteractiveBucketId[];
   buckets: GroceryListInteractiveBucketViewModel[];
+  listId: string | null;
+  objectRole: GroceryListViewModel['objectRole'];
+  sourceProvenance: GroceryListSourceViewModel[];
+  stale: boolean;
+  staleReasons: string[];
   subtitle: string;
   summary: GroceryListSummaryViewModel & {
     checkPantryCount: number;
     verifyQuantityCount: number;
   };
   title: string;
+  trustLabel: string | null;
+  trustState: string | null;
+  version: string | null;
   weekStart: string;
+  weekRelation: string | null;
 }
 
 export function buildEmptyGroceryListViewModel(weekStart: string): GroceryListViewModel {
   return {
     bucketOrder: ['need_to_buy', 'verify_pantry', 'covered'],
     buckets: [
-      { id: 'need_to_buy', label: 'Need to buy', count: 0, items: [] },
-      { id: 'verify_pantry', label: 'Verify pantry', count: 0, items: [] },
-      { id: 'covered', label: 'Covered', count: 0, items: [] },
+      { id: 'need_to_buy', label: 'To buy', count: 0, items: [] },
+      { id: 'verify_pantry', label: 'Check at home', count: 0, items: [] },
+      { id: 'covered', label: 'Done', count: 0, items: [] },
     ],
-    subtitle: `Week of ${weekStart}. You’re clear right now, with nothing left to buy or verify.`,
+    listId: null,
+    objectRole: 'living_grocery_list',
+    sourceProvenance: [],
+    stale: false,
+    staleReasons: [],
+    subtitle: `Current list · nothing left to buy or check for ${weekStart}.`,
     summary: {
       coveredCount: 0,
       headline: '0 items left to buy',
       needToBuyCount: 0,
       verifyCount: 0,
     },
-    title: 'Grocery List',
+    title: 'Grocery list',
+    trustLabel: 'Ready to shop',
+    trustState: 'ready_to_shop',
+    version: null,
     weekStart,
+    weekRelation: null,
   };
 }
 
@@ -219,10 +275,19 @@ function buildGroceryListWidgetViewModel(viewModel: GroceryListViewModel): Groce
         recipes: item.recipes,
       })),
     })),
+    listId: viewModel.listId,
+    objectRole: viewModel.objectRole,
+    sourceProvenance: viewModel.sourceProvenance,
+    stale: viewModel.stale,
+    staleReasons: viewModel.staleReasons,
     subtitle: viewModel.subtitle,
     summary: viewModel.summary,
     title: viewModel.title,
+    trustLabel: viewModel.trustLabel,
+    trustState: viewModel.trustState,
+    version: viewModel.version,
     weekStart: viewModel.weekStart,
+    weekRelation: viewModel.weekRelation,
   };
 }
 
@@ -241,10 +306,19 @@ function buildGroceryListPublicViewModel(viewModel: GroceryListViewModel): Groce
         quantityDisplay: item.quantityDisplay,
       })),
     })),
+    listId: viewModel.listId,
+    objectRole: viewModel.objectRole,
+    sourceProvenance: viewModel.sourceProvenance,
+    stale: viewModel.stale,
+    staleReasons: viewModel.staleReasons,
     subtitle: viewModel.subtitle,
     summary: viewModel.summary,
     title: viewModel.title,
+    trustLabel: viewModel.trustLabel,
+    trustState: viewModel.trustState,
+    version: viewModel.version,
     weekStart: viewModel.weekStart,
+    weekRelation: viewModel.weekRelation,
   };
 }
 
@@ -313,19 +387,19 @@ function buildGroceryListInteractiveViewModel(viewModel: GroceryListViewModel): 
     },
     {
       id: 'verify_quantity',
-      label: 'Verify quantity',
+      label: 'Check amount',
       count: groupedItems.verify_quantity.length,
       items: groupedItems.verify_quantity,
     },
     {
       id: 'check_pantry',
-      label: 'Check pantry',
+      label: 'Check at home',
       count: groupedItems.check_pantry.length,
       items: groupedItems.check_pantry,
     },
     {
       id: 'covered',
-      label: 'Covered',
+      label: 'Done',
       count: groupedItems.covered.length,
       items: groupedItems.covered,
     },
@@ -334,6 +408,11 @@ function buildGroceryListInteractiveViewModel(viewModel: GroceryListViewModel): 
   return {
     bucketOrder: ['need_to_buy', 'verify_quantity', 'check_pantry', 'covered'],
     buckets,
+    listId: viewModel.listId,
+    objectRole: viewModel.objectRole,
+    sourceProvenance: viewModel.sourceProvenance,
+    stale: viewModel.stale,
+    staleReasons: viewModel.staleReasons,
     subtitle: viewModel.subtitle,
     summary: {
       ...viewModel.summary,
@@ -341,7 +420,11 @@ function buildGroceryListInteractiveViewModel(viewModel: GroceryListViewModel): 
       verifyQuantityCount: groupedItems.verify_quantity.length,
     },
     title: viewModel.title,
+    trustLabel: viewModel.trustLabel,
+    trustState: viewModel.trustState,
+    version: viewModel.version,
     weekStart: viewModel.weekStart,
+    weekRelation: viewModel.weekRelation,
   };
 }
 
@@ -484,11 +567,11 @@ function sanitizeGenericDetail(value: string | null | undefined): string | null 
 
 function deriveCoveredHint(item: GroceryListItemViewModel): string | null {
   if (item.reason === 'Confirmed as enough on hand.') {
-    return 'verified on hand';
+    return 'Already have enough';
   }
 
   if (item.reason === 'Marked as already covered.') {
-    return 'already covered';
+    return 'Already handled';
   }
 
   return item.reason ?? null;
@@ -499,10 +582,19 @@ export function buildGroceryListStructuredContent(viewModel: GroceryListViewMode
   return {
     experience: 'grocery_list',
     groceryList: publicViewModel,
+    listId: publicViewModel.listId,
+    objectRole: publicViewModel.objectRole,
+    sourceProvenance: publicViewModel.sourceProvenance,
+    stale: publicViewModel.stale,
+    staleReasons: publicViewModel.staleReasons,
     subtitle: publicViewModel.subtitle,
     summary: publicViewModel.summary,
     title: publicViewModel.title,
+    trustLabel: publicViewModel.trustLabel,
+    trustState: publicViewModel.trustState,
+    version: publicViewModel.version,
     weekStart: publicViewModel.weekStart,
+    weekRelation: publicViewModel.weekRelation,
   };
 }
 
@@ -558,6 +650,18 @@ export function getGroceryListWidgetHtml(): string {
     border-radius: 16px;
     background: var(--grocery-card-bg);
     box-shadow: var(--grocery-shadow);
+  }
+
+  .grocery-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .grocery-header {
@@ -662,7 +766,8 @@ export function getGroceryListWidgetHtml(): string {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 0;
+    min-height: 32px;
+    padding: 6px 0;
     border: 0;
     background: transparent;
     color: inherit;
@@ -835,8 +940,11 @@ export function getGroceryListWidgetHtml(): string {
   }
 
   .grocery-verify-button[data-active="true"] {
-    background: rgba(217, 119, 6, 0.08);
-    border-color: rgba(217, 119, 6, 0.35);
+    background: var(--grocery-warn);
+    border-color: var(--grocery-warn);
+    color: #ffffff;
+    box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.18);
+    font-weight: 700;
   }
 
   .grocery-verify-button:hover {
@@ -873,13 +981,14 @@ export function getGroceryListWidgetHtml(): string {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 22px;
-    padding-top: 1px;
+    min-width: 32px;
+    min-height: 32px;
+    margin: -5px 0;
   }
 
   .grocery-item-toggle input {
-    width: 18px;
-    height: 18px;
+    width: 24px;
+    height: 24px;
     margin: 0;
     accent-color: var(--grocery-accent);
   }
@@ -955,6 +1064,7 @@ export function getGroceryListWidgetHtml(): string {
 
   .grocery-sync-button-add,
   .grocery-sync-button,
+  .grocery-sync-refresh,
   .grocery-sync-reset {
     appearance: none;
     border: 1px solid var(--grocery-button-border);
@@ -1026,6 +1136,7 @@ export function getGroceryListWidgetHtml(): string {
 
   .grocery-sync-button-add:not([disabled]):hover,
   .grocery-sync-button:not([disabled]):hover,
+  .grocery-sync-refresh:not([disabled]):hover,
   .grocery-sync-reset:not([disabled]):hover {
     border-color: var(--grocery-accent);
     transform: translateY(-1px);
@@ -1043,8 +1154,14 @@ export function getGroceryListWidgetHtml(): string {
     color: var(--grocery-text-muted);
   }
 
+  .grocery-sync-refresh {
+    background: #fff;
+    color: var(--grocery-text-muted);
+  }
+
   .grocery-sync-button-add[disabled],
   .grocery-sync-button[disabled],
+  .grocery-sync-refresh[disabled],
   .grocery-sync-reset[disabled] {
     cursor: default;
     opacity: 0.55;
@@ -1132,14 +1249,44 @@ export function getGroceryListWidgetHtml(): string {
         .replace(/'/g, '&#39;');
     }
 
-    function getViewModel() {
-      var metadata = getOpenAI().toolResponseMetadata;
-      if (metadata && metadata.groceryList) {
-        return metadata.groceryList;
+    function findGroceryList(candidate) {
+      if (!candidate || typeof candidate !== 'object') {
+        return null;
       }
-      var output = getOpenAI().toolOutput;
-      if (output && output.groceryList) {
-        return output.groceryList;
+      if (candidate.groceryList) {
+        return candidate.groceryList;
+      }
+      if (candidate.structuredContent && candidate.structuredContent.groceryList) {
+        return candidate.structuredContent.groceryList;
+      }
+      if (candidate.toolOutput && candidate.toolOutput.groceryList) {
+        return candidate.toolOutput.groceryList;
+      }
+      if (candidate.toolResponseMetadata && candidate.toolResponseMetadata.groceryList) {
+        return candidate.toolResponseMetadata.groceryList;
+      }
+      if (candidate._meta && candidate._meta.groceryList) {
+        return candidate._meta.groceryList;
+      }
+      return null;
+    }
+
+    function getViewModel() {
+      var openai = getOpenAI();
+      var candidates = [
+        openai.toolResponseMetadata,
+        openai.toolOutput,
+        openai.structuredContent,
+        openai.params,
+        openai.requestParams,
+        openai.modalParams,
+        openai,
+      ];
+      for (var index = 0; index < candidates.length; index += 1) {
+        var groceryList = findGroceryList(candidates[index]);
+        if (groceryList) {
+          return groceryList;
+        }
       }
       return null;
     }
@@ -1206,7 +1353,7 @@ export function getGroceryListWidgetHtml(): string {
     function renderEmpty() {
       root.innerHTML = [
         '<article class="grocery-card">',
-        '<p class="grocery-kicker">Fluent grocery list</p>',
+        '<p class="grocery-kicker">Grocery list</p>',
         '<h1 class="grocery-headline">Grocery widget · ${MEALS_GROCERY_LIST_WIDGET_VERSION}</h1>',
         '<p class="grocery-empty">Waiting for grocery data…</p>',
         '</article>',
@@ -1353,7 +1500,7 @@ export function getGroceryListWidgetHtml(): string {
       } catch (error) {
         syncPending = false;
         syncSent = false;
-        syncError = 'Unable to add that grocery item right now.';
+        syncError = 'Unable to add that grocery item right now. Refresh the list before trying again.';
         render();
       }
     }
@@ -1363,12 +1510,85 @@ export function getGroceryListWidgetHtml(): string {
       render();
     }
 
+    var bridgeRpcId = 0;
+    var bridgeReady = null;
+    var bridgePending = Object.create(null);
+
+    function getBridgeTargets() {
+      var targets = [];
+      if (window.parent && window.parent !== window) targets.push(window.parent);
+      try {
+        if (window.top && window.top !== window && targets.indexOf(window.top) === -1) {
+          targets.push(window.top);
+        }
+      } catch (error) {}
+      return targets;
+    }
+
+    function isBridgeSource(source) {
+      return getBridgeTargets().indexOf(source) !== -1;
+    }
+
+    window.addEventListener('message', function (event) {
+      if (!isBridgeSource(event.source)) return;
+      var message = event.data;
+      if (!message || message.jsonrpc !== '2.0') return;
+      if (message.method === 'ui/initialize' && message.id != null) {
+        event.source.postMessage({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { appCapabilities: {}, protocolVersion: '2026-01-26' },
+        }, '*');
+        bridgeNotify('ui/notifications/initialized', {});
+        return;
+      }
+      if (typeof message.id !== 'number') return;
+      var pending = bridgePending[message.id];
+      if (!pending) return;
+      delete bridgePending[message.id];
+      window.clearTimeout(pending.timer);
+      if (message.error) {
+        pending.reject(message.error);
+        return;
+      }
+      pending.resolve(message.result);
+    }, { passive: true });
+
+    function bridgeRequest(method, params, timeoutMs) {
+      return new Promise(function (resolve, reject) {
+        var targets = getBridgeTargets();
+        if (!targets.length) {
+          reject(new Error('MCP Apps bridge is not available.'));
+          return;
+        }
+        var id = ++bridgeRpcId;
+        bridgePending[id] = {
+          resolve: resolve,
+          reject: reject,
+          timer: window.setTimeout(function () {
+            delete bridgePending[id];
+            reject(new Error('MCP Apps bridge request timed out.'));
+          }, timeoutMs || 12000),
+        };
+        var message = { jsonrpc: '2.0', id: id, method: method, params: params };
+        targets.forEach(function (target) { target.postMessage(message, '*'); });
+      });
+    }
+
+    function bridgeNotify(method, params) {
+      getBridgeTargets().forEach(function (target) {
+        target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
+      });
+    }
+
+    function callToolViaBridge(name, args) {
+      return bridgeRequest('tools/call', { name: name, arguments: args || {} }, 20000);
+    }
+
     function getCallTool() {
       var openai = getOpenAI();
-      if (typeof openai.callTool === 'function') {
-        return openai.callTool.bind(openai);
-      }
-      return null;
+      var compatibilityCall = typeof openai.callTool === 'function' ? openai.callTool.bind(openai) : null;
+      return compatibilityCall || (getBridgeTargets().length ? callToolViaBridge : null);
     }
 
     function applyRenderResult(result) {
@@ -1406,6 +1626,34 @@ export function getGroceryListWidgetHtml(): string {
       syncPending = false;
       syncSent = false;
       render();
+    }
+
+    async function refreshList(viewModel) {
+      if (syncPending) {
+        return;
+      }
+
+      var callTool = getCallTool();
+      if (!callTool) {
+        syncError = 'This host cannot refresh the grocery list from the widget yet.';
+        render();
+        return;
+      }
+
+      syncError = '';
+      syncPending = true;
+      syncSent = false;
+      render();
+
+      try {
+        var refreshed = await callTool('meals_render_grocery_list_v2', { week_start: viewModel.weekStart });
+        applyRenderResult(refreshed);
+      } catch (error) {
+        syncPending = false;
+        syncSent = false;
+        syncError = 'Unable to refresh the list right now. Your local checks are still staged.';
+        render();
+      }
     }
 
     function bucketById(viewModel, bucketId) {
@@ -1549,10 +1797,10 @@ export function getGroceryListWidgetHtml(): string {
 
       return [
         '<section class="grocery-verify-block">',
-        '<div class="grocery-verify-head"><h2 class="grocery-verify-title">Verify in pantry</h2><span class="grocery-verify-count">' + escapeHtml(bucket.count) + '</span></div>',
+        '<div class="grocery-verify-head"><h2 class="grocery-verify-title">Check at home</h2><span class="grocery-verify-count">' + escapeHtml(bucket.count) + '</span></div>',
         '<div class="grocery-verify-rows">' + bucket.items.map(function (item) {
           var selectedActionId = stagedSelections[item.itemKey] || '';
-          var haveItAction = (item.syncActions || []).find(function (action) { return action.id === 'have_it'; }) || item.syncAction || null;
+          var haveItAction = (item.syncActions || []).find(function (action) { return action.id === 'already_have_enough'; }) || item.syncAction || null;
           var needItAction = (item.syncActions || []).find(function (action) { return action.id === 'need_to_buy'; }) || null;
           var detailMarkup = item.detail
             ? '<div class="grocery-verify-copy"><strong>' + escapeHtml(toDisplayName(item.displayName)) + ':</strong> ' + escapeHtml(item.detail) + '</div>'
@@ -1562,10 +1810,10 @@ export function getGroceryListWidgetHtml(): string {
             detailMarkup,
             '<div class="grocery-verify-actions">',
             haveItAction
-              ? '<button type="button" class="grocery-verify-button" data-verify-item-key="' + escapeHtml(item.itemKey) + '" data-action-id="have_it" data-active="' + (selectedActionId === 'have_it' ? 'true' : 'false') + '">Have it</button>'
+              ? '<button type="button" class="grocery-verify-button" data-verify-item-key="' + escapeHtml(item.itemKey) + '" data-action-id="already_have_enough" data-active="' + (selectedActionId === 'already_have_enough' ? 'true' : 'false') + '" aria-label="' + escapeHtml('Mark ' + toDisplayName(item.displayName) + ' as already enough at home') + '" aria-pressed="' + (selectedActionId === 'already_have_enough' ? 'true' : 'false') + '">Already have enough</button>'
               : '',
             needItAction
-              ? '<button type="button" class="grocery-verify-button" data-verify-item-key="' + escapeHtml(item.itemKey) + '" data-action-id="need_to_buy" data-active="' + (selectedActionId === 'need_to_buy' ? 'true' : 'false') + '">Need</button>'
+              ? '<button type="button" class="grocery-verify-button" data-verify-item-key="' + escapeHtml(item.itemKey) + '" data-action-id="need_to_buy" data-active="' + (selectedActionId === 'need_to_buy' ? 'true' : 'false') + '" aria-label="' + escapeHtml('Add ' + toDisplayName(item.displayName) + ' to the buy list') + '" aria-pressed="' + (selectedActionId === 'need_to_buy' ? 'true' : 'false') + '">Add to buy list</button>'
               : '',
             '</div>',
             '</div>',
@@ -1583,7 +1831,7 @@ export function getGroceryListWidgetHtml(): string {
       return [
         '<section class="grocery-section grocery-section--covered">',
         '<button type="button" class="grocery-covered-toggle" data-covered-toggle aria-expanded="' + (coveredExpanded ? 'true' : 'false') + '">',
-        '<span class="grocery-section-title">Covered (' + escapeHtml(bucket.count) + ')</span>',
+        '<span class="grocery-section-title">Done (' + escapeHtml(bucket.count) + ')</span>',
         '<span class="grocery-covered-toggle-copy">' + escapeHtml(coveredExpanded ? 'Hide' : 'Show') + '</span>',
         '</button>',
         coveredExpanded ? '<ul class="grocery-list">' + bucket.items.map(renderItem).join('') + '</ul>' : '',
@@ -1623,7 +1871,8 @@ export function getGroceryListWidgetHtml(): string {
 
       return [
         '<div class="grocery-add-form">',
-        '<input class="grocery-add-input" type="text" data-add-item-input placeholder="Add an item to your grocery list" value="' + escapeHtml(addItemDraft) + '" />',
+        '<label class="grocery-visually-hidden" for="grocery-add-item-input">Item to add</label>',
+        '<input id="grocery-add-item-input" class="grocery-add-input" type="text" data-add-item-input placeholder="Add an item to your grocery list" value="' + escapeHtml(addItemDraft) + '" />',
         '<button type="button" class="grocery-add-submit" data-add-item-submit>Add item</button>',
         '<button type="button" class="grocery-add-cancel" data-add-item-cancel>Cancel</button>',
         '</div>',
@@ -1648,10 +1897,13 @@ export function getGroceryListWidgetHtml(): string {
       syncSent = false;
       render();
 
+      var completedCount = 0;
+
         try {
           for (var index = 0; index < stagedItems.length; index += 1) {
             var stagedItem = stagedItems[index];
             await callTool(stagedItem.action.toolName, stagedItem.action.args);
+            completedCount += 1;
           }
 
         syncSent = true;
@@ -1662,7 +1914,9 @@ export function getGroceryListWidgetHtml(): string {
       } catch (error) {
         syncSent = false;
         syncPending = false;
-        syncError = 'Unable to send the grocery sync request.';
+        syncError = completedCount
+          ? 'Some selected changes may have saved before the connection failed. Refresh the list before retrying.'
+          : 'Unable to save the grocery list changes. Nothing was confirmed by the widget.';
         render();
       }
     }
@@ -1683,17 +1937,26 @@ export function getGroceryListWidgetHtml(): string {
       var stagedCount = getStagedItems(viewModel).length;
       var progress = getProgressSummary(viewModel);
       var syncCopy = stagedCount
-        ? stagedCount + ' item' + (stagedCount === 1 ? '' : 's') + ' checked. Sync once when you’re ready.'
-        : 'Check items locally, then sync them back to Fluent in one batch.';
+          ? stagedCount + ' item' + (stagedCount === 1 ? '' : 's') + ' selected. Save when you’re ready.'
+        : 'Check items locally, then save changes when you’re ready.';
       var headline = escapeHtml(viewModel.summary.needToBuyCount + ' to buy · ' + aisleGroups.length + ' aisles');
       var formattedWeekStart = formatWeekStart(viewModel.weekStart);
+      var syncStatus = syncPending
+        ? 'Saving changes.'
+        : syncError
+          ? syncError
+          : syncSent
+            ? 'Saved and refreshed.'
+            : syncCopy;
       root.innerHTML = [
         '<article class="grocery-card">',
         '<header class="grocery-header">',
         '<div class="grocery-header-top">',
         '<div class="grocery-header-copy">',
-        '<p class="grocery-kicker">Grocery list · Week of ' + escapeHtml(formattedWeekStart) + '</p>',
+        '<p class="grocery-kicker">Grocery list</p>',
         '<h1 class="grocery-headline">' + headline + '</h1>',
+        '<p class="grocery-subtitle">' + escapeHtml(viewModel.subtitle || ((viewModel.trustLabel || 'Check before shopping') + (formattedWeekStart ? ' · plan week ' + formattedWeekStart : ''))) + '</p>',
+        (viewModel.stale && viewModel.staleReasons && viewModel.staleReasons.length ? '<p class="grocery-sync-error">' + escapeHtml(viewModel.staleReasons[0]) + '</p>' : ''),
         '</div>',
         '<div class="grocery-header-controls">',
         '<div class="grocery-progress" aria-label="' + escapeHtml(progress.complete + ' of ' + progress.total + ' grocery items checked') + '">',
@@ -1703,18 +1966,20 @@ export function getGroceryListWidgetHtml(): string {
         '</div>',
         '</div>',
         '</header>',
-        aisleMarkup ? '<div class="grocery-aisles">' + aisleMarkup + '</div>' : '<p class="grocery-empty">Nothing to show for this week.</p>',
+        aisleMarkup ? '<div class="grocery-aisles">' + aisleMarkup + '</div>' : '<p class="grocery-empty">Nothing left to buy on this list.</p>',
         verifyMarkup,
         coveredMarkup,
-        '<div class="grocery-sync-bar">',
+        '<div class="grocery-sync-bar" aria-busy="' + (syncPending ? 'true' : 'false') + '">',
         '<p class="grocery-sync-copy">' + escapeHtml(syncCopy) + '</p>',
         '<div class="grocery-sync-actions">',
         renderAddItemControls(),
-        '<button type="button" class="grocery-sync-button" data-sync-button' + (stagedCount && !syncPending ? '' : ' disabled') + '>' + escapeHtml(syncPending ? 'Syncing to Fluent…' : 'Sync to Fluent') + '</button>',
+        '<button type="button" class="grocery-sync-button" data-sync-button aria-label="' + escapeHtml(stagedCount ? 'Save ' + stagedCount + ' grocery list change' + (stagedCount === 1 ? '' : 's') : 'Save changes') + '"' + (stagedCount && !syncPending ? '' : ' disabled') + '>' + escapeHtml(syncPending ? 'Saving…' : 'Save changes') + '</button>',
+        '<button type="button" class="grocery-sync-refresh" data-refresh-button aria-label="Refresh list"' + (syncPending ? ' disabled' : '') + '>Refresh list</button>',
         (stagedCount ? '<button type="button" class="grocery-sync-reset" data-reset-button' + (syncPending ? ' disabled' : '') + '>Reset</button>' : ''),
         '</div>',
-        (syncError ? '<p class="grocery-sync-error">' + escapeHtml(syncError) + '</p>' : ''),
-        (syncSent ? '<p class="grocery-sync-sent">Fluent updated those checked items and refreshed the grocery list.</p>' : ''),
+        '<p class="grocery-visually-hidden" role="status" aria-live="polite">' + escapeHtml(syncStatus) + '</p>',
+        (syncError ? '<p class="grocery-sync-error" role="alert">' + escapeHtml(syncError) + '</p>' : ''),
+        (syncSent ? '<p class="grocery-sync-sent">Saved and refreshed.</p>' : ''),
         '</div>',
         '</article>',
       ].join('');
@@ -1738,6 +2003,13 @@ export function getGroceryListWidgetHtml(): string {
           void sendSync(viewModel);
         });
       }
+
+        var refreshButton = root.querySelector('[data-refresh-button]');
+        if (refreshButton) {
+          refreshButton.addEventListener('click', function () {
+            void refreshList(viewModel);
+          });
+        }
 
         var resetButton = root.querySelector('[data-reset-button]');
         if (resetButton) {

@@ -1308,15 +1308,25 @@ export class StyleService {
           )
         : 0;
     const evidenceNotes: string[] = [];
-    const candidateVisualGrounding = visualEvidence.candidateInspected
+    const candidateHasImage = candidate.imageUrls.length > 0;
+    const candidateHasHostInspection =
+      visualEvidence.candidateInspected &&
+      visualEvidence.candidateObservations.length > 0 &&
+      (candidateHasImage || visualEvidence.source === 'host_vision');
+    const candidateVisualGrounding = candidateHasHostInspection
       ? 'host_visual_inspection'
-      : candidate.imageUrls.length > 0
+      : candidateHasImage
         ? 'image_reference_only'
         : 'none';
-    if (visualEvidence.candidateInspected) {
+    if (candidateHasHostInspection && candidateHasImage) {
       evidenceNotes.push('candidate image was inspected by the host before this purchase analysis was finalized');
+    } else if (candidateHasHostInspection) {
+      evidenceNotes.push('candidate image was inspected in the host, but no renderable image URL was passed to Fluent');
     } else if (candidate.imageUrls.length === 0) {
       evidenceNotes.push('no candidate image provided; analysis relies on text attributes and closet state');
+      if (visualEvidence.candidateInspected) {
+        evidenceNotes.push('submitted visual observations were not accepted as final grounding because the candidate has no image reference');
+      }
     } else {
       evidenceNotes.push('candidate image reference is present, but purchase analysis has not inspected pixels; use style_get_visual_bundle and direct image reading before making color or material claims');
     }
@@ -2663,7 +2673,7 @@ function buildBaselineComparatorReasoning(input: {
     confidence: 'medium' as const,
     itemId: item.id,
     notes: [`same category lane (${input.candidate.category.toLowerCase()})`],
-    overlapScore: item.category === input.candidate.category ? 58 : 42,
+    overlapScore: item.category === input.candidate.category ? (sameCandidateColorFamily(input.candidate, item) ? 68 : 58) : 42,
     relation: 'adjacent' as const,
     summary: `${item.name ?? item.id} sits in a nearby lane, but it is not a clean duplicate.`,
   }));
@@ -2736,8 +2746,17 @@ function comparePurchaseBucketEntries(
 
   return (
     Number(right.status === 'active') - Number(left.status === 'active') ||
+    Number(sameCandidateColorFamily(candidate, right)) - Number(sameCandidateColorFamily(candidate, left)) ||
     left.name?.localeCompare(right.name ?? '') ||
     0
+  );
+}
+
+function sameCandidateColorFamily(candidate: StylePurchaseAnalysis['candidate'], item: StyleItemRecord): boolean {
+  return Boolean(
+    candidate.colorFamily &&
+      item.colorFamily &&
+      item.colorFamily.toLowerCase() === candidate.colorFamily.toLowerCase(),
   );
 }
 

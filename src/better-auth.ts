@@ -5,6 +5,7 @@ import {
   oauthProviderOpenIdConfigMetadata,
 } from '@better-auth/oauth-provider';
 import { betterAuth } from 'better-auth';
+import { hashPassword } from 'better-auth/crypto';
 import { getMigrations } from 'better-auth/db/migration';
 import { jwt, magicLink } from 'better-auth/plugins';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
@@ -57,8 +58,14 @@ import { hasHostedEmailDelivery, sendHostedMagicLinkEmail } from './hosted-email
 import { resolveHostedCloudAccess, resolveHostedCloudClientDecision } from './hosted-access-state';
 import { escapeHeaderQuotedString } from './http-header';
 import { createFluentMcpServer } from './mcp';
+import { resolveMcpRuntimeProfileForRequest } from './chatgpt-profile-routing';
 import { wrapCloudflareDatabase } from './storage';
 import { ensureHostedUserProvisioned } from './hosted-identity';
+import {
+  handleAccountBillingCheckoutRequest,
+  handleAccountBillingPortalRequest as handleAuthoritativeAccountBillingPortalRequest,
+  handleAccountStatusForIdentity,
+} from './account-billing';
 import {
   createBillingPortalResponseForCurrentUser,
   reactivateCurrentUserAccount,
@@ -91,6 +98,9 @@ export async function maybeHandleBetterAuthRequest(
   if (url.pathname === '/ops/cloud-onboarding') {
     return handleCloudOnboardingOpsRequest(request, env);
   }
+  if (request.method === 'POST' && url.pathname === '/ops/reviewer-demo-credentials') {
+    return handleReviewerDemoCredentialsOpsRequest(request, env);
+  }
   if (request.method === 'POST' && url.pathname === '/ops/better-auth/migrate') {
     return handleBetterAuthMigration(request, env);
   }
@@ -117,6 +127,18 @@ export async function maybeHandleBetterAuthRequest(
 
   if (request.method === 'GET' && url.pathname === '/account/billing') {
     return handleAccountBillingPage(request, env);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/account/status') {
+    return handleAccountStatusRequest(request, env);
+  }
+
+  if (request.method === 'POST' && url.pathname === '/account/billing/checkout') {
+    return handleAccountBillingCheckoutSessionRequest(request, env);
+  }
+
+  if (request.method === 'POST' && url.pathname === '/account/billing/portal') {
+    return handleAccountBillingPortalSessionRequest(request, env);
   }
 
   if (request.method === 'POST' && url.pathname === '/api/account/billing/portal') {
@@ -292,6 +314,7 @@ async function handleSignInPage(request: Request, env: CloudRuntimeEnv): Promise
       callbackUrl: deriveMagicLinkCallbackUrl(request.url),
       emailDeliveryReady: hasHostedEmailDelivery(env),
       origin,
+      passwordRedirectUrl: derivePostSignInRedirectUrl(request.url, true),
       provisioningError: provisioning.error,
       provisioningResult: provisioning.result,
       session,
@@ -473,6 +496,82 @@ async function handleAccountBillingPortalRequest(request: Request, env: CloudRun
   return createBillingPortalResponseForCurrentUser(request, env, wrapCloudflareDatabase(env.DB), {
     email: session.user.email ?? null,
     id: session.user.id,
+  });
+}
+
+async function handleAccountStatusRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  let auth;
+  try {
+    auth = createBetterAuth(request, env);
+  } catch {
+    return json({ error: 'Hosted auth is unavailable.' }, 503);
+  }
+
+  const session = await getBetterAuthSession(auth, request);
+  if (!session?.user?.id) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  return handleAccountStatusForIdentity({
+    db: wrapCloudflareDatabase(env.DB),
+    env,
+    identity: {
+      accountId: null,
+      email: session.user.email ?? null,
+      tenantId: null,
+      userId: session.user.id,
+    },
+    request,
+  });
+}
+
+async function handleAccountBillingCheckoutSessionRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  const sessionRequest = await accountBillingRequestWithSessionIdentity(request, env);
+  if (sessionRequest instanceof Response) {
+    return sessionRequest;
+  }
+  return handleAccountBillingCheckoutRequest({
+    db: wrapCloudflareDatabase(env.DB),
+    env,
+    request: sessionRequest,
+  });
+}
+
+async function handleAccountBillingPortalSessionRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  const sessionRequest = await accountBillingRequestWithSessionIdentity(request, env);
+  if (sessionRequest instanceof Response) {
+    return sessionRequest;
+  }
+  return handleAuthoritativeAccountBillingPortalRequest({
+    db: wrapCloudflareDatabase(env.DB),
+    env,
+    request: sessionRequest,
+  });
+}
+
+async function accountBillingRequestWithSessionIdentity(request: Request, env: CloudRuntimeEnv): Promise<Request | Response> {
+  let auth;
+  try {
+    auth = createBetterAuth(request, env);
+  } catch {
+    return json({ error: 'Hosted auth is unavailable.' }, 503);
+  }
+
+  const session = await getBetterAuthSession(auth, request);
+  if (!session?.user?.id) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  const payload = (await request.clone().json().catch(() => ({}))) as Record<string, unknown>;
+  const body = JSON.stringify({
+    ...payload,
+    email: session.user.email ?? payload.email ?? null,
+    userId: session.user.id,
+  });
+  return new Request(request.url, {
+    headers: request.headers,
+    method: request.method,
+    body,
   });
 }
 
@@ -667,6 +766,11 @@ export function createBetterAuthConfig(request: Request, env: CloudRuntimeEnv) {
     baseURL,
     database: env.DB,
     disabledPaths: ['/token'],
+    emailAndPassword: {
+      disableSignUp: true,
+      enabled: true,
+      minPasswordLength: 16,
+    },
     plugins,
     secret,
     trustedOrigins: [new URL(baseURL).origin],
@@ -822,8 +926,9 @@ async function handleBetterAuthMcpRequest(
 
   const url = new URL(request.url);
   const route = url.pathname === '/mcp/chatgpt' ? '/mcp/chatgpt' : '/mcp';
+  const profile = resolveMcpRuntimeProfileForRequest(url.pathname, authResult);
   const server = createFluentMcpServer(coreBindingsFromCloudEnv(env), url.origin, {
-    profile: route === '/mcp/chatgpt' ? 'chatgpt_app' : 'full',
+    profile,
   });
   const { createMcpHandler } = await import('agents/mcp');
   const handler = createMcpHandler(server, {
@@ -1026,6 +1131,167 @@ async function handleCloudOnboardingOpsRequest(request: Request, env: CloudRunti
   return json({ error: 'Method not allowed' }, 405);
 }
 
+async function handleReviewerDemoCredentialsOpsRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  const migrationToken = env.BETTER_AUTH_MIGRATION_TOKEN?.trim();
+  if (!migrationToken) {
+    return json(
+      {
+        error: 'Reviewer demo credentials are disabled until BETTER_AUTH_MIGRATION_TOKEN is configured.',
+      },
+      503,
+    );
+  }
+
+  const presented = parseBearerToken(request.headers.get('authorization'));
+  if (presented !== migrationToken) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  const payload = (await request.json().catch(() => ({}))) as {
+    actor_id?: string;
+    actor_label?: string;
+    actor_type?: 'operator' | 'support';
+    email?: string;
+    name?: string;
+    note?: string;
+    password?: string;
+    tags?: string[] | string;
+  };
+  const email = payload.email?.trim().toLowerCase();
+  const password = payload.password?.trim();
+  if (!email || !email.includes('@')) {
+    return json({ error: 'A reviewer email is required.' }, 400);
+  }
+  if (!password || password.length < 16) {
+    return json({ error: 'A reviewer password of at least 16 characters is required.' }, 400);
+  }
+
+  const db = wrapCloudflareDatabase(env.DB);
+  const onboarding = await applyFluentCloudOperatorAction(db, {
+    action: 'provision_reviewer_demo',
+    actorId: payload.actor_id ?? 'operator-cli',
+    actorLabel: payload.actor_label ?? 'operator-cli',
+    actorType: payload.actor_type ?? 'operator',
+    email,
+    note: payload.note ?? 'Reviewer demo credentials issued through protected ops path.',
+    supportTags: payload.tags ?? ['chatgpt-app'],
+  });
+  if (onboarding.accountKind !== 'reviewer_demo') {
+    return json({ error: 'Reviewer credential issuance requires accountKind=reviewer_demo.' }, 409);
+  }
+
+  const user = await upsertReviewerDemoBetterAuthCredential(db, {
+    email,
+    name: payload.name?.trim() || 'Fluent Reviewer Demo',
+    password,
+  });
+  const accessDecision = await resolveHostedCloudAccess(db, env, {
+    email,
+    userId: user.id,
+  });
+  if (!accessDecision.allowed || !accessDecision.provisioningSource) {
+    return json({ error: accessDecision.code ?? 'Reviewer demo account is not allowed for hosted access.' }, 409);
+  }
+
+  const hostedUser = {
+    email,
+    id: user.id,
+    name: user.name,
+  };
+  let provisioning: Awaited<ReturnType<typeof ensureHostedUserProvisioned>>;
+  try {
+    provisioning = await ensureHostedUserProvisioned(db, hostedUser, {
+      cloudAccess: accessDecision.provisioningSource,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes('does not have a valid Fluent Cloud invite')) {
+      throw error;
+    }
+    provisioning = await ensureHostedUserProvisioned(db, hostedUser, {
+      cloudAccess: { accessSource: 'legacy_allowlist' },
+    });
+  }
+  const verified = await markFluentCloudEmailVerified(db, {
+    email,
+    note: 'Reviewer demo credential sign-in path prepared.',
+    tenantId: provisioning.tenantId,
+    userId: user.id,
+  });
+  if (!verified) {
+    return json({ error: 'Reviewer demo onboarding record was not found after credential setup.' }, 500);
+  }
+
+  return json({
+    accountKind: verified.accountKind,
+    currentState: verified.currentState,
+    email: verified.email,
+    message: 'Reviewer demo credentials are ready.',
+    profileId: provisioning.profileId,
+    tenantMarker: 'accountKind=reviewer_demo',
+  });
+}
+
+async function upsertReviewerDemoBetterAuthCredential(
+  db: ReturnType<typeof wrapCloudflareDatabase>,
+  input: {
+    email: string;
+    name: string;
+    password: string;
+  },
+): Promise<{ email: string; id: string; name: string }> {
+  const now = new Date().toISOString();
+  const existingUser = await db
+    .prepare('SELECT id, email, name FROM "user" WHERE email = ? LIMIT 1')
+    .bind(input.email)
+    .first<{ email: string; id: string; name: string }>();
+  const user = existingUser ?? {
+    email: input.email,
+    id: `reviewer_demo:${crypto.randomUUID()}`,
+    name: input.name,
+  };
+
+  if (!existingUser) {
+    await db
+      .prepare(
+        `INSERT INTO "user" (id, name, email, emailVerified, image, createdAt, updatedAt)
+         VALUES (?, ?, ?, 1, NULL, ?, ?)`,
+      )
+      .bind(user.id, user.name, user.email, now, now)
+      .run();
+  } else if (existingUser.name !== input.name) {
+    await db
+      .prepare('UPDATE "user" SET name = ?, emailVerified = 1, updatedAt = ? WHERE id = ?')
+      .bind(input.name, now, user.id)
+      .run();
+    user.name = input.name;
+  }
+
+  const passwordHash = await hashPassword(input.password);
+  const existingAccount = await db
+    .prepare('SELECT id FROM "account" WHERE userId = ? AND providerId = ? LIMIT 1')
+    .bind(user.id, 'credential')
+    .first<{ id: string }>();
+  if (existingAccount?.id) {
+    await db
+      .prepare('UPDATE "account" SET password = ?, accountId = ?, updatedAt = ? WHERE id = ?')
+      .bind(passwordHash, user.id, now, existingAccount.id)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO "account" (
+          id, accountId, providerId, userId, accessToken, refreshToken, idToken,
+          accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt
+        ) VALUES (?, ?, 'credential', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)`,
+      )
+      .bind(`account:credential:${crypto.randomUUID()}`, user.id, user.id, passwordHash, now, now)
+      .run();
+  }
+
+  return user;
+}
+
 async function verifyHostedAccessToken(
   env: CloudRuntimeEnv,
   request: Request,
@@ -1033,7 +1299,7 @@ async function verifyHostedAccessToken(
   resourceOrigin: string,
 ): Promise<JWTPayload> {
   const issuer = `${resolveBetterAuthBaseUrl(request, env)}/api/auth`;
-  const audience = [resourceOrigin, `${resourceOrigin}/mcp`];
+  const audience = [resourceOrigin, `${resourceOrigin}/mcp`, `${resourceOrigin}/mcp/chatgpt`];
 
   try {
     const { payload } = await jwtVerify(
@@ -1079,6 +1345,7 @@ async function lookupHostedOpaqueAccessTokenPayload(
     throw new Error('token inactive');
   }
 
+  let clientMetadata: OAuthClientMetadata = {};
   if (accessToken.clientId) {
     const client = await db
       .prepare('SELECT clientId, disabled, metadata FROM oauthClient WHERE clientId = ?')
@@ -1087,6 +1354,7 @@ async function lookupHostedOpaqueAccessTokenPayload(
     if (!client?.clientId || Number(client.disabled ?? 0) !== 0) {
       throw new Error('token inactive');
     }
+    clientMetadata = parseOAuthClientMetadata(client.metadata);
   }
 
   let sid: string | undefined;
@@ -1129,6 +1397,8 @@ async function lookupHostedOpaqueAccessTokenPayload(
     ...customClaims,
     azp: accessToken.clientId ?? undefined,
     client_id: accessToken.clientId ?? undefined,
+    client_name: clientMetadata.clientName,
+    client_redirect_uris: clientMetadata.redirectUris,
     exp: Math.floor(expiresAt.getTime() / 1000),
     iat: Math.floor(createdAt.getTime() / 1000),
     iss: issuer,
@@ -1298,6 +1568,40 @@ function parseJsonStringArray(value: string | null | undefined): string[] {
   }
 }
 
+type OAuthClientMetadata = {
+  clientName?: string;
+  redirectUris?: string[];
+};
+
+function parseOAuthClientMetadata(value: string | null | undefined): OAuthClientMetadata {
+  if (!value) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return {
+      clientName:
+        typeof parsed.client_name === 'string'
+          ? parsed.client_name
+          : typeof parsed.clientName === 'string'
+            ? parsed.clientName
+            : undefined,
+      redirectUris: stringArrayValue(parsed.redirect_uris) ?? stringArrayValue(parsed.redirectUris) ?? [],
+    };
+  } catch {
+    return {};
+  }
+}
+
+function stringArrayValue(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => entry.length > 0);
+}
+
 function betterAuthConfigErrorResponse(error: unknown): Response {
   const payload = createFluentCloudAccessFailurePayload('temporarily_unavailable');
   return json(
@@ -1354,6 +1658,7 @@ function renderSignInPage(input: {
   callbackUrl: string;
   emailDeliveryReady: boolean;
   origin: string;
+  passwordRedirectUrl: string | null;
   provisioningError: string | null;
   provisioningResult: Awaited<ReturnType<typeof ensureHostedUserProvisioned>> | null;
   session: BetterAuthSessionPayload;
@@ -1381,9 +1686,24 @@ function renderSignInPage(input: {
 <h1 class="display">Sign in with <span class="accent">email</span></h1>
 <p class="lede">Fluent is in early access and open source. Approved accounts can sign in here today, and everyone else can request early access or explore the open-source runtime.</p>
 <div class="auth-card">
-  <form id="magic-link-form" class="stack">
+  <form id="password-form" class="stack">
     <label>
       <span class="field-label">Email address</span>
+      <input type="email" name="email" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="you@example.com" required />
+    </label>
+    <label>
+      <span class="field-label">Password</span>
+      <input type="password" name="password" autocomplete="current-password" required />
+    </label>
+    <button id="password-submit" type="submit" class="btn-primary">
+      Sign in
+      <span class="btn-arrow">→</span>
+    </button>
+  </form>
+  <div class="divider" role="presentation"><span>or</span></div>
+  <form id="magic-link-form" class="stack">
+    <label>
+      <span class="field-label">Email address for sign-in link</span>
       <input type="email" name="email" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="you@example.com" required />
     </label>
     <button id="magic-link-submit" type="submit" class="btn-primary"${input.emailDeliveryReady ? '' : ' disabled'}>
@@ -1394,7 +1714,8 @@ function renderSignInPage(input: {
   <div id="form-status" class="meta status-live" aria-live="polite"></div>
 </div>
 <ul class="support-list">
-  <li>No password required.</li>
+  <li>Reviewer demo accounts can sign in with issued credentials.</li>
+  <li>Approved early-access accounts may also use a sign-in link.</li>
   <li>Only approved early-access accounts can finish sign-in right now.</li>
   <li>Request early access at <a href="${escapeHtml(FLUENT_CLOUD_WAITLIST_URL)}">${escapeHtml(FLUENT_CLOUD_WAITLIST_URL)}</a>.</li>
   <li>Explore the open-source runtime at <a href="${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}">${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}</a>.</li>
@@ -1409,9 +1730,38 @@ ${provisioningWarning}
 ${emailDeliveryWarning}
 <script>
 const form = document.getElementById('magic-link-form');
+const passwordForm = document.getElementById('password-form');
 const status = document.getElementById('form-status');
 const submitButton = document.getElementById('magic-link-submit');
+const passwordSubmitButton = document.getElementById('password-submit');
 const callbackUrl = ${JSON.stringify(input.callbackUrl)};
+const passwordRedirectUrl = ${JSON.stringify(input.passwordRedirectUrl)};
+passwordForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (passwordSubmitButton) passwordSubmitButton.disabled = true;
+  status.textContent = 'Signing in…';
+  const formData = new FormData(passwordForm);
+  const payload = {
+    email: String(formData.get('email') || '').trim(),
+    password: String(formData.get('password') || ''),
+  };
+  try {
+    const response = await fetch('${input.origin}/api/auth/sign-in/email', {
+      method: 'POST',
+      headers: { 'accept': 'application/json', 'content-type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.message || data?.error || 'Unable to sign in.');
+    status.textContent = 'Signed in. Continuing…';
+    window.location.assign(passwordRedirectUrl || '${input.origin}/sign-in');
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    if (passwordSubmitButton) passwordSubmitButton.disabled = false;
+  }
+});
 form?.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (submitButton) submitButton.disabled = true;
@@ -1803,13 +2153,22 @@ function renderAuthShell(input: { body: string; title: string }): string {
       font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase;
       color: var(--faint);
     }
-    input[type="email"] {
+    .divider {
+      display: flex; align-items: center; gap: 12px;
+      margin: 18px 0; color: var(--faint);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase;
+    }
+    .divider::before, .divider::after {
+      content: ""; height: 1px; flex: 1; background: var(--border);
+    }
+    input[type="email"], input[type="password"] {
       border: 1px solid var(--border); border-radius: 10px;
       padding: 13px 15px; font: inherit; font-size: 15px;
       background: rgba(0,0,0,0.3); color: var(--ink-strong);
       transition: border-color .18s ease, background .18s ease;
     }
-    input[type="email"]::placeholder { color: var(--faint); }
+    input[type="email"]::placeholder, input[type="password"]::placeholder { color: var(--faint); }
     input:focus-visible, button:focus-visible {
       outline: none; border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(212,196,168,0.18);
@@ -1970,7 +2329,7 @@ async function proxyBetterAuthRequest(
 
 function buildProtectedResourceMetadata(request: Request, env: CloudRuntimeEnv) {
   const baseUrl = resolveBetterAuthBaseUrl(request, env);
-  const resource = `${new URL(request.url).origin}/mcp`;
+  const resource = protectedResourceForMetadataRequest(request);
   return {
     authorization_servers: [`${baseUrl}/api/auth`],
     bearer_methods_supported: ['header'],
@@ -1998,6 +2357,24 @@ async function rewriteMetadataResponse(request: Request, response: Response): Pr
   rewriteMetadataUrl(parsed, 'token_endpoint', origin, '/token');
   rewriteMetadataUrl(parsed, 'registration_endpoint', origin, '/register');
   return json(parsed, response.status);
+}
+
+function protectedResourceForMetadataRequest(request: Request): string {
+  const url = new URL(request.url);
+  const defaultResource = `${url.origin}/mcp`;
+  const requestedResource = url.searchParams.get('resource');
+  if (!requestedResource) {
+    return defaultResource;
+  }
+  try {
+    const parsed = new URL(requestedResource);
+    if (parsed.origin === url.origin && (parsed.pathname === '/mcp' || parsed.pathname === '/mcp/chatgpt')) {
+      return parsed.toString().replace(/\/$/, '');
+    }
+  } catch {
+    return defaultResource;
+  }
+  return defaultResource;
 }
 
 function rewriteMetadataUrl(
@@ -2043,6 +2420,10 @@ function jwtPayloadToAuthProps(payload: JWTPayload, accessToken: string): Fluent
           ? record.azp
           : undefined,
     oauthClientName: typeof record.client_name === 'string' ? record.client_name : undefined,
+    oauthClientRedirectUris:
+      stringArrayValue(record.client_redirect_uris) ??
+      stringArrayValue(record.redirect_uris) ??
+      [],
     profileId: typeof record.profileId === 'string' ? record.profileId : undefined,
     scope,
     tenantId: typeof record.tenantId === 'string' ? record.tenantId : undefined,
@@ -2061,7 +2442,7 @@ function createBearerAuthErrorResponse(
   resourceOrigin: string,
   requiredScopes: readonly string[],
 ): Response {
-  const resourceMetadataUrl = `${resourceOrigin}/.well-known/oauth-protected-resource`;
+  const resourceMetadataUrl = protectedResourceMetadataUrlForMcpRequest(request, resourceOrigin);
   const headerParts = [
     'Bearer realm="OAuth"',
     `resource_metadata="${escapeHeaderQuotedString(resourceMetadataUrl)}"`,
@@ -2084,6 +2465,15 @@ function createBearerAuthErrorResponse(
       status: 401,
     },
   );
+}
+
+function protectedResourceMetadataUrlForMcpRequest(request: Request, resourceOrigin: string): string {
+  const url = new URL(request.url);
+  const metadataUrl = new URL('/.well-known/oauth-protected-resource', resourceOrigin);
+  if (url.pathname === '/mcp/chatgpt') {
+    metadataUrl.searchParams.set('resource', `${resourceOrigin}/mcp/chatgpt`);
+  }
+  return metadataUrl.toString();
 }
 
 async function maybeCreateFluentCloudEarlyAccessPage(
@@ -2162,7 +2552,7 @@ function createFluentCloudEarlyAccessBearerResponse(
   code: Parameters<typeof buildFluentCloudAccessFailureDetails>[0],
   context: Parameters<typeof buildFluentCloudAccessFailureDetails>[1] = {},
 ): Response {
-  const resourceMetadataUrl = `${resourceOrigin}/.well-known/oauth-protected-resource`;
+  const resourceMetadataUrl = protectedResourceMetadataUrlForMcpRequest(request, resourceOrigin);
   const details = buildFluentCloudAccessFailureDetails(code, context);
   const headerParts = [
     'Bearer realm="OAuth"',

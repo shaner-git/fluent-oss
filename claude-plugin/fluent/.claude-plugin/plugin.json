@@ -29,7 +29,7 @@
       "oss"
     ],
     "defaultDeploymentTrack": "oss",
-    "minimumContractVersion": "2026-04-26.fluent-core-v1.48",
+    "minimumContractVersion": "2026-05-12.fluent-core-v1.66",
     "requiredHostedScopes": [
       "meals:read",
       "meals:write",

@@ -17,6 +17,7 @@ import {
   normalizeStylePurchaseCandidate,
   parseJsonLike,
 } from './domains/style/helpers';
+import { buildSignedStyleRemoteImageUrl } from './domains/style/media';
 import type { StyleVisualBundleAssetRecord, StyleVisualBundleRecord } from './domains/style/types';
 import {
   buildPurchaseAnalysisMetadata,
@@ -24,13 +25,23 @@ import {
   buildPurchaseAnalysisViewModel,
   getPurchaseAnalysisWidgetHtml,
   type PurchaseAnalysisImageHints,
+  STYLE_PURCHASE_ANALYSIS_BRIDGE_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_ACTIONS_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_CACHED_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_COMPARISON_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_COMBINED_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_DECISION_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_EDITORIAL_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_FRAMED_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_HUMAN_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_HYDRATION_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_IMAGE_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_LEGACY_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_PHOTO_READ_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_SECONDARY_ACTION_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_TITLE_PREVIOUS_TEMPLATE_URI,
 } from './domains/style/purchase-analysis';
 import {
   presentStyleDescriptorBacklog,
@@ -63,6 +74,13 @@ const styleDescriptorBacklogFocusSchema = z.enum(['priority', 'blocked', 'all'])
 const stylePurchaseAnalysisActionIdSchema = z.enum(['log_purchase']);
 const STYLE_PURCHASE_VISUAL_EVIDENCE_SOURCE = 'style_submit_purchase_visual_observations';
 const STYLE_PURCHASE_VISUAL_EVIDENCE_CACHE_TTL_MS = 15 * 60 * 1000;
+const STYLE_PURCHASE_HOST_VISION_SOURCES = new Set([
+  'assistant_image_inspection',
+  'host_vision',
+  'host_vision_uploaded_image',
+  'host_uploaded_image',
+  'uploaded_image',
+]);
 const INSUFFICIENT_PURCHASE_VISUAL_EVIDENCE_PATTERNS = [
   /\b(?:cannot|can't|couldn't|could not|unable to)\s+(?:inspect|see|view|open|access)\b/,
   /\b(?:did not|didn't)\s+(?:inspect|see|view|open|access)\s+(?:the\s+)?(?:candidate|product|image|photo|pixels?)\b/,
@@ -96,6 +114,36 @@ const stylePurchaseVisualEvidenceInputSchema = z.object({
   visionPacketId: z.string().nullable().optional(),
   visualObservationId: z.string().optional(),
 });
+
+type AppsOAuth2SecurityScheme = {
+  scopes: string[];
+  type: 'oauth2';
+};
+
+function withAppsSecurity<T extends { _meta?: Record<string, unknown> }>(
+  config: T,
+  securitySchemes: AppsOAuth2SecurityScheme[],
+  options?: { uiVisibility?: string[] },
+): T {
+  const meta: Record<string, unknown> = {
+    ...(config._meta ?? {}),
+    securitySchemes,
+  };
+  if (options?.uiVisibility) {
+    const currentUi = meta.ui && typeof meta.ui === 'object' && !Array.isArray(meta.ui)
+      ? (meta.ui as Record<string, unknown>)
+      : {};
+    meta.ui = {
+      ...currentUi,
+      visibility: options.uiVisibility,
+    };
+  }
+  return {
+    ...config,
+    securitySchemes,
+    _meta: meta,
+  } as T;
+}
 const stylePurchaseVisualObservationRoleSchema = z.enum([
   'candidate',
   'direct_comparator',
@@ -117,8 +165,76 @@ const stylePurchaseVisualObservationDetailSchema = z.object({
     silhouette: styleConcreteVisualObservationSchema,
   }),
 });
+function omitNullCandidateFields(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(([, candidateValue]) => candidateValue !== null),
+  );
+}
+const stylePurchaseCandidateObjectInputSchema = z.preprocess(
+  omitNullCandidateFields,
+  z.object({
+    avoidUseCases: z.array(z.string()).optional(),
+    brand: z.string().optional(),
+    brand_name: z.string().optional(),
+    category: z.string().optional(),
+    colorFamily: z.string().optional(),
+    colorName: z.string().optional(),
+    color_family: z.string().optional(),
+    color_name: z.string().optional(),
+    colorway: z.string().optional(),
+    comparatorKey: z.string().optional(),
+    comparator_key: z.string().optional(),
+    descriptorConfidence: z.number().optional(),
+    estimatedPrice: z
+      .object({
+        max: z.number().nullable().optional(),
+        min: z.number().nullable().optional(),
+      })
+      .optional(),
+    fabricHand: z.string().optional(),
+    fitObservations: z.array(z.string()).optional(),
+    fitType: z.string().optional(),
+    formality: z.number().optional(),
+    imageUrl: z.string().url().optional(),
+    imageUrls: z.array(z.string().url()).optional(),
+    image_url: z.string().url().optional(),
+    images: z.array(z.string().url()).optional(),
+    itemType: z.string().optional(),
+    name: z.string().optional(),
+    notes: z.string().optional(),
+    pageUrl: z.string().url().optional(),
+    page_url: z.string().url().optional(),
+    polishLevel: z.string().optional(),
+    productUrl: z.string().url().optional(),
+    product_url: z.string().url().optional(),
+    qualityTier: z.string().optional(),
+    seasonality: z.array(z.string()).optional(),
+    silhouette: z.string().optional(),
+    sourceUrl: z.string().url().optional(),
+    source_url: z.string().url().optional(),
+    structureLevel: z.string().optional(),
+    styleRole: z.string().optional(),
+    sub_category: z.string().optional(),
+    sub_type: z.string().optional(),
+    subcategory: z.string().optional(),
+    subtype: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    texture: z.string().optional(),
+    url: z.string().url().optional(),
+    useCases: z.array(z.string()).optional(),
+    visualWeight: z.string().optional(),
+  }).strict(),
+);
+const stylePurchaseCandidateInputSchema = z.union([
+  z.string().trim().min(1),
+  stylePurchaseCandidateObjectInputSchema,
+]);
 const styleSubmitPurchaseVisualObservationsInputSchema = z.object({
-  candidate: z.any(),
+  candidate: stylePurchaseCandidateInputSchema,
   comparator_item_ids_inspected: z.array(z.string()).optional(),
   observations: z.array(stylePurchaseVisualObservationDetailSchema).min(1),
   source: z.string().optional(),
@@ -173,23 +289,12 @@ const stylePurchaseVisualEvidenceCache = new Map<string, StylePurchaseVisualEvid
 
 const STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES = 4;
 const STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGE_BYTES = 1_500_000;
-const STYLE_PURCHASE_WIDGET_RETAIL_IMAGE_DOMAINS = [
-  'https://cdn.shopify.com',
-  'https://images.footlocker.ca',
-  'https://images.footlocker.com',
-  'https://jdsports.ca',
-  'https://kith.com',
-  'https://www.footlocker.ca',
-  'https://www.jdsports.ca',
-  'https://www.kith.com',
-] as const;
-
 function buildClaudeWidgetDomain(origin: string) {
   return `${createHash('sha256').update(origin).digest('hex').slice(0, 32)}.claudemcpcontent.com`;
 }
 
 function buildWidgetMeta(description: string, origin: string) {
-  const resourceDomains = Array.from(new Set([origin, ...STYLE_PURCHASE_WIDGET_RETAIL_IMAGE_DOMAINS]));
+  const resourceDomains = [origin];
   return {
     'openai/widgetCSP': {
       connect_domains: [],
@@ -612,15 +717,36 @@ export async function extractStylePurchasePageEvidence(input: {
     });
   }
 
-  let response: Response;
+  let currentUrl = url;
+  let response: Response | null = null;
   try {
-    response = await (input.fetchImpl ?? fetch)(url.toString(), {
-      headers: {
-        accept: 'text/html,application/xhtml+xml',
-        'user-agent': 'FluentStyleEvidenceBot/1.0 (+https://meetfluent.app)',
-      },
-      signal: createFetchTimeoutSignal(15_000),
-    });
+    for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+      response = await (input.fetchImpl ?? fetch)(currentUrl.toString(), {
+        headers: {
+          accept: 'text/html,application/xhtml+xml',
+          'user-agent': 'FluentStyleEvidenceBot/1.0 (+https://meetfluent.app)',
+        },
+        redirect: 'manual',
+        signal: createFetchTimeoutSignal(15_000),
+      });
+      if (response.status < 300 || response.status >= 400) {
+        break;
+      }
+      const location = response.headers.get('location');
+      const nextUrl = location ? normalizePublicProductUrl(new URL(location, currentUrl).toString()) : null;
+      if (!nextUrl) {
+        return buildPageEvidenceResult({
+          candidate: { productUrl: url.toString(), url: url.toString() },
+          finalUrl: currentUrl.toString(),
+          imageCandidates: [],
+          pageTitle: null,
+          productUrl: url.toString(),
+          status: 'blocked_url',
+          warnings: ['Product page redirected to a non-public or unsupported URL.'],
+        });
+      }
+      currentUrl = nextUrl;
+    }
   } catch (error) {
     return buildPageEvidenceResult({
       candidate: { productUrl: url.toString(), url: url.toString() },
@@ -633,10 +759,22 @@ export async function extractStylePurchasePageEvidence(input: {
     });
   }
 
+  if (!response) {
+    return buildPageEvidenceResult({
+      candidate: { productUrl: url.toString(), url: url.toString() },
+      finalUrl: currentUrl.toString(),
+      imageCandidates: [],
+      pageTitle: null,
+      productUrl: url.toString(),
+      status: 'fetch_failed',
+      warnings: ['Product page fetch did not return a response.'],
+    });
+  }
+
   if (!response.ok) {
     return buildPageEvidenceResult({
       candidate: { productUrl: url.toString(), url: url.toString() },
-      finalUrl: response.url || url.toString(),
+      finalUrl: response.url || currentUrl.toString(),
       imageCandidates: [],
       pageTitle: null,
       productUrl: url.toString(),
@@ -649,7 +787,7 @@ export async function extractStylePurchasePageEvidence(input: {
   if (contentType && !/html|text\/plain|application\/xhtml/i.test(contentType)) {
     return buildPageEvidenceResult({
       candidate: { productUrl: url.toString(), url: url.toString() },
-      finalUrl: response.url || url.toString(),
+      finalUrl: response.url || currentUrl.toString(),
       imageCandidates: [],
       pageTitle: null,
       productUrl: url.toString(),
@@ -659,7 +797,7 @@ export async function extractStylePurchasePageEvidence(input: {
   }
 
   const html = (await response.text()).slice(0, 1_500_000);
-  const finalUrl = response.url || url.toString();
+  const finalUrl = response.url || currentUrl.toString();
   const pageTitle = extractHtmlTitle(html);
   const imageExtraction = extractProductImageCandidates(html, finalUrl, maxImages, pageTitle);
   const imageCandidates = imageExtraction.accepted;
@@ -1016,7 +1154,19 @@ function stylePurchaseVisionImageId(asset: StyleVisualBundleAssetRecord, assetIn
   if (asset.role === 'candidate') {
     return `candidate:${assetIndex}`;
   }
-  return `${asset.itemId ?? asset.role}:${asset.photoId ?? assetIndex}`;
+  return `closet-image-${assetIndex}`;
+}
+
+function stylePurchaseComparatorHandle(preparation: StylePurchasePreparation, itemId: string | null | undefined): string | null {
+  if (!itemId) {
+    return null;
+  }
+  const index = preparation.comparatorItemIds.indexOf(itemId);
+  return index >= 0 ? `closet-match-${index + 1}` : null;
+}
+
+function stylePurchaseComparatorHandleMap(preparation: StylePurchasePreparation): Map<string, string> {
+  return new Map(preparation.comparatorItemIds.map((itemId, index) => [`closet-match-${index + 1}`, itemId] as const));
 }
 
 async function buildStylePurchaseVisionPacketToolResult(input: {
@@ -1041,6 +1191,7 @@ async function buildStylePurchaseVisionPacketToolResult(input: {
   const imageManifest = input.bundle.assets.map((asset, assetIndex) => {
     const inlineImage = inlineImageContent.find((entry) => entry.assetIndex === assetIndex) ?? null;
     const publicSourceUrl = inlineImage?.sourceUrl ?? selectStyleVisualBundlePublicUrl(asset);
+    const itemHandle = stylePurchaseComparatorHandle(input.preparation, asset.itemId);
     return {
       assetIndex,
       comparisonContext: asset.comparisonContext,
@@ -1048,9 +1199,8 @@ async function buildStylePurchaseVisionPacketToolResult(input: {
       imageId: stylePurchaseVisionImageId(asset, assetIndex),
       inlineAvailable: inlineImage != null,
       itemContext: asset.itemContext,
-      itemId: asset.itemId,
+      itemHandle,
       label: asset.label,
-      photoId: asset.photoId,
       role: asset.role,
       sourceUrl: publicSourceUrl,
     };
@@ -1087,7 +1237,7 @@ async function buildStylePurchaseVisionPacketToolResult(input: {
           observations:
             'At least one role=candidate entry with concrete observed color, silhouette, and distinctive_details from image pixels.',
           comparator_item_ids_inspected:
-            'Closet item IDs whose inline comparator images were actually inspected; include direct comparators first.',
+            'Closet match handles whose inline comparator images were actually inspected, such as closet-match-1; include direct comparators first.',
           vision_packet_id: packetId,
         }
       : null,
@@ -1101,7 +1251,9 @@ async function buildStylePurchaseVisionPacketToolResult(input: {
   };
   const textData = {
     candidateName: input.preparation.candidateSummary.name,
-    directComparatorItemIds: input.preparation.directComparatorItemIds,
+    directComparatorHandles: input.preparation.directComparatorItemIds
+      .map((itemId) => stylePurchaseComparatorHandle(input.preparation, itemId))
+      .filter((handle): handle is string => Boolean(handle)),
     hostModelGuidance:
       readyForHostVision
         ? 'Inspect each inline MCP image content entry named in imageManifest. Submit concrete pixel observations with style_submit_purchase_visual_observations before rendering the widget or giving the final buy/wait/skip answer.'
@@ -1111,7 +1263,7 @@ async function buildStylePurchaseVisionPacketToolResult(input: {
     imageManifest: imageManifest.map((entry) => ({
       contentIndex: entry.contentIndex,
       imageId: entry.imageId,
-      itemId: entry.itemId,
+      itemHandle: entry.itemHandle,
       label: entry.label,
       role: entry.role,
     })),
@@ -1138,7 +1290,10 @@ async function buildStylePurchaseVisionPacketToolResult(input: {
   };
 }
 
-function buildStylePurchaseVisualEvidenceFromObservations(input: z.infer<typeof styleSubmitPurchaseVisualObservationsInputSchema>) {
+function buildStylePurchaseVisualEvidenceFromObservations(
+  input: z.infer<typeof styleSubmitPurchaseVisualObservationsInputSchema>,
+  preparation: StylePurchasePreparation,
+) {
   const candidateObservations = input.observations
     .filter((observation) => observation.role === 'candidate')
     .map((observation) => {
@@ -1162,12 +1317,25 @@ function buildStylePurchaseVisualEvidenceFromObservations(input: z.infer<typeof 
         .map((itemId) => itemId.trim())
         .filter(Boolean),
     ),
-  );
+  ).map((itemIdOrHandle) => stylePurchaseComparatorHandleMap(preparation).get(itemIdOrHandle) ?? itemIdOrHandle);
+  const allowedComparatorItemIds = new Set([
+    ...preparation.comparatorItemIds,
+    ...preparation.directComparatorItemIds,
+  ]);
+  const unknownComparatorItemIds = comparatorItemIdsInspected.filter((itemId) => !allowedComparatorItemIds.has(itemId));
+  if (unknownComparatorItemIds.length > 0) {
+    throw new Error(
+      `style_submit_purchase_visual_observations rejected unknown comparator image evidence: ${unknownComparatorItemIds.join(', ')}. Use only comparator item IDs from the current style_get_purchase_vision_packet.`,
+    );
+  }
+  const source = STYLE_PURCHASE_HOST_VISION_SOURCES.has(String(input.source ?? ''))
+    ? 'host_vision'
+    : STYLE_PURCHASE_VISUAL_EVIDENCE_SOURCE;
   const visualEvidence = stylePurchaseVisualEvidenceInputSchema.parse({
     candidateInspected: true,
     candidateObservations,
     comparatorItemIdsInspected,
-    source: STYLE_PURCHASE_VISUAL_EVIDENCE_SOURCE,
+    source,
   });
   return {
     ...visualEvidence,
@@ -1202,6 +1370,23 @@ function stableJsonForCache(value: unknown): string {
     .sort()
     .map((key) => `${JSON.stringify(key)}:${stableJsonForCache(record[key])}`)
     .join(',')}}`;
+}
+
+function buildStylePurchaseLoggedItemId(candidate: ReturnType<typeof normalizeStylePurchaseCandidate>): string {
+  const hash = createHash('sha256')
+    .update(
+      stableJsonForCache({
+        brand: candidate.brand ?? null,
+        category: candidate.category,
+        colorFamily: candidate.colorFamily ?? null,
+        imageUrl: candidate.imageUrls[0] ?? null,
+        name: candidate.name ?? null,
+        subcategory: candidate.subcategory ?? null,
+      }),
+    )
+    .digest('hex')
+    .slice(0, 24);
+  return `style-item:purchase:${hash}`;
 }
 
 function stylePurchaseCacheAuthKey(authProps: FluentAuthProps): string {
@@ -1478,10 +1663,16 @@ function normalizePublicProductUrl(value: string): URL | null {
       hostname === '0.0.0.0' ||
       hostname.startsWith('127.') ||
       hostname.startsWith('10.') ||
+      hostname.startsWith('169.254.') ||
       hostname.startsWith('192.168.') ||
       /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname) ||
       hostname === '::1' ||
-      hostname === '[::1]'
+      hostname === '[::1]' ||
+      /^f[cd][0-9a-f]*:/i.test(hostname) ||
+      /^fe80:/i.test(hostname) ||
+      hostname.startsWith('[fc') ||
+      hostname.startsWith('[fd') ||
+      hostname.startsWith('[fe80:')
     ) {
       return null;
     }
@@ -1553,10 +1744,13 @@ function extractProductImageCandidates(
   };
 }
 
-function sanitizeStyleVisualBundleAssetForHost(asset: StyleVisualBundleAssetRecord): StyleVisualBundleAssetRecord {
+function sanitizeStyleVisualBundleAssetForHost(asset: StyleVisualBundleAssetRecord): Record<string, unknown> {
   const publicSourceUrl = selectStyleVisualBundlePublicUrl(asset);
   return {
-    ...asset,
+    comparisonContext: asset.comparisonContext,
+    itemContext: asset.itemContext,
+    label: asset.label,
+    role: asset.role,
     sourceUrl: publicSourceUrl,
   };
 }
@@ -1565,9 +1759,10 @@ async function buildPurchaseAnalysisImageHints(
   style: StyleService,
   analysis: Awaited<ReturnType<StyleService['analyzePurchase']>>,
   candidate: unknown,
+  options: { imageDeliverySecret?: string | null; origin: string },
 ): Promise<PurchaseAnalysisImageHints> {
   const hints: PurchaseAnalysisImageHints = {
-    candidateImageUrl: analysis.candidate.imageUrls[0] ?? null,
+    candidateImageUrl: await buildWidgetImageUrl(analysis.candidate.imageUrls[0] ?? null, options),
     comparatorImageUrlsByItemId: {},
   };
   const comparatorItemIds = analysis.comparatorReasoning.topComparisons
@@ -1592,9 +1787,12 @@ async function buildPurchaseAnalysisImageHints(
         continue;
       }
       if (asset.role === 'candidate') {
-        hints.candidateImageUrl = publicUrl;
+        hints.candidateImageUrl = await buildWidgetImageUrl(publicUrl, options);
       } else if (asset.itemId) {
-        hints.comparatorImageUrlsByItemId![asset.itemId] = publicUrl;
+        const widgetUrl = await buildWidgetImageUrl(publicUrl, options);
+        if (widgetUrl) {
+          hints.comparatorImageUrlsByItemId![asset.itemId] = widgetUrl;
+        }
       }
     }
   } catch {
@@ -1603,6 +1801,43 @@ async function buildPurchaseAnalysisImageHints(
   }
 
   return hints;
+}
+
+async function buildWidgetImageUrl(
+  value: string | null,
+  options: { imageDeliverySecret?: string | null; origin: string },
+): Promise<string | null> {
+  if (!value) {
+    return null;
+  }
+  const publicUrl = normalizePublicProductUrl(value);
+  if (!publicUrl) {
+    return null;
+  }
+  if (isSameOriginUrl(publicUrl, options.origin)) {
+    return publicUrl.toString();
+  }
+  if (!options.imageDeliverySecret) {
+    return null;
+  }
+  try {
+    const signed = await buildSignedStyleRemoteImageUrl({
+      origin: options.origin,
+      secret: options.imageDeliverySecret,
+      sourceUrl: publicUrl.toString(),
+    });
+    return signed.originalUrl;
+  } catch {
+    return null;
+  }
+}
+
+function isSameOriginUrl(url: URL, origin: string): boolean {
+  try {
+    return url.origin === new URL(origin).origin;
+  } catch {
+    return false;
+  }
 }
 
 function selectStyleVisualBundlePublicUrl(asset: StyleVisualBundleAssetRecord): string | null {
@@ -1964,7 +2199,7 @@ function firstRecommendedPurchaseRenderInput(record: Record<string, unknown>): R
 }
 
 function coercePurchaseVisualEvidence(value: unknown, options: { allowHostVisionFallback?: boolean } = {}) {
-  const record = asRecord(value);
+  const record = asRecord(parseJsonLike<unknown>(value));
   if (!record) {
     return null;
   }
@@ -1982,7 +2217,7 @@ function coercePurchaseVisualEvidence(value: unknown, options: { allowHostVision
   const acceptedSource =
     source === STYLE_PURCHASE_VISUAL_EVIDENCE_SOURCE
       ? STYLE_PURCHASE_VISUAL_EVIDENCE_SOURCE
-      : options.allowHostVisionFallback === true && (!source || source === 'host_vision')
+      : options.allowHostVisionFallback === true && (!source || STYLE_PURCHASE_HOST_VISION_SOURCES.has(source))
         ? 'host_vision'
         : null;
   if (!acceptedSource) {
@@ -2075,7 +2310,14 @@ function isInsufficientPurchaseVisualEvidenceText(value: string): boolean {
   return INSUFFICIENT_PURCHASE_VISUAL_EVIDENCE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-export function registerStyleMcpSurface(server: McpServer, style: StyleService, origin: string) {
+export function registerStyleMcpSurface(
+  server: McpServer,
+  style: StyleService,
+  origin: string,
+  options: { imageDeliverySecret?: string | null } = {},
+) {
+  const styleReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_READ_SCOPE] }];
+  const styleWriteSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_WRITE_SCOPE] }];
   const purchaseAnalysisWidgetMeta = buildWidgetMeta(
     'Rich Fluent purchase analysis for Style buy/skip decisions in ChatGPT-style widget hosts.',
     origin,
@@ -2134,6 +2376,56 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
     'fluent-style-purchase-analysis-widget-combined-v7',
     STYLE_PURCHASE_ANALYSIS_COMBINED_TEMPLATE_URI,
     'Purchase Analysis Widget Combined v7',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-bridge-previous-v9',
+    STYLE_PURCHASE_ANALYSIS_BRIDGE_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v9',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-actions-previous-v10',
+    STYLE_PURCHASE_ANALYSIS_ACTIONS_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v10',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-framed-previous-v11',
+    STYLE_PURCHASE_ANALYSIS_FRAMED_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v11',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-comparison-previous-v12',
+    STYLE_PURCHASE_ANALYSIS_COMPARISON_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v12',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-editorial-previous-v13',
+    STYLE_PURCHASE_ANALYSIS_EDITORIAL_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v13',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-title-previous-v14',
+    STYLE_PURCHASE_ANALYSIS_TITLE_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v14',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-photo-read-previous-v15',
+    STYLE_PURCHASE_ANALYSIS_PHOTO_READ_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v15',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-decision-previous-v16',
+    STYLE_PURCHASE_ANALYSIS_DECISION_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v16',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-secondary-action-previous-v17',
+    STYLE_PURCHASE_ANALYSIS_SECONDARY_ACTION_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v17',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-hydration-previous-v18',
+    STYLE_PURCHASE_ANALYSIS_HYDRATION_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v18',
   );
   registerPurchaseAnalysisWidgetResource(
     'fluent-style-purchase-analysis-widget',
@@ -2753,7 +3045,7 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
       description:
         'Required first step for every Style purchase decision, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what product-page or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. If only a product URL was provided and no candidate image references exist yet, use style_extract_purchase_page_evidence next. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.',
       inputSchema: {
-        candidate: z.any(),
+        candidate: stylePurchaseCandidateInputSchema,
         evidence: z.any().optional(),
         renderRepair: z.any().optional(),
         render_repair: z.any().optional(),
@@ -2809,7 +3101,7 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
       description:
         'Primary Fluent Style purchase-analysis visual step. Use this instead of style_get_visual_bundle for staged purchase decisions; it returns model-visible inline candidate and closet-comparator images plus compact comparison context. Use after style_prepare_purchase_analysis for image-bearing candidates, inspect the returned image content, then call style_submit_purchase_visual_observations before rendering the widget or giving the final buy/wait/skip recommendation.',
       inputSchema: {
-        candidate: z.any(),
+        candidate: stylePurchaseCandidateInputSchema,
         comparator_item_ids: z.array(z.string()).optional(),
         max_inline_images: z.number().int().positive().max(STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES).optional(),
       },
@@ -2863,14 +3155,20 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
     {
       title: 'Style Submit Purchase Visual Observations',
       description:
-        'Submit concrete host-model observations from style_get_purchase_vision_packet inline image content. In ChatGPT/App SDK hosts, the next required presentation step is style_show_purchase_analysis_widget; do not stop with only a prose answer after this succeeds. Plain MCP or text-first clients may use style_render_purchase_analysis instead.',
+        'Submit concrete host-model observations from an inspected candidate product image, including uploaded images or style_get_purchase_vision_packet inline image content. In ChatGPT/App SDK hosts, the next required presentation step is style_show_purchase_analysis_widget with the returned renderInput; do not stop with only a prose answer after this succeeds. Plain MCP or text-first clients may use style_render_purchase_analysis instead.',
       inputSchema: styleSubmitPurchaseVisualObservationsInputSchema.shape,
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     async (args) => {
       const authProps = requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
       const parsed = styleSubmitPurchaseVisualObservationsInputSchema.parse(args);
-      const visualEvidence = buildStylePurchaseVisualEvidenceFromObservations(parsed);
+      const preparationBeforeVisualEvidence = buildStylePurchasePreparation({
+        analysis: await style.analyzePurchase({
+          candidate: parsed.candidate,
+        }),
+        candidateInput: parsed.candidate,
+      });
+      const visualEvidence = buildStylePurchaseVisualEvidenceFromObservations(parsed, preparationBeforeVisualEvidence);
       const analysis = await style.analyzePurchase({
         candidate: parsed.candidate,
         visualEvidence,
@@ -2879,6 +3177,11 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
         analysis,
         candidateInput: parsed.candidate,
       });
+      if (preparation.visualGrounding.candidateVisualGrounding !== 'host_visual_inspection') {
+        throw new Error(
+          'style_submit_purchase_visual_observations not_render_ready: accepted observations did not produce host-inspected candidate grounding. Re-run style_get_purchase_vision_packet for image-reference candidates, or submit uploaded-image observations with source: "host_vision_uploaded_image".',
+        );
+      }
       const receipt = {
         analysisSummary: summarizeStylePurchaseAnalysis(analysis),
         candidate: preparation.candidate,
@@ -2888,21 +3191,21 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
         chatgptWidgetTool: 'style_show_purchase_analysis_widget',
         hostResponseMode: 'final_recommendation_ready',
         hostResponseInstruction:
-          'Final recommendation is ready. In Claude, OpenClaw, Codex, and generic MCP clients, give the final buy/wait/skip answer now or call style_render_purchase_analysis for structured data; do not open the ChatGPT widget. In ChatGPT/App SDK hosts, style_show_purchase_analysis_widget may be used with this candidate and visual_evidence.',
-        nextTool: 'style_render_purchase_analysis',
-        nextRequiredTool: null,
+          'Final recommendation is ready. In ChatGPT/App SDK hosts, call style_show_purchase_analysis_widget next with renderInput before giving prose; do not stop with only a text answer. In Claude, OpenClaw, Codex, and generic MCP clients, give the final buy/wait/skip answer now or call style_render_purchase_analysis for structured data; do not open the ChatGPT widget.',
+        nextTool: 'style_show_purchase_analysis_widget',
+        nextRequiredTool: 'style_show_purchase_analysis_widget',
         recommendedNextSteps: [
+          {
+            host: 'chatgpt_app_sdk',
+            input: { candidate: preparation.candidate, visual_evidence: visualEvidence },
+            reason: 'Open the rich purchase-analysis widget in ChatGPT/App SDK hosts.',
+            tool: 'style_show_purchase_analysis_widget',
+          },
           {
             host: 'claude_or_plain_mcp',
             input: { candidate: preparation.candidate, visual_evidence: visualEvidence },
             reason: 'Return structured purchase-analysis data without opening a ChatGPT/App SDK widget.',
             tool: 'style_render_purchase_analysis',
-          },
-          {
-            host: 'chatgpt_app_sdk',
-            input: { candidate: preparation.candidate, visual_evidence: visualEvidence },
-            reason: 'Open the rich purchase-analysis widget only in ChatGPT/App SDK hosts.',
-            tool: 'style_show_purchase_analysis_widget',
           },
         ],
         renderInput: { candidate: preparation.candidate, visual_evidence: visualEvidence },
@@ -2951,7 +3254,7 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
       description:
         'Return coverage-aware, bucketed closet-derived wardrobe context for a candidate item using canonical Style state and the current lightweight profile. For product URLs or natural "should I buy this?" prompts, call style_prepare_purchase_analysis first so visual evidence requirements are explicit before any widget is rendered. Do not call this after style_prepare_purchase_analysis returns hostResponseMode=request_candidate_image as a way to continue the purchase verdict; ask the user for candidate image evidence instead. Text-first hosts that cannot access style_submit_purchase_visual_observations may pass concrete host_vision visual_evidence or visualEvidence after actually inspecting images.',
       inputSchema: {
-        candidate: z.any(),
+        candidate: stylePurchaseCandidateInputSchema,
         evidence: z.any().optional(),
         renderRepair: z.any().optional(),
         render_repair: z.any().optional(),
@@ -3018,9 +3321,9 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
     {
       title: 'Render Purchase Analysis Data',
       description:
-        'Return structured Fluent Style purchase-analysis presentation data without opening a widget. For product URLs or "should I buy this?" prompts, call style_prepare_purchase_analysis first so visual evidence requirements are explicit. ChatGPT / MCP Apps-style hosts should only open the rich widget through style_show_purchase_analysis_widget after real host visual evidence exists. Claude and other text-first hosts may use this after actually inspecting images and passing concrete host_vision visual_evidence or visualEvidence when style_submit_purchase_visual_observations is unavailable. This render tool accepts the text-first host_vision fallback directly; it does not require style_submit_purchase_visual_observations when candidateInspected is true and candidateObservations contains concrete pixel observations.',
+        'Return structured Fluent Style purchase-analysis presentation data without opening a widget. For product URLs or "should I buy this?" prompts, call style_prepare_purchase_analysis first so visual evidence requirements are explicit. ChatGPT / MCP Apps-style hosts should only open the rich widget through style_show_purchase_analysis_widget after real host visual evidence exists. Claude-side visuals, Codex, OpenClaw, generic plain MCP clients, and other text-first hosts may use this after actually inspecting images and passing concrete host_vision visual_evidence or visualEvidence when style_submit_purchase_visual_observations is unavailable. This render tool accepts the text-first host_vision fallback directly; it does not require style_submit_purchase_visual_observations when candidateInspected is true and candidateObservations contains concrete pixel observations.',
       inputSchema: {
-        candidate: z.any(),
+        candidate: stylePurchaseCandidateInputSchema,
         evidence: z.any().optional(),
         renderRepair: z.any().optional(),
         render_repair: z.any().optional(),
@@ -3074,9 +3377,13 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
           },
         });
       }
-      const imageHints = await buildPurchaseAnalysisImageHints(style, analysis, candidate);
+      const imageHints = await buildPurchaseAnalysisImageHints(style, analysis, candidate, {
+        imageDeliverySecret: options.imageDeliverySecret,
+        origin,
+      });
       const viewModel = buildPurchaseAnalysisViewModel(analysis, {
         actionToolName: 'style_apply_purchase_analysis_action',
+        comparatorItemIdMode: 'handles',
         imageHints,
       });
       return toolResult(buildPurchaseAnalysisStructuredContent(viewModel), {
@@ -3088,12 +3395,12 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
 
   server.registerTool(
     'style_show_purchase_analysis_widget',
-    {
+    withAppsSecurity({
       title: 'Show Purchase Analysis Widget',
       description:
         'Open the rich Fluent Style purchase-analysis widget in ChatGPT / MCP Apps-style hosts only after style_prepare_purchase_analysis has run and the host has actually inspected candidate images. Do not call this with only a product URL, text metadata, image references, or uninspected visual-bundle assets. Requires visual_evidence with candidateInspected true and concrete candidateObservations.',
       inputSchema: {
-        candidate: z.any(),
+        candidate: stylePurchaseCandidateInputSchema,
         visual_evidence: stylePurchaseVisualEvidenceInputSchema,
       },
       annotations: { readOnlyHint: true, idempotentHint: true },
@@ -3104,29 +3411,40 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
         'openai/outputTemplate': STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
         'openai/toolInvocation/invoked': 'Purchase analysis ready.',
         'openai/toolInvocation/invoking': 'Opening purchase analysis…',
+        'openai/widgetAccessible': true,
       },
-    },
+    }, styleReadSecuritySchemes),
     async ({ candidate, visual_evidence }) => {
-      requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
-      if (!hasAcceptedPurchaseVisualEvidence(visual_evidence)) {
+      const authProps = requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
+      const acceptedVisualEvidence = acceptedPurchaseVisualEvidenceOrUndefined(visual_evidence, {
+        allowHostVisionFallback: true,
+      });
+      if (!acceptedVisualEvidence) {
         throw new Error(
           'style_show_purchase_analysis_widget not_render_ready: concrete candidate image observations are required. Call style_prepare_purchase_analysis or style_render_purchase_analysis for non-widget not-ready output.',
         );
       }
       const analysis = await style.analyzePurchase({
         candidate,
-        visualEvidence: visual_evidence,
+        visualEvidence: acceptedVisualEvidence,
       });
-      if (analysis.evidenceQuality.candidateVisualGrounding === 'none') {
+      if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
         throw new Error(
           'style_show_purchase_analysis_widget not_render_ready: visual evidence did not produce host visual grounding. Call style_prepare_purchase_analysis or style_render_purchase_analysis for non-widget not-ready output.',
         );
       }
-      const imageHints = await buildPurchaseAnalysisImageHints(style, analysis, candidate);
+      const imageHints = await buildPurchaseAnalysisImageHints(style, analysis, candidate, {
+        imageDeliverySecret: options.imageDeliverySecret,
+        origin,
+      });
       const viewModel = buildPurchaseAnalysisViewModel(analysis, {
         actionToolName: 'style_apply_purchase_analysis_action',
+        comparatorItemIdMode: 'handles',
         imageHints,
       });
+      if (!authProps.scope?.includes(FLUENT_STYLE_WRITE_SCOPE)) {
+        viewModel.actions = [];
+      }
       return {
         _meta: buildPurchaseAnalysisMetadata(viewModel),
         content: [
@@ -3142,10 +3460,10 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
 
   server.registerTool(
     'style_apply_purchase_analysis_action',
-    {
+    withAppsSecurity({
       title: 'Apply Purchase Analysis Action',
       description:
-        'Apply a widget-originated Style purchase analysis action, such as logging a purchased item into the Fluent closet.',
+        'Apply an explicit user-requested Style purchase analysis action from the widget, such as logging a purchased item into the Fluent closet.',
       inputSchema: {
         action_id: stylePurchaseAnalysisActionIdSchema,
         candidate: z.any(),
@@ -3155,7 +3473,7 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
       _meta: {
         'openai/widgetAccessible': true,
       },
-    },
+    }, styleWriteSecuritySchemes, { uiVisibility: ['model', 'app'] }),
     async (args) => {
       const authProps = requireAnyScope([FLUENT_STYLE_WRITE_SCOPE, FLUENT_MEALS_WRITE_SCOPE]);
       const candidate = normalizeStylePurchaseCandidate(args.candidate);
@@ -3164,22 +3482,26 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
         throw new Error(`Unsupported purchase analysis action: ${args.action_id}`);
       }
 
-      const itemId = `style-item:purchase:${crypto.randomUUID()}`;
-      const item = await style.upsertItem({
-        item: {
-          id: itemId,
-          brand: candidate.brand,
-          category: candidate.category,
-          color_family: candidate.colorFamily,
-          formality: candidate.formality,
-          name: candidate.name ?? candidate.subcategory ?? candidate.category,
-          status: 'active',
-          subcategory: candidate.subcategory,
-        },
-        provenance: buildMutationProvenance(authProps, args),
-        sourceSnapshot: candidate,
-      });
+      const itemId = buildStylePurchaseLoggedItemId(candidate);
+      const existing = await style.getItem(itemId);
+      const item =
+        existing ??
+        (await style.upsertItem({
+          item: {
+            id: itemId,
+            brand: candidate.brand,
+            category: candidate.category,
+            color_family: candidate.colorFamily,
+            formality: candidate.formality,
+            name: candidate.name ?? candidate.subcategory ?? candidate.category,
+            status: 'active',
+            subcategory: candidate.subcategory,
+          },
+          provenance: buildMutationProvenance(authProps, args),
+          sourceSnapshot: candidate,
+        }));
 
+      let photoStatus: 'not_applicable' | 'stored' | 'partial_photo_failure' = 'not_applicable';
       if (candidate.imageUrls[0]) {
         try {
           await style.upsertItemPhotos({
@@ -3194,7 +3516,9 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
             ],
             provenance: buildMutationProvenance(authProps, args),
           });
+          photoStatus = 'stored';
         } catch {
+          photoStatus = 'partial_photo_failure';
           // Best-effort only: a purchase log should still succeed even if the
           // remote product image cannot be fetched into Fluent storage yet.
         }
@@ -3205,6 +3529,8 @@ export function registerStyleMcpSurface(server: McpServer, style: StyleService, 
         category: created?.category ?? item.category,
         name: created?.name ?? item.name,
         photoCount: created?.photos.length ?? item.photos.length,
+        photoStatus,
+        status: existing ? 'already_exists' : 'created',
       });
       return toolResult(created ?? item, {
         structuredContent: ack,

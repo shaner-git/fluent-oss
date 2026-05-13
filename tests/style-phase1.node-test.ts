@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { runWithFluentAuthProps, type FluentAuthProps } from '../src/auth';
+import { decryptStyleImageOwnerToken } from '../src/domains/style/media';
 import { StyleService } from '../src/domains/style/service';
 import { createLocalRuntime } from '../src/local/runtime';
 import { maybeHandleStyleImageRequest } from '../src/style-image-handler';
@@ -2322,7 +2323,12 @@ async function authenticatesHostedStyleImages() {
     assert.equal(visualBundle.assets.length, 1);
     assert(visualBundle.assets[0]?.fallbackSignedOriginalUrl);
     const signedUrl = new URL(visualBundle.assets[0]!.fallbackSignedOriginalUrl!);
-    assert.equal(signedUrl.searchParams.get('tid'), hostedAuthProps.tenantId);
+    const ownerToken = signedUrl.searchParams.get('owner');
+    assert(ownerToken);
+    assert.equal(
+      await decryptStyleImageOwnerToken({ secret: hostedEnv.IMAGE_DELIVERY_SECRET, token: ownerToken }),
+      hostedAuthProps.tenantId,
+    );
 
     const signedOk = await runWithFluentAuthProps(
       { profileId: 'owner', tenantId: 'primary' },

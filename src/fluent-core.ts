@@ -1,4 +1,5 @@
 import { getFluentAuthProps, type MutationProvenance } from './auth';
+import { buildChatGptSafeRuntimeEntitlement } from './account-billing';
 import { getFluentCloudOnboardingRecord, type FluentCloudOnboardingRecord } from './cloud-onboarding';
 import { markFluentCloudAccountActive } from './cloud-invites';
 import { FLUENT_SUPPORT_EMAIL } from './cloud-early-access';
@@ -99,6 +100,9 @@ export type FluentAccountEntitlementState =
   | 'past_due_grace'
   | 'limited'
   | 'canceled_retention'
+  | 'retention_expired'
+  | 'suspended'
+  | 'deleted'
   | 'pending'
   | 'unavailable';
 
@@ -248,32 +252,27 @@ export class FluentCoreService {
       this.runtime.deploymentTrack === 'cloud'
         ? await this.getCurrentCloudAccountRecord()
         : null;
-    const entitlement = buildAccountEntitlement(accountRecord, this.runtime.deploymentTrack);
+    const authProps = getFluentAuthProps();
+    const runtimeEntitlement =
+      this.runtime.deploymentTrack === 'cloud'
+        ? await buildChatGptSafeRuntimeEntitlement(this.db, {
+            email: authProps.email ?? accountRecord?.email ?? null,
+            tenantId: authProps.tenantId ?? accountRecord?.tenantId ?? this.tenantId,
+            userId: authProps.userId ?? accountRecord?.userId ?? null,
+          })
+        : null;
+    const entitlement = buildAccountEntitlement(accountRecord, this.runtime.deploymentTrack, runtimeEntitlement);
+    const accessState = buildAccountAccessState(accountRecord, tenant.status, this.runtime.deploymentTrack);
+    const links = buildAccountLinks(accountBaseUrl, entitlement.state);
 
     return {
-      accessState: buildAccountAccessState(accountRecord, tenant.status, this.runtime.deploymentTrack),
+      accessState,
       backendMode: tenant.backendMode,
       contractVersion: FLUENT_CONTRACT_VERSION,
       enabledDomains,
       entitlement,
-      instructions: {
-        deletion:
-          this.runtime.deploymentTrack === 'cloud'
-            ? 'Open the deletion link to review the deletion policy, request deletion, or confirm a pending request.'
-            : 'Use the self-hosted runtime controls for deletion, then remove the local Fluent data directory or database backups you control.',
-        export:
-          this.runtime.deploymentTrack === 'cloud'
-            ? 'Open the export link to list existing exports or request a new account export.'
-            : 'Use the local OSS snapshot export workflow from the Fluent runtime to export the data stored on this machine.',
-        manageAccount: 'Open the manage account link on meetfluent.app for account, billing, export, and deletion controls.',
-        support: `Email ${FLUENT_SUPPORT_EMAIL} for account help.`,
-      },
-      links: {
-        deletion: `${accountBaseUrl}/account/delete`,
-        export: `${accountBaseUrl}/api/account/exports`,
-        manageAccount: `${accountBaseUrl}/account`,
-        supportEmail: `mailto:${FLUENT_SUPPORT_EMAIL}`,
-      },
+      instructions: buildAccountInstructions(this.runtime.deploymentTrack, entitlement.state),
+      links,
       supportEmail: FLUENT_SUPPORT_EMAIL,
     };
   }
@@ -970,6 +969,7 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         starterReadTools: [
           'meals_render_pantry_dashboard',
           'meals_render_grocery_list_v2',
+          'meals_get_current_grocery_list',
           'meals_get_grocery_plan',
           'meals_prepare_order',
           'meals_get_inventory_summary',
@@ -977,7 +977,7 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         ],
         starterWriteTools: ['meals_upsert_grocery_plan_action', 'meals_update_inventory_batch', 'meals_upsert_grocery_intent'],
         whenToUse:
-          'Shopping, pantry checks, substitutions, receipt reconciliation, or the primary grocery-list view for the week. In ChatGPT / MCP Apps-style hosts, start from the Fluent render tools for the richer Fluent surface; in Claude-style hosts, start from canonical grocery data first; in Codex, OpenClaw, and generic plain MCP clients, default to canonical grocery data plus text.',
+          'Shopping, pantry checks, substitutions, receipt reconciliation, or the primary living grocery-list view. In ChatGPT / MCP Apps-style hosts, start from the Fluent render tools for the richer Fluent surface; in Claude-style hosts, start from meals_get_current_grocery_list before host-native visuals; in Codex, OpenClaw, and generic plain MCP clients, default to canonical grocery data plus text.',
         domainReady: isReady('meals'),
       },
       {
@@ -1121,6 +1121,22 @@ function readyDomainActions(input: {
   const goal = input.goal ?? '';
   const chatgpt = input.hostFamily === 'chatgpt_app';
 
+  if (input.domain === 'core' && isAccountStatusGoal(goal)) {
+    return [
+      {
+        kind: 'read',
+        reason:
+          'Use the account-status surface for account, access, billing-boundary, subscription, export, deletion, reactivation, support, or account-ready asks. Do not answer this with Home.',
+        tool: 'fluent_get_account_status',
+      },
+      {
+        kind: 'read',
+        reason: 'Use only if account-status output still leaves domain readiness unclear.',
+        tool: 'fluent_get_capabilities',
+      },
+    ];
+  }
+
   if (input.domain === 'meals') {
     if (/grocery|shopping|shop|buy|pantry|cart|order|receipt|ingredient/i.test(goal)) {
       return [
@@ -1132,8 +1148,11 @@ function readyDomainActions(input: {
             }
           : {
               kind: 'read',
-              reason: 'For non-ChatGPT hosts, use canonical grocery data and answer in text.',
-              tool: 'meals_get_grocery_plan',
+              reason:
+                input.hostFamily === 'claude'
+                  ? 'For Claude grocery-list-first prompts, fetch the canonical current living list first, then render with visualize:show_widget when available; otherwise answer from that fresh data in text.'
+                  : 'For non-ChatGPT hosts, fetch the canonical current living grocery list and answer from that fresh data in text.',
+              tool: 'meals_get_current_grocery_list',
             },
         {
           kind: 'read',
@@ -1315,6 +1334,12 @@ function guidanceForDomain(domain: FluentNextActionDomain): string[] {
 function inferDomainFromGoal(goal: string | null | undefined): FluentNextActionDomain {
   const text = normalizeNullableText(goal)?.toLowerCase() ?? '';
   if (!text) return 'unknown';
+  if (isAccountStatusGoal(text)) {
+    return 'core';
+  }
+  if (isGroceryShoppingGoal(text)) {
+    return 'meals';
+  }
   if (/\b(meal|dinner|lunch|breakfast|recipe|grocery|pantry|shopping|ingredient|cook|order|cart)\b/.test(text)) {
     return 'meals';
   }
@@ -1325,6 +1350,18 @@ function inferDomainFromGoal(goal: string | null | undefined): FluentNextActionD
     return 'health';
   }
   return 'unknown';
+}
+
+function isGroceryShoppingGoal(text: string): boolean {
+  return /\bwhat do i need to buy\b/.test(text)
+    || /\b(show|open|get|pull up)\b.*\b(grocery|groceries|shopping)\b.*\blist\b/.test(text)
+    || /\b(grocery|groceries|shopping)\s+list\b/.test(text)
+    || /\b(to-buy|to buy)\b.*\b(grocery|groceries|ingredients?|items?)\b/.test(text);
+}
+
+function isAccountStatusGoal(text: string): boolean {
+  return /\b(account|access|billing|subscription|export|deletion|delete|reactivat(?:e|ion)|support|ready|enabled)\b/.test(text)
+    && /\b(fluent|account|access|billing|subscription|export|deletion|delete|reactivat(?:e|ion)|support)\b/.test(text);
 }
 
 function normalizeNextActionDomain(value: FluentNextActionDomain | null | undefined): FluentNextActionDomain | null {
@@ -1402,6 +1439,7 @@ function isPendingAccountState(currentState: FluentCloudOnboardingRecord['curren
 function buildAccountEntitlement(
   record: FluentCloudOnboardingRecord | null,
   deploymentTrack: FluentDeploymentTrack,
+  runtimeEntitlement: Pick<FluentAccountStatus['entitlement'], 'state' | 'summary' | 'graceDeadline' | 'retentionDeadline'> | null = null,
 ): FluentAccountStatus['entitlement'] {
   if (deploymentTrack !== 'cloud') {
     return {
@@ -1411,17 +1449,39 @@ function buildAccountEntitlement(
       retentionDeadline: null,
     };
   }
+  if (record) {
+    const lifecycle = evaluateSubscriptionLifecycle(record);
+    if (lifecycle.access === 'retention_expired' || lifecycle.access === 'suspended' || lifecycle.access === 'deleted' || lifecycle.access === 'blocked') {
+      return {
+        state: lifecycle.access === 'retention_expired' ? 'retention_expired' : publicEntitlementState(record.currentState),
+        summary: lifecycle.message,
+        graceDeadline: calculateSubscriptionGraceDeadline(record),
+        retentionDeadline: calculateLapsedRetentionDeadline(record),
+      };
+    }
+  }
+  if (runtimeEntitlement) {
+    return {
+      state: runtimeEntitlement.state,
+      summary: runtimeEntitlement.summary ?? 'Your Fluent account status is controlled by the current runtime entitlement.',
+      graceDeadline: runtimeEntitlement.graceDeadline,
+      retentionDeadline: runtimeEntitlement.retentionDeadline,
+    };
+  }
   if (!record) {
     return {
       state: 'unavailable',
-      summary: 'Fluent could not find a hosted account entitlement record for this user.',
+      summary: 'I could not find an active Fluent account for this sign-in.',
       graceDeadline: null,
       retentionDeadline: null,
     };
   }
 
   const lifecycle = evaluateSubscriptionLifecycle(record);
-  const state = publicEntitlementState(record.currentState);
+  const state =
+    lifecycle.access === 'retention_expired'
+      ? 'retention_expired'
+      : publicEntitlementState(record.currentState);
   return {
     state,
     summary: lifecycle.message,
@@ -1448,6 +1508,11 @@ function publicEntitlementState(currentState: FluentCloudOnboardingRecord['curre
     case 'invited':
     case 'waitlisted':
       return 'pending';
+    case 'deletion_requested':
+    case 'suspended':
+      return 'suspended';
+    case 'deleted':
+      return 'deleted';
     default:
       return 'unavailable';
   }
@@ -1464,6 +1529,87 @@ function meetFluentAccountBaseUrl(publicBaseUrl: string | undefined): string {
   } catch {
     return fallback;
   }
+}
+
+function buildAccountLinks(
+  accountBaseUrl: string,
+  state: FluentAccountEntitlementState,
+): FluentAccountStatus['links'] {
+  const supportEmail = `mailto:${FLUENT_SUPPORT_EMAIL}`;
+  if (state === 'deleted' || state === 'retention_expired') {
+    return {
+      deletion: null,
+      export: null,
+      manageAccount: `${accountBaseUrl}/account`,
+      supportEmail,
+    };
+  }
+  if (state === 'suspended' || state === 'pending' || state === 'unavailable') {
+    return {
+      deletion: null,
+      export: null,
+      manageAccount: `${accountBaseUrl}/account`,
+      supportEmail,
+    };
+  }
+  return {
+    deletion: `${accountBaseUrl}/account/delete`,
+    export: `${accountBaseUrl}/account`,
+    manageAccount: `${accountBaseUrl}/account`,
+    supportEmail,
+  };
+}
+
+function buildAccountInstructions(
+  deploymentTrack: FluentDeploymentTrack,
+  state: FluentAccountEntitlementState,
+): FluentAccountStatus['instructions'] {
+  if (deploymentTrack !== 'cloud') {
+    return {
+      deletion: 'Use the self-hosted runtime controls for deletion, then remove the local Fluent data directory or database backups you control.',
+      export: 'Use the local OSS snapshot export workflow from the Fluent runtime to export the data stored on this machine.',
+      manageAccount: 'Use your local Fluent runtime controls for account-like settings.',
+      support: `Email ${FLUENT_SUPPORT_EMAIL} for account help.`,
+    };
+  }
+  if (state === 'deleted') {
+    return {
+      deletion: 'This account is already deleted.',
+      export: 'Account export is not available after deletion.',
+      manageAccount: 'Open meetfluent.app/account for any remaining account status details.',
+      support: `Email ${FLUENT_SUPPORT_EMAIL} if you believe the deletion was a mistake.`,
+    };
+  }
+  if (state === 'retention_expired') {
+    return {
+      deletion: 'The data retention window has ended, so deletion controls are no longer the next step.',
+      export: 'Account export is no longer available after the retention window ends.',
+      manageAccount: 'Open meetfluent.app/account for account status details.',
+      support: `Email ${FLUENT_SUPPORT_EMAIL} for help with retained billing records or account questions.`,
+    };
+  }
+  if (state === 'suspended') {
+    return {
+      deletion: 'Contact support before changing deletion state for this account.',
+      export: 'Contact support if you need an export while the account is paused.',
+      manageAccount: 'Open meetfluent.app/account for status details.',
+      support: `Email ${FLUENT_SUPPORT_EMAIL} to resolve this account state.`,
+    };
+  }
+  if (state === 'pending' || state === 'unavailable') {
+    return {
+      deletion: 'Deletion is available after account setup is complete, or through support for waitlist-only records.',
+      export: 'Export is available after account setup is complete.',
+      manageAccount: 'Open meetfluent.app/account to finish setup or check access.',
+      support: `Email ${FLUENT_SUPPORT_EMAIL} if this account should already be active.`,
+    };
+  }
+  return {
+    deletion: 'Open the deletion link to review the deletion policy, request deletion, or confirm a pending request.',
+    export: 'Open account settings on meetfluent.app to request or download an export.',
+    manageAccount: 'Open the manage account link on meetfluent.app for account, billing, export, and deletion controls.',
+    support: `Email ${FLUENT_SUPPORT_EMAIL} for account help.`,
+  };
 }
 
 function safeParse(value: string | null): unknown {
