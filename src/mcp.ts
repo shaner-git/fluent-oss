@@ -79,6 +79,7 @@ export function createFluentMcpServer(
   registerHealthMcpSurface(server, health, origin);
   registerMealsMcpSurface(server, meals, fluentCore, origin);
   registerStyleMcpSurface(server, style, origin, {
+    allowPurchasePageExtraction: options.profile !== 'chatgpt_app',
     imageDeliverySecret: bindings.imageDeliverySecret ?? null,
   });
 

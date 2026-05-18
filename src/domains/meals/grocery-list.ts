@@ -1,9 +1,19 @@
-export const MEALS_GROCERY_LIST_WIDGET_VERSION = 'v61';
+export const MEALS_GROCERY_LIST_WIDGET_VERSION = 'v71';
 export const MEALS_GROCERY_SMOKE_WIDGET_VERSION = 'v1';
 export const MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v57.html';
 export const MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v58.html';
 export const MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v59.html';
 export const MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v60.html';
+export const MEALS_GROCERY_LIST_HYDRATION_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v61.html';
+export const MEALS_GROCERY_LIST_MCP_APPS_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v62.html';
+export const MEALS_GROCERY_LIST_TRANSPORT_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v63.html';
+export const MEALS_GROCERY_LIST_CHECKBOX_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v64.html';
+export const MEALS_GROCERY_LIST_FALLBACK_WRITE_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v65.html';
+export const MEALS_GROCERY_LIST_PUBLIC_ACTIONS_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v66.html';
+export const MEALS_GROCERY_LIST_DONE_SYNC_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v67.html';
+export const MEALS_GROCERY_LIST_PANTRY_UNDO_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v68.html';
+export const MEALS_GROCERY_LIST_STALE_SOURCE_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v69.html';
+export const MEALS_GROCERY_LIST_BUCKET_ACTION_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v70.html';
 export const MEALS_GROCERY_LIST_TEMPLATE_URI = `ui://widget/fluent-grocery-list-${MEALS_GROCERY_LIST_WIDGET_VERSION}.html`;
 export const MEALS_GROCERY_SMOKE_TEMPLATE_URI = `ui://widget/fluent-grocery-smoke-${MEALS_GROCERY_SMOKE_WIDGET_VERSION}.html`;
 
@@ -136,6 +146,8 @@ export interface GroceryListPublicItemViewModel {
   detail: string | null;
   quantityDisplay: string | null;
   checked: boolean;
+  syncAction?: GroceryListInteractiveSyncActionViewModel | null;
+  syncActions?: GroceryListInteractiveSyncActionViewModel[];
 }
 
 export interface GroceryListInteractiveSyncActionViewModel {
@@ -151,7 +163,7 @@ export interface GroceryListInteractiveItemViewModel extends GroceryListPublicIt
 }
 
 export interface GroceryListPublicBucketViewModel {
-  id: GroceryListBucketViewModel['id'];
+  id: GroceryListBucketViewModel['id'] | GroceryListInteractiveBucketId;
   label: string;
   count: number;
   items: GroceryListPublicItemViewModel[];
@@ -167,7 +179,7 @@ export interface GroceryListInteractiveBucketViewModel {
 }
 
 export interface GroceryListPublicViewModel {
-  bucketOrder: GroceryListViewModel['bucketOrder'];
+  bucketOrder: Array<GroceryListBucketViewModel['id'] | GroceryListInteractiveBucketId>;
   buckets: GroceryListPublicBucketViewModel[];
   listId: string | null;
   objectRole: GroceryListViewModel['objectRole'];
@@ -292,34 +304,7 @@ function buildGroceryListWidgetViewModel(viewModel: GroceryListViewModel): Groce
 }
 
 function buildGroceryListPublicViewModel(viewModel: GroceryListViewModel): GroceryListPublicViewModel {
-  return {
-    bucketOrder: viewModel.bucketOrder,
-    buckets: viewModel.buckets.map((bucket) => ({
-      id: bucket.id,
-      label: bucket.label,
-      count: bucket.count,
-      items: bucket.items.map((item) => ({
-        checked: bucket.id === 'covered',
-        detail: deriveItemDetail(item, resolveInteractiveBucketId(item)),
-        displayName: item.displayName,
-        itemKey: item.itemKey,
-        quantityDisplay: item.quantityDisplay,
-      })),
-    })),
-    listId: viewModel.listId,
-    objectRole: viewModel.objectRole,
-    sourceProvenance: viewModel.sourceProvenance,
-    stale: viewModel.stale,
-    staleReasons: viewModel.staleReasons,
-    subtitle: viewModel.subtitle,
-    summary: viewModel.summary,
-    title: viewModel.title,
-    trustLabel: viewModel.trustLabel,
-    trustState: viewModel.trustState,
-    version: viewModel.version,
-    weekStart: viewModel.weekStart,
-    weekRelation: viewModel.weekRelation,
-  };
+  return buildGroceryListInteractiveViewModel(viewModel);
 }
 
 function buildPrimarySyncAction(item: GroceryListItemViewModel, bucketId: GroceryListBucketViewModel['id']): GroceryListInteractiveSyncActionViewModel | null {
@@ -1226,6 +1211,9 @@ export function getGroceryListWidgetHtml(): string {
     var addItemExpanded = false;
     var addItemDraft = '';
     var coveredExpanded = false;
+    var hostHydratedViewModel = null;
+    var locallySavedActions = Object.create(null);
+    var locallyAddedItems = Object.create(null);
     var syncError = '';
     var syncSent = false;
     var syncPending = false;
@@ -1238,6 +1226,10 @@ export function getGroceryListWidgetHtml(): string {
       if (getOpenAI().notifyIntrinsicHeight) {
         getOpenAI().notifyIntrinsicHeight(document.body.scrollHeight);
       }
+      bridgeNotify('ui/notifications/size-changed', {
+        height: document.body.scrollHeight,
+        width: document.body.scrollWidth,
+      });
     }
 
     function escapeHtml(value) {
@@ -1268,7 +1260,185 @@ export function getGroceryListWidgetHtml(): string {
       if (candidate._meta && candidate._meta.groceryList) {
         return candidate._meta.groceryList;
       }
+      if (candidate.experience === 'grocery_list') {
+        return candidate;
+      }
+      var keys = ['structuredContent', 'output', 'result', 'data', 'value', 'params'];
+      for (var index = 0; index < keys.length; index += 1) {
+        if (candidate[keys[index]]) {
+          var nested = findGroceryList(candidate[keys[index]]);
+          if (nested) {
+            return nested;
+          }
+        }
+      }
       return null;
+    }
+
+    function normalizeBucketId(bucketId) {
+      return bucketId === 'verify_pantry' ? 'check_pantry' : bucketId;
+    }
+
+    function cloneSyncAction(action) {
+      if (!action || typeof action !== 'object') {
+        return null;
+      }
+      return {
+        args: action.args || {},
+        id: action.id || undefined,
+        label: action.label || undefined,
+        toolName: action.toolName,
+      };
+    }
+
+    function buildFallbackSyncActions(item, bucketId, weekStart) {
+      if (!item || !item.itemKey || !weekStart) {
+        return [];
+      }
+
+      if (bucketId === 'need_to_buy' || bucketId === 'verify_quantity') {
+        return [{
+          args: {
+            action_status: 'purchased',
+            item_key: item.itemKey,
+            week_start: weekStart,
+          },
+          id: 'mark_bought',
+          label: 'Mark bought',
+          toolName: 'meals_upsert_grocery_plan_action',
+        }];
+      }
+
+      if (bucketId === 'check_pantry') {
+        return [
+          {
+            args: {
+              action_status: 'have_enough',
+              item_key: item.itemKey,
+              week_start: weekStart,
+            },
+            id: 'already_have_enough',
+            label: 'Already have enough',
+            toolName: 'meals_upsert_grocery_plan_action',
+          },
+          {
+            args: {
+              action_status: 'dont_have_it',
+              item_key: item.itemKey,
+              week_start: weekStart,
+            },
+            id: 'need_to_buy',
+            label: 'Add to buy list',
+            toolName: 'meals_upsert_grocery_plan_action',
+          },
+        ];
+      }
+
+      if (bucketId === 'covered') {
+        return [{
+          args: {
+            item_key: item.itemKey,
+            week_start: weekStart,
+          },
+          id: 'undo',
+          label: 'Undo',
+          toolName: 'meals_delete_grocery_plan_action',
+        }];
+      }
+
+      return [];
+    }
+
+    function normalizeGroceryListForWidget(groceryList) {
+      if (!groceryList || typeof groceryList !== 'object') {
+        return groceryList;
+      }
+
+      var weekStart = groceryList.weekStart || groceryList.week_start || '';
+      var buckets = Array.isArray(groceryList.buckets) ? groceryList.buckets.map(function (bucket) {
+        var bucketId = normalizeBucketId(bucket.id);
+        var items = Array.isArray(bucket.items) ? bucket.items.map(function (item) {
+          var syncActions = Array.isArray(item.syncActions)
+            ? item.syncActions.map(cloneSyncAction).filter(Boolean)
+            : [];
+          var syncAction = cloneSyncAction(item.syncAction) || syncActions[0] || null;
+          var fallbackActions = buildFallbackSyncActions(item, bucketId, weekStart);
+          var primaryActionId = bucketId === 'covered'
+            ? 'undo'
+            : bucketId === 'check_pantry'
+              ? 'already_have_enough'
+              : 'mark_bought';
+          var primaryAction = syncActions.find(function (action) { return action.id === primaryActionId; })
+            || (syncAction && syncAction.id === primaryActionId ? syncAction : null)
+            || fallbackActions.find(function (action) { return action.id === primaryActionId; })
+            || null;
+          var nextSyncActions = syncActions.length ? syncActions.slice() : [];
+          fallbackActions.forEach(function (fallbackAction) {
+            if (!nextSyncActions.some(function (action) { return action.id === fallbackAction.id; })) {
+              nextSyncActions.push(fallbackAction);
+            }
+          });
+          var nextSyncAction = primaryAction || syncAction || nextSyncActions[0] || null;
+
+          return Object.assign({}, item, {
+            checked: bucketId === 'covered' ? true : Boolean(item.checked),
+            syncAction: nextSyncAction,
+            syncActions: nextSyncActions,
+          });
+        }) : [];
+
+        return Object.assign({}, bucket, {
+          id: bucketId,
+          items: items,
+        });
+      }) : [];
+
+      var normalizedOrder = Array.isArray(groceryList.bucketOrder)
+        ? groceryList.bucketOrder.map(normalizeBucketId)
+        : ['need_to_buy', 'verify_quantity', 'check_pantry', 'covered'];
+      ['need_to_buy', 'verify_quantity', 'check_pantry', 'covered'].forEach(function (bucketId) {
+        if (buckets.some(function (bucket) { return bucket.id === bucketId; }) && normalizedOrder.indexOf(bucketId) < 0) {
+          normalizedOrder.push(bucketId);
+        }
+      });
+
+      return Object.assign({}, groceryList, {
+        bucketOrder: normalizedOrder,
+        buckets: buckets,
+      });
+    }
+
+    function hydrateFromCandidate(candidate) {
+      var groceryList = findGroceryList(candidate);
+      if (!groceryList) {
+        return false;
+      }
+      hostHydratedViewModel = applyLocalGroceryListEdits(normalizeGroceryListForWidget(groceryList));
+      return true;
+    }
+
+    function publishViewModel(nextViewModel, options) {
+      reconcileLocalEditsWithHost(normalizeGroceryListForWidget(nextViewModel), Boolean(options && options.clearMissingLocalEdits));
+      var normalized = applyLocalGroceryListEdits(normalizeGroceryListForWidget(nextViewModel));
+      hostHydratedViewModel = normalized;
+
+      var openai = getOpenAI();
+      if (openai && typeof openai === 'object') {
+        openai.toolResponseMetadata = {
+          experience: 'grocery_list',
+          groceryList: normalized,
+          version: '${MEALS_GROCERY_LIST_WIDGET_VERSION}',
+        };
+        openai.toolOutput = {
+          experience: 'grocery_list',
+          groceryList: normalized,
+          summary: normalized.summary,
+          title: normalized.title,
+          weekStart: normalized.weekStart,
+        };
+      }
+
+      return normalized;
     }
 
     function getViewModel() {
@@ -1285,10 +1455,10 @@ export function getGroceryListWidgetHtml(): string {
       for (var index = 0; index < candidates.length; index += 1) {
         var groceryList = findGroceryList(candidates[index]);
         if (groceryList) {
-          return groceryList;
+          return applyLocalGroceryListEdits(normalizeGroceryListForWidget(groceryList));
         }
       }
-      return null;
+      return hostHydratedViewModel;
     }
 
     function toDisplayName(label) {
@@ -1396,6 +1566,8 @@ export function getGroceryListWidgetHtml(): string {
               staged.push({
                 action: selectedAction,
                 item: item,
+                previousBucketId: item.previousBucketId,
+                sourceBucketId: bucket.id,
               });
             }
           });
@@ -1484,15 +1656,40 @@ export function getGroceryListWidgetHtml(): string {
       render();
 
       try {
-        await callTool('meals_upsert_grocery_intent', {
+        var addArgs = {
           display_name: itemName,
           status: 'pending',
           target_window: viewModel.weekStart,
-        });
+        };
+        var addedResult = await callTool('meals_upsert_grocery_intent', addArgs);
+        var addedRecord = findToolRecord(addedResult);
+
+        var localItemKey = normalizeManualItemKey(itemName);
+        var localAddAction = {
+          args: {
+            display_name: itemName,
+            id: addedRecord && addedRecord.id ? addedRecord.id : undefined,
+            status: 'completed',
+            target_window: viewModel.weekStart,
+          },
+          id: 'mark_bought',
+          label: 'Mark bought',
+          toolName: 'meals_upsert_grocery_intent',
+        };
+        locallyAddedItems[localItemKey] = {
+          checked: false,
+          detail: 'Added manually',
+          displayName: itemName,
+          itemKey: localItemKey,
+          quantityDisplay: null,
+          syncAction: localAddAction,
+          syncActions: [localAddAction],
+        };
 
         addItemExpanded = false;
         addItemDraft = '';
         syncSent = true;
+        publishViewModel(viewModel);
         render();
 
         var refreshed = await callTool('meals_render_grocery_list_v2', { week_start: viewModel.weekStart });
@@ -1513,20 +1710,22 @@ export function getGroceryListWidgetHtml(): string {
     var bridgeRpcId = 0;
     var bridgeReady = null;
     var bridgePending = Object.create(null);
+    var bridgeInitialized = false;
 
-    function getBridgeTargets() {
-      var targets = [];
-      if (window.parent && window.parent !== window) targets.push(window.parent);
+    function getBridgeTarget() {
+      if (window.parent && window.parent !== window) {
+        return window.parent;
+      }
       try {
-        if (window.top && window.top !== window && targets.indexOf(window.top) === -1) {
-          targets.push(window.top);
+        if (window.top && window.top !== window) {
+          return window.top;
         }
       } catch (error) {}
-      return targets;
+      return null;
     }
 
     function isBridgeSource(source) {
-      return getBridgeTargets().indexOf(source) !== -1;
+      return source === getBridgeTarget();
     }
 
     window.addEventListener('message', function (event) {
@@ -1534,12 +1733,25 @@ export function getGroceryListWidgetHtml(): string {
       var message = event.data;
       if (!message || message.jsonrpc !== '2.0') return;
       if (message.method === 'ui/initialize' && message.id != null) {
+        hydrateFromCandidate(message);
         event.source.postMessage({
           jsonrpc: '2.0',
           id: message.id,
           result: { appCapabilities: {}, protocolVersion: '2026-01-26' },
         }, '*');
+        bridgeInitialized = true;
         bridgeNotify('ui/notifications/initialized', {});
+        render();
+        return;
+      }
+      if (
+        message.method === 'ui/notifications/tool-result'
+        || message.method === 'ui/notifications/tool-input'
+        || message.method === 'ui/notifications/tool-input-partial'
+      ) {
+        if (hydrateFromCandidate(message)) {
+          render();
+        }
         return;
       }
       if (typeof message.id !== 'number') return;
@@ -1556,8 +1768,8 @@ export function getGroceryListWidgetHtml(): string {
 
     function bridgeRequest(method, params, timeoutMs) {
       return new Promise(function (resolve, reject) {
-        var targets = getBridgeTargets();
-        if (!targets.length) {
+        var target = getBridgeTarget();
+        if (!target) {
           reject(new Error('MCP Apps bridge is not available.'));
           return;
         }
@@ -1571,14 +1783,50 @@ export function getGroceryListWidgetHtml(): string {
           }, timeoutMs || 12000),
         };
         var message = { jsonrpc: '2.0', id: id, method: method, params: params };
-        targets.forEach(function (target) { target.postMessage(message, '*'); });
+        target.postMessage(message, '*');
       });
     }
 
     function bridgeNotify(method, params) {
-      getBridgeTargets().forEach(function (target) {
-        target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
-      });
+      if (method !== 'ui/notifications/initialized' && !bridgeInitialized) {
+        return;
+      }
+      var target = getBridgeTarget();
+      if (!target) {
+        return;
+      }
+      target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
+    }
+
+    function connectMcpAppsHost() {
+      if (bridgeReady) {
+        return bridgeReady;
+      }
+
+      if (!getBridgeTarget()) {
+        bridgeReady = Promise.resolve(null);
+        return bridgeReady;
+      }
+
+      bridgeReady = bridgeRequest('ui/initialize', {
+        appInfo: {
+          name: 'Fluent Grocery List',
+          version: '${MEALS_GROCERY_LIST_WIDGET_VERSION}',
+        },
+        appCapabilities: {},
+        protocolVersion: '2026-01-26',
+      }, 6000)
+        .then(function (result) {
+          bridgeInitialized = true;
+          bridgeNotify('ui/notifications/initialized', {});
+          render();
+          return result;
+        })
+        .catch(function () {
+          return null;
+        });
+
+      return bridgeReady;
     }
 
     function callToolViaBridge(name, args) {
@@ -1588,39 +1836,21 @@ export function getGroceryListWidgetHtml(): string {
     function getCallTool() {
       var openai = getOpenAI();
       var compatibilityCall = typeof openai.callTool === 'function' ? openai.callTool.bind(openai) : null;
-      return compatibilityCall || (getBridgeTargets().length ? callToolViaBridge : null);
+      return compatibilityCall || (getBridgeTarget() ? callToolViaBridge : null);
     }
 
-    function applyRenderResult(result) {
-      var nextViewModel =
-        (result && result._meta && result._meta.groceryList)
-        || (result && result.structuredContent && result.structuredContent.groceryList)
-        || null;
+    function applyRenderResult(result, options) {
+      var nextViewModel = findGroceryList(result);
 
       if (!nextViewModel) {
-        syncSent = false;
+        syncSent = true;
         syncPending = false;
-        syncError = 'Fluent updated, but the refreshed grocery list did not come back.';
+        syncError = 'Saved locally. Refresh did not return a new grocery list yet.';
         render();
         return;
       }
 
-      var openai = getOpenAI();
-      if (openai && typeof openai === 'object') {
-        openai.toolResponseMetadata = {
-          experience: 'grocery_list',
-          groceryList: nextViewModel,
-          version: '${MEALS_GROCERY_LIST_WIDGET_VERSION}',
-        };
-        openai.toolOutput = {
-          experience: 'grocery_list',
-          groceryList: nextViewModel,
-          summary: nextViewModel.summary,
-          title: nextViewModel.title,
-          weekStart: nextViewModel.weekStart,
-        };
-      }
-
+      publishViewModel(nextViewModel, options);
       stagedSelections = Object.create(null);
       syncError = '';
       syncPending = false;
@@ -1647,7 +1877,7 @@ export function getGroceryListWidgetHtml(): string {
 
       try {
         var refreshed = await callTool('meals_render_grocery_list_v2', { week_start: viewModel.weekStart });
-        applyRenderResult(refreshed);
+        applyRenderResult(refreshed, { clearMissingLocalEdits: true });
       } catch (error) {
         syncPending = false;
         syncSent = false;
@@ -1658,6 +1888,297 @@ export function getGroceryListWidgetHtml(): string {
 
     function bucketById(viewModel, bucketId) {
       return (viewModel.buckets || []).find(function (entry) { return entry.id === bucketId; }) || null;
+    }
+
+    function cloneJson(value) {
+      return JSON.parse(JSON.stringify(value || {}));
+    }
+
+    function normalizeManualItemKey(displayName) {
+      return String(displayName || '').trim().toLowerCase();
+    }
+
+    function findToolRecord(candidate) {
+      if (!candidate || typeof candidate !== 'object') {
+        return null;
+      }
+      if (candidate.id || candidate.displayName || candidate.display_name || candidate.status) {
+        return candidate;
+      }
+      var keys = ['structuredContent', 'record', 'result', 'data', 'value'];
+      for (var index = 0; index < keys.length; index += 1) {
+        if (candidate[keys[index]]) {
+          var nested = findToolRecord(candidate[keys[index]]);
+          if (nested) {
+            return nested;
+          }
+        }
+      }
+      return null;
+    }
+
+    function ensureBucket(viewModel, bucketId, label) {
+      viewModel.buckets = Array.isArray(viewModel.buckets) ? viewModel.buckets : [];
+      var bucket = bucketById(viewModel, bucketId);
+      if (!bucket) {
+        bucket = { id: bucketId, label: label, count: 0, items: [] };
+        viewModel.buckets.push(bucket);
+      }
+      viewModel.bucketOrder = Array.isArray(viewModel.bucketOrder) ? viewModel.bucketOrder : [];
+      if (viewModel.bucketOrder.indexOf(bucketId) < 0) {
+        viewModel.bucketOrder.push(bucketId);
+      }
+      bucket.items = Array.isArray(bucket.items) ? bucket.items : [];
+      return bucket;
+    }
+
+    function removeItemFromBuckets(viewModel, itemKey) {
+      var removed = null;
+      (viewModel.buckets || []).forEach(function (bucket) {
+        var nextItems = [];
+        (bucket.items || []).forEach(function (item) {
+          if (item.itemKey === itemKey) {
+            removed = removed || item;
+            return;
+          }
+          nextItems.push(item);
+        });
+        bucket.items = nextItems;
+      });
+      return removed;
+    }
+
+    function updateBucketCounts(viewModel) {
+      var counts = {
+        check_pantry: 0,
+        covered: 0,
+        need_to_buy: 0,
+        verify_quantity: 0,
+      };
+
+      (viewModel.buckets || []).forEach(function (bucket) {
+        bucket.items = Array.isArray(bucket.items) ? bucket.items : [];
+        bucket.count = bucket.items.length;
+        if (Object.prototype.hasOwnProperty.call(counts, bucket.id)) {
+          counts[bucket.id] = bucket.count;
+        }
+      });
+
+      var summary = Object.assign({}, viewModel.summary || {});
+      summary.coveredCount = counts.covered;
+      summary.needToBuyCount = counts.need_to_buy + counts.verify_quantity;
+      summary.verifyCount = counts.check_pantry + counts.verify_quantity;
+      summary.checkPantryCount = counts.check_pantry;
+      summary.verifyQuantityCount = counts.verify_quantity;
+      viewModel.summary = summary;
+    }
+
+    function findItemBucket(viewModel, itemKey, displayName) {
+      var manualKey = normalizeManualItemKey(displayName);
+      var matched = null;
+      (viewModel.buckets || []).forEach(function (bucket) {
+        (bucket.items || []).forEach(function (item) {
+          if (matched) {
+            return;
+          }
+          if (item.itemKey === itemKey || (manualKey && normalizeManualItemKey(item.displayName) === manualKey)) {
+            matched = bucket.id;
+          }
+        });
+      });
+      return matched;
+    }
+
+    function restoreActiveBucketId(bucketId) {
+      var normalized = normalizeBucketId(bucketId);
+      if (normalized === 'need_to_buy' || normalized === 'verify_quantity' || normalized === 'check_pantry') {
+        return normalized;
+      }
+      return null;
+    }
+
+    function inferUndoTargetBucket(saved) {
+      var item = saved && saved.item ? saved.item : {};
+      var explicitBucket = restoreActiveBucketId(saved && saved.previousBucketId)
+        || restoreActiveBucketId(saved && saved.sourceBucketId)
+        || restoreActiveBucketId(item.previousBucketId)
+        || restoreActiveBucketId(item.sourceBucketId);
+      if (explicitBucket) {
+        return explicitBucket;
+      }
+
+      var hint = [
+        item.detail,
+        item.reason,
+        item.note,
+        item.provenanceLabel,
+        item.inventoryStatus,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (hint.indexOf('quantity') >= 0 || hint.indexOf('unit mismatch') >= 0 || hint.indexOf('qty unknown') >= 0) {
+        return 'verify_quantity';
+      }
+      if (hint.indexOf('pantry') >= 0 || hint.indexOf('enough on hand') >= 0 || hint.indexOf('already have enough') >= 0) {
+        return 'check_pantry';
+      }
+
+      return 'need_to_buy';
+    }
+
+    function actionTargetBucket(action, saved) {
+      if (!action || !action.toolName) {
+        return null;
+      }
+
+      if (action.toolName === 'meals_delete_grocery_plan_action') {
+        return inferUndoTargetBucket(saved);
+      }
+
+      var args = action.args || {};
+      if (action.toolName === 'meals_upsert_grocery_intent') {
+        return args.status === 'completed' ? 'covered' : 'need_to_buy';
+      }
+
+      if (action.toolName !== 'meals_upsert_grocery_plan_action') {
+        return null;
+      }
+
+      var status = String(args.action_status || '');
+      if (status === 'dont_have_it' || status === 'needs_purchase' || status === 'have_some_need_to_buy') {
+        return 'need_to_buy';
+      }
+      if (status === 'purchased' || status === 'have_enough' || status === 'confirmed' || status === 'skipped' || status === 'substituted' || status === 'in_cart') {
+        return 'covered';
+      }
+      return null;
+    }
+
+    function localSyncActionsForBucket(item, bucketId, sourceAction, weekStart) {
+      if (sourceAction && sourceAction.toolName === 'meals_upsert_grocery_intent') {
+        var args = Object.assign({}, sourceAction.args || {});
+        args.display_name = args.display_name || item.displayName;
+        args.target_window = args.target_window || weekStart;
+        args.status = bucketId === 'covered' ? 'pending' : 'completed';
+        return [{
+          args: args,
+          id: bucketId === 'covered' ? 'undo' : 'mark_bought',
+          label: bucketId === 'covered' ? 'Undo' : 'Mark bought',
+          toolName: 'meals_upsert_grocery_intent',
+        }];
+      }
+
+      return buildFallbackSyncActions(item, bucketId, weekStart);
+    }
+
+    function moveItemBySavedAction(viewModel, saved) {
+      if (!saved || !saved.item || !saved.action) {
+        return false;
+      }
+
+      var currentBucketId = findItemBucket(viewModel, saved.item.itemKey, saved.item.displayName);
+      var targetBucketId = actionTargetBucket(saved.action, saved);
+      if (!targetBucketId) {
+        return false;
+      }
+
+      var labels = {
+        check_pantry: 'Check at home',
+        covered: 'Done',
+        need_to_buy: 'To buy',
+        verify_quantity: 'Check amount',
+      };
+      var removed = removeItemFromBuckets(viewModel, saved.item.itemKey);
+      var baseItem = removed || saved.item;
+      var previousBucketId = targetBucketId === 'covered'
+        ? restoreActiveBucketId(saved.sourceBucketId)
+          || restoreActiveBucketId(currentBucketId)
+          || restoreActiveBucketId(saved.previousBucketId)
+          || restoreActiveBucketId(baseItem.sourceBucketId)
+          || restoreActiveBucketId(baseItem.previousBucketId)
+        : restoreActiveBucketId(saved.previousBucketId)
+          || restoreActiveBucketId(saved.sourceBucketId)
+          || restoreActiveBucketId(currentBucketId)
+          || restoreActiveBucketId(baseItem.previousBucketId)
+          || restoreActiveBucketId(baseItem.sourceBucketId);
+      var movedItem = Object.assign({}, cloneJson(baseItem), {
+        checked: targetBucketId === 'covered',
+      });
+      if (targetBucketId === 'covered' && previousBucketId) {
+        movedItem.previousBucketId = previousBucketId;
+        movedItem.sourceBucketId = previousBucketId;
+      } else if (targetBucketId !== 'covered') {
+        delete movedItem.previousBucketId;
+        delete movedItem.sourceBucketId;
+      }
+      var syncActions = localSyncActionsForBucket(movedItem, targetBucketId, saved.action, viewModel.weekStart);
+      movedItem.syncActions = syncActions;
+      movedItem.syncAction = syncActions[0] || null;
+
+      var targetBucket = ensureBucket(viewModel, targetBucketId, labels[targetBucketId] || targetBucketId);
+      targetBucket.items.push(movedItem);
+      if (targetBucketId === 'covered') {
+        coveredExpanded = true;
+      }
+      return true;
+    }
+
+    function applyLocalGroceryListEdits(viewModel) {
+      if (!viewModel || typeof viewModel !== 'object') {
+        return viewModel;
+      }
+
+      var nextViewModel = cloneJson(viewModel);
+      Object.keys(locallyAddedItems).forEach(function (itemKey) {
+        var addedItem = locallyAddedItems[itemKey];
+        var exists = (nextViewModel.buckets || []).some(function (bucket) {
+          return (bucket.items || []).some(function (item) {
+            return item.itemKey === itemKey || normalizeManualItemKey(item.displayName) === itemKey;
+          });
+        });
+        if (!exists) {
+          ensureBucket(nextViewModel, 'need_to_buy', 'To buy').items.push(cloneJson(addedItem));
+        }
+      });
+
+      Object.keys(locallySavedActions).forEach(function (itemKey) {
+        moveItemBySavedAction(nextViewModel, locallySavedActions[itemKey]);
+      });
+
+      updateBucketCounts(nextViewModel);
+      return normalizeGroceryListForWidget(nextViewModel);
+    }
+
+    function reconcileLocalEditsWithHost(hostViewModel, clearMissingLocalEdits) {
+      Object.keys(locallyAddedItems).forEach(function (itemKey) {
+        var addedItem = locallyAddedItems[itemKey];
+        if (findItemBucket(hostViewModel, itemKey, addedItem.displayName) || clearMissingLocalEdits) {
+          delete locallyAddedItems[itemKey];
+        }
+      });
+
+      Object.keys(locallySavedActions).forEach(function (itemKey) {
+        var saved = locallySavedActions[itemKey];
+        var targetBucketId = actionTargetBucket(saved.action, saved);
+        var hostBucketId = findItemBucket(hostViewModel, itemKey, saved.item && saved.item.displayName);
+        if (hostBucketId === targetBucketId || (!hostBucketId && clearMissingLocalEdits)) {
+          delete locallySavedActions[itemKey];
+        }
+      });
+    }
+
+    function rememberSavedActions(savedItems) {
+      savedItems.forEach(function (saved) {
+        if (saved && saved.item && saved.item.itemKey) {
+          locallySavedActions[saved.item.itemKey] = {
+            action: cloneSyncAction(saved.action),
+            item: cloneJson(saved.item),
+            previousBucketId: saved.previousBucketId,
+            sourceBucketId: saved.sourceBucketId,
+          };
+          if (locallyAddedItems[saved.item.itemKey] && actionTargetBucket(saved.action, saved) === 'covered') {
+            delete locallyAddedItems[saved.item.itemKey];
+          }
+        }
+      });
     }
 
     function inferAisle(item) {
@@ -1906,6 +2427,9 @@ export function getGroceryListWidgetHtml(): string {
             completedCount += 1;
           }
 
+        rememberSavedActions(stagedItems);
+        publishViewModel(viewModel);
+        stagedSelections = Object.create(null);
         syncSent = true;
         render();
 
@@ -2064,9 +2588,11 @@ export function getGroceryListWidgetHtml(): string {
     }
 
     window.addEventListener('openai:set_globals', function () {
+      hydrateFromCandidate(getOpenAI().toolResponseMetadata) || hydrateFromCandidate(getOpenAI().toolOutput);
       render();
     }, { passive: true });
 
+    void connectMcpAppsHost();
     render();
   })();
 </script>`;
@@ -2128,4 +2654,3 @@ export function getGrocerySmokeWidgetHtml(): string {
   }
 </style>`;
 }
-

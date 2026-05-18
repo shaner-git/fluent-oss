@@ -2,7 +2,7 @@
 
 This page is generated from `contracts/fluent-contract.v1.json` plus an explicit preview list for rich surfaces that are not yet in the public contract.
 
-Current contract version: `2026-05-12.fluent-core-v1.66`
+Current contract version: `2026-05-17.fluent-core-v1.84`
 
 ## Meals
 
@@ -19,6 +19,8 @@ Meals currently ships a broad canonical planning and execution surface, plus a n
 - `meals_get_recipe`
 - `meals_create_recipe`
 - `meals_list_recipes`
+- `meals_get_onboarding_calibration`
+- `meals_record_calibration_response`
 - `meals_get_preferences`
 - `meals_update_preferences`
 - `meals_upsert_plan`
@@ -57,7 +59,7 @@ Meals currently ships a broad canonical planning and execution surface, plus a n
 Current host guidance:
 
 - ChatGPT/App-SDK-style hosts can use the current Meals render tools.
-- Claude should prefer `meals_get_recipe`, `meals_get_current_grocery_list`, and inventory reads, then render host-native visuals. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail.
+- Claude visualizer-only runs should prefer `meals_get_recipe`, `meals_get_current_grocery_list`, and inventory reads, then render host-native visuals. Claude MCP Apps-capable runs may use proven Fluent `ui://` render resources such as Recipe Card and Grocery List v2. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail.
 - OpenClaw should use the plain-MCP Meals data tools rather than depending on Fluent widget rendering.
 
 Preview only:
@@ -109,6 +111,9 @@ Style currently ships canonical closet and purchase-analysis data tools, plus on
 - `style_get_profile`
 - `style_update_profile`
 - `style_get_context`
+- `style_get_onboarding_calibration`
+- `style_record_calibration_response`
+- `style_add_starter_closet_item`
 - `style_list_descriptor_backlog`
 - `style_list_evidence_gaps`
 - `style_analyze_wardrobe`
@@ -132,13 +137,14 @@ Style currently ships canonical closet and purchase-analysis data tools, plus on
 
 ### Current Style Render Tools
 
+- `style_show_setup_calibration_widget`
 - `style_show_purchase_analysis_widget`
 <!-- current-tools:end -->
 
 Current host guidance:
 
-- ChatGPT/App-SDK-style hosts should use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations`, then `style_show_purchase_analysis_widget`; `style_render_purchase_analysis` returns structured data without opening a widget.
-- Claude should use the same staged evidence flow, then answer from `style_render_purchase_analysis` or host-native visuals instead of calling the ChatGPT widget.
+- ChatGPT/MCP Apps-style hosts should use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations`, then `style_show_purchase_analysis_widget`; `style_render_purchase_analysis` returns structured data without opening a widget.
+- Claude MCP Apps-capable runs may use the same staged evidence flow and `style_show_purchase_analysis_widget` as the native Fluent purchase-analysis surface after real image inspection. Claude visualizer-only or text-only runs should answer from `style_render_purchase_analysis` or host-native visuals instead.
 - OpenClaw and generic MCP clients should use the plain-MCP Style data tools, `style_get_purchase_vision_packet` when the host can inspect images, and `style_render_purchase_analysis` after concrete `host_vision` evidence.
 
 Preview only: none right now.
@@ -146,7 +152,7 @@ Preview only: none right now.
 
 ## Render Host Summary
 
-- Current ChatGPT/App-SDK-style render tools: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `style_show_purchase_analysis_widget`
+- Current ChatGPT/App-SDK-style render tools: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `style_show_setup_calibration_widget`, `style_show_purchase_analysis_widget`
 - Current Claude-specific render tools: none.
 - Current OpenClaw-specific render tools: none.
 - Plain-MCP fallbacks remain the canonical cross-host path for every domain.

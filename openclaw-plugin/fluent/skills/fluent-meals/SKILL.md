@@ -30,6 +30,7 @@ Use this skill when the user wants Meals help that depends on Fluent meal state,
 - Use `fluent-core` patterns for readiness and lifecycle checks.
 - If capability discovery is deferred in the client, use `meals_list_tools` as the fallback directory.
 - Follow the host routing matrix in [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md) before choosing a rich render path.
+- Start setup, calibration, confidence-sensitive planning, inferred-food-pattern confirmation, and "what do you know about how we eat?" turns with `meals_get_onboarding_calibration`.
 - In OpenClaw, do not assume a Fluent widget or Claude-style visual surface. Default to canonical data and text unless an operator has explicitly provided a host-specific visual equivalent.
 - Prefer summary reads first.
 - If a summary read already answers the user's question, stop there unless the next step needs detail the summary did not provide.
@@ -51,13 +52,22 @@ Use this skill when the user wants Meals help that depends on Fluent meal state,
 When the user explicitly wants to set up Meals, or a Meals task needs state that is not ready:
 
 1. Use the `fluent-core` flow to confirm Meals is enabled and onboarding is in progress.
-2. If capability discovery is deferred, call `meals_list_tools` and use its grouped output as the fallback directory.
-3. Complete the minimum onboarding questions needed for the current request.
-4. When setup is complete, finish onboarding through the `fluent-core` flow.
+2. Call `meals_get_onboarding_calibration` to separate confirmed preferences, pantry evidence, meal-history inference, grocery readiness, and unresolved questions.
+3. If capability discovery is deferred, call `meals_list_tools` and use its grouped output as the fallback directory.
+4. Ask only the minimum setup questions needed for the current request: usually household shape, allergies or hard avoids, cooking cadence, weeknight time, and grocery expectation for new users, or 1-3 confirm/correct questions for returning/imported users.
+5. Use `meals_record_calibration_response` only after explicit confirmation, rejection, correction, starter preference input, or pantry stale/accidental marking.
+6. When setup is complete, finish onboarding through the `fluent-core` flow.
 
 Treat Meals as ready only when Fluent marks it ready.
 
 Do not infer onboarding readiness from prior conversation state, cached client state, or local package state.
+
+Calibration language:
+
+- Pantry ownership, old plans, accepted recipes, and grocery actions are evidence, not confirmed preference.
+- Say "your pantry suggests" or "your meal history suggests" for inferred patterns. Do not say "you like X" unless the user confirmed it.
+- Allergies, medical restrictions, dietary constraints, and hard avoids require explicit user confirmation.
+- If calibration is thin, offer a starter plan or grocery list with lower confidence instead of forcing a long quiz.
 
 ## Normal Operating Pattern
 
@@ -71,6 +81,7 @@ Default to this pattern:
 
 Default low-cost tools:
 
+- `meals_get_onboarding_calibration` for setup, calibration, and confidence-sensitive planning or grocery turns
 - `meals_get_plan` with `view: "summary"`
 - `meals_list_plan_history`
 - `meals_get_preferences` with `view: "summary"`

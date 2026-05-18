@@ -70,10 +70,10 @@ export function renderToolsReferenceMarkdown(): string {
     '',
     '## Current Render Host Classification',
     '',
-    `- ChatGPT/App-SDK-style current render tools: ${renderToolSetLine(
+    `- ChatGPT/MCP-Apps-style current render tools: ${renderToolSetLine(
       CURRENT_RENDER_TOOL_HOST_GUIDE.map((guide) => guide.name),
     )}`,
-    '- Claude-specific current render tools: none. Claude should prefer canonical data tools and host-native visuals.',
+    '- Claude-specific visualizer tools are separate from Fluent MCP Apps resources. Claude visualizer-only runs should prefer canonical data plus host-native visuals; Claude MCP Apps-capable runs may use proven Fluent `ui://` render resources.',
     '- OpenClaw-compatible current render tools: none as dedicated Fluent rich widgets. OpenClaw should use the plain-MCP fallbacks.',
     '- Plain-MCP fallback tools stay canonical even when a render tool exists.',
     '',

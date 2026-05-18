@@ -3,6 +3,7 @@ import type { JsonPatchOperation } from './recipe-document';
 import type {
   ConfirmedOrderSyncStatus,
   FeedbackValue,
+  MealsCalibrationContextRecord,
   MealsTrainingContextRecord,
 } from './types';
 
@@ -279,9 +280,11 @@ export interface MealPlanCandidateSummaryRecord {
   };
   entries: MealPlanCandidateEntryRecord[];
   summary: unknown;
+  calibrationContext?: MealsCalibrationContextRecord;
 }
 
 export interface MealPlanGenerationRecord {
+  calibrationContext?: MealsCalibrationContextRecord;
   id: string;
   weekStart: string;
   inputHash: string;

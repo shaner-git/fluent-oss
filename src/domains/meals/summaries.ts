@@ -93,6 +93,7 @@ export function summarizeGroceryPlan(plan: GroceryPlanRecord | null): GroceryPla
   const unresolvedCount = plan.raw.items.filter((item) => item.uncertainty !== null).length;
   const pantryCheckCount = plan.raw.items.filter((item) => item.inventoryStatus === 'check_pantry').length;
   return {
+    calibrationContext: plan.raw.calibrationContext,
     id: plan.id,
     weekStart: plan.weekStart,
     mealPlanId: plan.mealPlanId,
@@ -126,6 +127,7 @@ export function summarizeCurrentGroceryList(list: CurrentGroceryListRecord | nul
   if (!list) return null;
 
   return {
+    calibrationContext: list.calibrationContext,
     objectRole: list.objectRole,
     listId: list.listId,
     version: list.version,

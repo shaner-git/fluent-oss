@@ -30,6 +30,14 @@ import {
 } from './helpers';
 import { buildSignedStyleImageUrl, buildStyleAssetKey, buildStyleImageUrl, parseOwnedStyleAsset } from './media';
 import {
+  buildStyleCalibrationSignal,
+  buildStyleItemCalibration,
+  buildStyleOnboardingCalibration,
+  isStyleItemExcludedFromCalibration,
+  mergeStyleCalibrationSignals,
+  mergeStyleItemCalibration,
+} from './onboarding-calibration';
+import {
   presentStyleDescriptorBacklog,
   presentStylePurchaseAnalysis,
   presentStyleEvidenceGaps,
@@ -53,6 +61,7 @@ import type {
   StyleEvidenceGapPriorityFilter,
   StyleEvidenceGapType,
   StyleItemProfileRecord,
+  StyleItemProfileDocument,
   StyleItemSummaryRecord,
   StyleItemRecord,
   StyleOccasionCoverageRecord,
@@ -63,9 +72,16 @@ import type {
   StylePurchaseAnalysisItemMatch,
   StylePurchaseVisualEvidence,
   StyleComparatorCoverage,
+  StyleCalibrationSignalKind,
+  StyleCalibrationSignalRecord,
+  StyleCalibrationSignalStatus,
+  StyleInferenceSource,
   StyleArchiveItemResult,
+  StyleItemWearStatus,
+  StyleOnboardingCalibrationRecord,
   StylePhotoDeliveryRecord,
   StyleReplacementCandidateRecord,
+  StyleTopWardrobeJob,
   StyleWardrobeAnalysis,
   StyleWardrobeAnalysisFocus,
   StyleWardrobeFindingPriority,
@@ -116,6 +132,176 @@ export function buildStyleMutationAck(
   };
 }
 
+type StarterClosetEvidence = {
+  fieldEvidence: Record<string, unknown>;
+  profileSignals: Partial<StyleItemProfileDocument>;
+  hasProfileSignals: boolean;
+};
+
+function buildStarterClosetEvidence(input: {
+  item: Record<string, unknown>;
+  photoUrl?: string | null;
+  sourceSnapshot?: unknown;
+}): StarterClosetEvidence {
+  const rawProfile = asRecord(input.item.profile ?? input.item.item_profile ?? input.item.itemProfile) ?? {};
+  const sourceSnapshotText = JSON.stringify(input.sourceSnapshot ?? '').slice(0, 2000);
+  const text = [
+    input.item.description,
+    input.item.notes,
+    input.item.name,
+    input.item.subcategory,
+    input.item.category,
+    sourceSnapshotText,
+  ]
+    .map((value) => asNullableString(value))
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .toLowerCase();
+  const useCases = uniqueStrings([
+    ...asStringArray(rawProfile.useCases),
+    ...asStringArray(input.item.useCases ?? input.item.use_cases),
+    ...asStringArray(input.item.occasions),
+    ...inferStarterUseCases(text),
+  ]);
+  const bestOccasions = uniqueStrings([
+    ...asStringArray(rawProfile.bestOccasions),
+    ...asStringArray(input.item.bestOccasions ?? input.item.best_occasions),
+    ...inferStarterUseCases(text),
+  ]);
+  const fitObservations = uniqueStrings([
+    ...asStringArray(rawProfile.fitObservations),
+    ...asStringArray(input.item.fitObservations ?? input.item.fit_observations),
+    ...inferStarterFitObservations(text),
+  ]);
+  const structureLevel =
+    asNullableString(rawProfile.structureLevel ?? input.item.structureLevel ?? input.item.structure_level) ??
+    inferStarterStructureLevel(text);
+  const silhouette =
+    asNullableString(rawProfile.silhouette ?? input.item.silhouette) ??
+    inferStarterSilhouette(text);
+  const polishLevel =
+    asNullableString(rawProfile.polishLevel ?? input.item.polishLevel ?? input.item.polish_level) ??
+    inferStarterPolishLevel(text);
+  const descriptorSignals = [
+    structureLevel ? `structure:${structureLevel}` : null,
+    silhouette ? `silhouette:${silhouette}` : null,
+    polishLevel ? `polish:${polishLevel}` : null,
+    ...fitObservations.map((entry) => `fit:${entry}`),
+    ...useCases.map((entry) => `use:${entry}`),
+  ].filter((value): value is string => Boolean(value));
+  const profileSignals: Partial<StyleItemProfileDocument> = {
+    bestOccasions,
+    descriptorConfidence: descriptorSignals.length > 0 ? 0.5 : null,
+    fitObservations,
+    polishLevel,
+    silhouette,
+    structureLevel,
+    tags: uniqueStrings([
+      ...asStringArray(rawProfile.tags),
+      ...asStringArray(input.item.tags),
+      'starter closet',
+      text ? 'text described' : null,
+    ]),
+    useCases,
+  };
+  const evidenceGaps = input.photoUrl ? [] : ['missing_photo_evidence'];
+  const fieldEvidence = {
+    starterCloset: {
+      descriptionSignals: descriptorSignals,
+      evidenceGaps,
+      source: input.photoUrl ? 'user_photo_or_link' : 'user_description',
+    },
+  };
+  return {
+    fieldEvidence,
+    hasProfileSignals: descriptorSignals.length > 0 || evidenceGaps.length > 0,
+    profileSignals,
+  };
+}
+
+function mergeStarterFieldEvidence(existing: unknown, starter: Record<string, unknown>): Record<string, unknown> {
+  const existingRecord = asRecord(parseJsonLike(existing)) ?? {};
+  return {
+    ...existingRecord,
+    ...starter,
+  };
+}
+
+function mergeStarterProfileSignals(
+  base: StyleItemProfileDocument | null | undefined,
+  signals: Partial<StyleItemProfileDocument>,
+): StyleItemProfileDocument {
+  const merged = normalizeStyleItemProfile({
+    ...(base ?? {}),
+    ...signals,
+    descriptorConfidence: signals.descriptorConfidence ?? base?.descriptorConfidence ?? null,
+    polishLevel: signals.polishLevel ?? base?.polishLevel ?? null,
+    silhouette: signals.silhouette ?? base?.silhouette ?? null,
+    structureLevel: signals.structureLevel ?? base?.structureLevel ?? null,
+    bestOccasions: uniqueStrings([...(base?.bestOccasions ?? []), ...(signals.bestOccasions ?? [])]),
+    fitObservations: uniqueStrings([...(base?.fitObservations ?? []), ...(signals.fitObservations ?? [])]),
+    tags: uniqueStrings([...(base?.tags ?? []), ...(signals.tags ?? [])]),
+    useCases: uniqueStrings([...(base?.useCases ?? []), ...(signals.useCases ?? [])]),
+  });
+  return merged;
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+function inferStarterFitObservations(text: string): string[] {
+  const observations: string[] = [];
+  if (/\bknee[-\s]?length\b/.test(text)) observations.push('knee length');
+  if (/\bstructured shoulders?\b/.test(text)) observations.push('structured shoulders');
+  if (/\b(boxy|relaxed|oversized|slim|cropped|longline)\b/.test(text)) {
+    observations.push(text.match(/\b(boxy|relaxed|oversized|slim|cropped|longline)\b/)![1]);
+  }
+  return observations;
+}
+
+function inferStarterStructureLevel(text: string): string | null {
+  if (/\bunstructured\b/.test(text)) return 'unstructured';
+  if (/\bstructured shoulders?\b|\bstructured\b|\btailored\b/.test(text)) return 'structured';
+  if (/\bsoft\b|\bslouchy\b/.test(text)) return 'soft';
+  return null;
+}
+
+function inferStarterSilhouette(text: string): string | null {
+  if (/\bknee[-\s]?length\b/.test(text)) return 'long coat';
+  if (/\bboxy\b/.test(text)) return 'boxy';
+  if (/\boversized\b/.test(text)) return 'oversized';
+  if (/\brelaxed\b/.test(text)) return 'relaxed';
+  if (/\bslim\b/.test(text)) return 'slim';
+  if (/\bcropped\b/.test(text)) return 'cropped';
+  return null;
+}
+
+function inferStarterPolishLevel(text: string): string | null {
+  if (/\bformal\b|\bdressy\b|\bblack tie\b/.test(text)) return 'formal';
+  if (/\bsmart casual\b|\bpolished\b|\bstructured\b|\btailored\b|\bdinner\b|\boffice\b|\bwork\b/.test(text)) {
+    return 'polished';
+  }
+  if (/\bcasual\b|\bweekend\b|\bathletic\b|\brunning\b/.test(text)) return 'casual';
+  return null;
+}
+
+function inferStarterUseCases(text: string): string[] {
+  const useCases: string[] = [];
+  if (/\bwork\b|\boffice\b/.test(text)) useCases.push('work');
+  if (/\bdinners?\b|\bdate night\b|\brestaurant\b/.test(text)) useCases.push('dinner');
+  if (/\bweekend\b/.test(text)) useCases.push('weekend');
+  if (/\btravel\b/.test(text)) useCases.push('travel');
+  if (/\bathletic\b|\brunning\b|\bgym\b|\btraining\b/.test(text)) useCases.push('athletic');
+  return useCases;
+}
+
 function normalizeStylePurchaseVisualEvidence(value: unknown): StylePurchaseVisualEvidence {
   const record = asRecord(value);
   if (!record) {
@@ -141,6 +327,48 @@ function normalizeStylePurchaseVisualEvidence(value: unknown): StylePurchaseVisu
     comparatorItemIdsInspected: Array.from(new Set(comparatorItemIdsInspected)).slice(0, 12),
     source: asNullableString(record.source) ?? (candidateInspected ? 'host_vision' : null),
   };
+}
+
+function normalizeCalibrationSignalForWrite(input: {
+  confidence?: number | null;
+  correctedValue?: string | null;
+  kind: StyleCalibrationSignalKind;
+  note?: string | null;
+  source?: StyleInferenceSource;
+  status?: StyleCalibrationSignalStatus;
+  updatedAt: string;
+  value: string;
+}): StyleCalibrationSignalRecord {
+  if (!input.status) {
+    throw new Error('Style calibration signals require explicit status.');
+  }
+  if (!input.source) {
+    throw new Error('Style calibration signals require explicit source.');
+  }
+  const status = input.status;
+  const source = input.source;
+  if ((status === 'confirmed' || status === 'corrected' || status === 'rejected') && source !== 'user_confirmed') {
+    throw new Error(`Style calibration status "${status}" requires source "user_confirmed".`);
+  }
+  if (status === 'inferred' && source === 'user_confirmed') {
+    throw new Error('Inferred Style calibration signals cannot use source "user_confirmed".');
+  }
+  if (status === 'corrected' && !asNullableString(input.correctedValue)) {
+    throw new Error('Corrected Style calibration signals require corrected_value.');
+  }
+  if (status !== 'corrected' && asNullableString(input.correctedValue)) {
+    throw new Error('Style calibration corrected_value can only be used with status "corrected".');
+  }
+  return buildStyleCalibrationSignal({
+    confidence: input.confidence,
+    correctedValue: input.correctedValue,
+    kind: input.kind,
+    note: input.note,
+    source,
+    status,
+    updatedAt: input.updatedAt,
+    value: input.value,
+  });
 }
 
 export class StyleService {
@@ -242,6 +470,148 @@ export class StyleService {
       stylistDescriptorCoverage,
       typedProfileCoverage,
       usableProfileCoverage,
+    };
+  }
+
+  async getOnboardingCalibration(): Promise<StyleOnboardingCalibrationRecord> {
+    const [profile, items] = await Promise.all([this.getProfile(), this.listItems()]);
+    return buildStyleOnboardingCalibration({ profile, items });
+  }
+
+  async recordCalibrationResponse(input: {
+    itemWearStatuses?: Array<{
+      itemId: string;
+      note?: string | null;
+      wearStatus: StyleItemWearStatus;
+    }> | null;
+    profilePatch?: unknown;
+    signals?: Array<{
+      confidence?: number | null;
+      correctedValue?: string | null;
+      kind: StyleCalibrationSignalKind;
+      note?: string | null;
+      source?: StyleInferenceSource;
+      status?: StyleCalibrationSignalStatus;
+      value: string;
+    }> | null;
+    provenance: MutationProvenance;
+  }): Promise<StyleOnboardingCalibrationRecord> {
+    const [before, items] = await Promise.all([this.getProfile(), this.listItems()]);
+    const knownItemIds = new Set(items.map((item) => item.id));
+    const unknownItemId = (input.itemWearStatuses ?? []).find((entry) => !knownItemIds.has(entry.itemId))?.itemId;
+    if (unknownItemId) {
+      throw new Error(`Unknown style item for calibration: ${unknownItemId}. Use a phrase-level rejected signal when no stable item match is available.`);
+    }
+    const profilePatch = normalizeStyleProfilePatch(input.profilePatch);
+    const signalTimestamp = new Date().toISOString();
+    const nextSignals = (input.signals ?? []).map((signal) =>
+      normalizeCalibrationSignalForWrite({
+        confidence: signal.confidence,
+        correctedValue: signal.correctedValue,
+        kind: signal.kind,
+        note: signal.note,
+        source: signal.source,
+        status: signal.status,
+        updatedAt: signalTimestamp,
+        value: signal.value,
+      }),
+    );
+    const calibrationSignals = mergeStyleCalibrationSignals(
+      before.raw.calibrationSignals,
+      nextSignals,
+    );
+    const itemCalibration = mergeStyleItemCalibration(
+      before.raw.itemCalibration,
+      (input.itemWearStatuses ?? []).map((entry) =>
+        buildStyleItemCalibration({
+          itemId: entry.itemId,
+          note: entry.note,
+          updatedAt: signalTimestamp,
+          wearStatus: entry.wearStatus,
+        }),
+      ),
+    );
+    const inferredTasteConfirmed = calibrationSignals.some(
+      (signal) => (signal.status === 'confirmed' || signal.status === 'corrected') && signal.source === 'user_confirmed',
+    );
+    const beforeCalibration = buildStyleOnboardingCalibration({ profile: before, items });
+    const merged = mergeStyleProfile(before.raw, {
+      ...profilePatch,
+      calibrationSignals,
+      itemCalibration,
+      tasteCalibrationConfirmed: inferredTasteConfirmed,
+    });
+
+    await this.repository.upsertProfile(JSON.stringify(merged));
+    const after = await this.getProfile();
+    const calibration = await this.getOnboardingCalibration();
+
+    await this.recordDomainEvent({
+      after: calibration,
+      before: beforeCalibration,
+      entityId: after.profileId,
+      entityType: 'style_calibration',
+      eventType: 'style.calibration_response_recorded',
+      provenance: input.provenance,
+    });
+    return calibration;
+  }
+
+  async addStarterClosetItem(input: {
+    item: unknown;
+    photoUrl?: string | null;
+    provenance: MutationProvenance;
+    sourceSnapshot?: unknown;
+  }): Promise<{ calibration: StyleOnboardingCalibrationRecord; item: StyleItemRecord }> {
+    const normalizedItem = normalizeStyleItemInput(input.item);
+    const starterEvidence = buildStarterClosetEvidence({
+      item: normalizedItem,
+      photoUrl: input.photoUrl,
+      sourceSnapshot: input.sourceSnapshot,
+    });
+    const item = await this.upsertItem({
+      item: {
+        ...normalizedItem,
+        field_evidence: mergeStarterFieldEvidence(normalizedItem.field_evidence ?? normalizedItem.fieldEvidence, starterEvidence.fieldEvidence),
+        status: 'active',
+      },
+      provenance: input.provenance,
+      sourceSnapshot: input.sourceSnapshot,
+    });
+    if (starterEvidence.hasProfileSignals) {
+      const current = await this.getItem(item.id);
+      await this.repository.upsertItemProfile({
+        itemId: item.id,
+        legacyProfileId: current?.profile?.legacyProfileId ?? null,
+        method: 'starter_closet_description',
+        rawJson: JSON.stringify(mergeStarterProfileSignals(current?.profile?.raw, starterEvidence.profileSignals)),
+        source: 'style_starter_closet',
+      });
+    }
+    const photoUrl = asNullableString(input.photoUrl);
+    if (photoUrl) {
+      await this.upsertItemPhotos({
+        itemId: item.id,
+        photos: [
+          {
+            id: `style-photo:${item.id}:starter-primary`,
+            is_primary: true,
+            kind: 'product',
+            source_url: photoUrl,
+            url: photoUrl,
+            view: 'product',
+          },
+        ],
+        provenance: input.provenance,
+      });
+    }
+    const created = await this.getItem(item.id);
+    if (!created) {
+      throw new Error(`Style starter item ${item.id} could not be read back.`);
+    }
+    return {
+      calibration: await this.getOnboardingCalibration(),
+      item: created,
     };
   }
 
@@ -864,7 +1234,8 @@ export class StyleService {
   async analyzeWardrobe(input: { focus?: StyleWardrobeAnalysisFocus | null }): Promise<StyleWardrobeAnalysis> {
     const focus = input.focus ?? 'all';
     const [profile, items, evidenceGaps] = await Promise.all([this.getProfile(), this.listItems(), this.listEvidenceGaps()]);
-    const activeItems = items.filter((item) => item.status === 'active');
+    const calibration = buildStyleOnboardingCalibration({ profile, items });
+    const activeItems = items.filter((item) => item.status === 'active' && !isStyleItemExcludedFromCalibration(profile, item.id));
     const itemsById = Object.fromEntries(
       activeItems.map((item) => [item.id, summarizeStyleItem(item) as StyleItemSummaryRecord]),
     );
@@ -1007,7 +1378,8 @@ export class StyleService {
     const candidate = normalizeStylePurchaseCandidate(input.candidate);
     const visualEvidence = normalizeStylePurchaseVisualEvidence(input.visualEvidence);
     const [profile, items] = await Promise.all([this.getProfile(), this.listItems()]);
-    const activeItems = items.filter((item) => item.status === 'active');
+    const calibration = buildStyleOnboardingCalibration({ profile, items });
+    const activeItems = items.filter((item) => item.status === 'active' && !isStyleItemExcludedFromCalibration(profile, item.id));
     const itemsById: Record<string, StyleItemSummaryRecord> = {};
     const registerAnalysisItem = (item: StyleItemRecord): StyleItemSummaryRecord => {
       const existing = itemsById[item.id];
@@ -1019,17 +1391,15 @@ export class StyleService {
       return summary;
     };
     const candidateCategory = candidate.category.toLowerCase();
-    const candidateComparatorKey =
-      candidate.comparatorKey ??
-      inferStyleComparatorKey({
-        category: candidate.category,
-        subcategory: candidate.subcategory,
-      });
+    const candidateComparatorKey = resolvePurchaseCandidateComparatorKey(candidate);
+    const candidateWardrobeJob = inferTopWardrobeJobFromCandidate(candidate);
     const sameCategory = activeItems.filter((item) => item.category?.toLowerCase() === candidateCategory);
-    const exactComparatorItems = [...sameCategory]
+    const comparableSameCategory = sameCategory.filter((item) => isDirectPurchaseComparatorCandidate(candidate, item));
+    const exactComparatorItems = [...comparableSameCategory]
       .map((item) => {
-        if (candidateComparatorKey && candidateComparatorKey !== 'unknown' && item.comparatorKey === candidateComparatorKey) {
-          const reasons = [`exact comparator lane (${candidateComparatorKey})`];
+        const itemComparatorKey = resolveStyleItemComparatorKey(item);
+        if (candidateComparatorKey && candidateComparatorKey !== 'unknown' && itemComparatorKey === candidateComparatorKey) {
+          const reasons = [`closest wardrobe match (${candidateComparatorKey})`];
           if (candidate.colorFamily && item.colorFamily?.toLowerCase() === candidate.colorFamily.toLowerCase()) {
             reasons.push(`same color family (${candidate.colorFamily})`);
           }
@@ -1053,8 +1423,10 @@ export class StyleService {
           reasons,
         };
       });
+    const exactComparatorItemIds = new Set(exactComparatorItems.map((entry) => entry.itemId));
 
-    const typedRoleItems = [...sameCategory]
+    const typedRoleItems = [...comparableSameCategory]
+      .filter((item) => !exactComparatorItemIds.has(item.id))
       .map((item) => {
         if (matchesTypedRoleCandidate(candidate, item)) {
           const reasons = [`typed role match (${candidate.subcategory ?? item.profile?.raw.itemType ?? candidateComparatorKey ?? candidate.category})`];
@@ -1083,10 +1455,10 @@ export class StyleService {
       ...exactComparatorItems.map((entry) => entry.itemId),
       ...typedRoleItems.map((entry) => entry.itemId),
     ]);
-    const sameCategoryItems = [...sameCategory]
+    const sameCategoryItems = [...comparableSameCategory]
       .filter((item) => !excludedSameCategoryIds.has(item.id))
       .map((item) => {
-        const reasons: string[] = [`same category lane (${candidate.category})`];
+        const reasons: string[] = [`same kind of item (${candidate.category})`];
         let score = 1;
         if (candidate.colorFamily && item.colorFamily?.toLowerCase() === candidate.colorFamily.toLowerCase()) {
           reasons.push(`same color family (${candidate.colorFamily})`);
@@ -1126,11 +1498,11 @@ export class StyleService {
         };
       });
 
-    const sameColorFamilyItems = sameCategory
+    const sameColorFamilyItems = comparableSameCategory
       .filter((item) => item.colorFamily && candidate.colorFamily && item.colorFamily.toLowerCase() === candidate.colorFamily.toLowerCase())
       .map((item) => {
         const reasons = [`same color family (${candidate.colorFamily})`];
-        reasons.push(`same category lane (${candidate.category})`);
+        reasons.push(`same kind of item (${candidate.category})`);
         return {
           item,
           reasons,
@@ -1182,8 +1554,19 @@ export class StyleService {
         const itemCategory = item.category?.toLowerCase() ?? '';
         const preferredIndex = preferredPairCategories.indexOf(itemCategory);
         if (preferredIndex >= 0) {
-          reasons.push(`paired lane (${item.category})`);
+          reasons.push(`pairs with this part of the closet (${item.category})`);
           score += preferredPairCategories.length - preferredIndex + 3;
+        }
+        if (candidateCategory === 'bottom' && itemCategory === 'top') {
+          const itemTopJob = inferTopWardrobeJobFromItem(item);
+          if (itemTopJob === 'lifestyle_plain_tee') {
+            reasons.push('easy casual top pairing');
+            score += 3;
+          } else if (itemTopJob === 'athletic_training_performance_tee') {
+            score -= 3;
+          } else if (itemTopJob === 'graphic_statement_tee' || itemTopJob === 'jersey_fanwear') {
+            score -= 1;
+          }
         }
         if (candidate.formality != null && item.formality != null) {
           const formalityDistance = Math.abs(item.formality - candidate.formality);
@@ -1202,7 +1585,7 @@ export class StyleService {
         }
         return {
           item,
-          reasons: reasons.length > 0 ? reasons : ['different lane with plausible pairing relationship'],
+          reasons: reasons.length > 0 ? reasons : ['different closet area with plausible pairing relationship'],
           sortName: item.name,
           score,
         };
@@ -1222,7 +1605,7 @@ export class StyleService {
       candidate,
       candidateCategory,
       items: activeItems,
-    });
+    }).filter((entry) => !pairingCandidates.some((pairing) => pairing.itemId === entry.itemId));
     for (const rejected of nonComparatorItems) {
       const item = activeItems.find((entry) => entry.id === rejected.itemId);
       if (item) {
@@ -1293,7 +1676,7 @@ export class StyleService {
       tensionNotes.push(`sits outside the current formality tendency (${profile.raw.formalityTendency})`);
     }
     if (sportUtilityException) {
-      tensionNotes.push('reads as sport or utility gear rather than a core wardrobe lane piece');
+      tensionNotes.push('reads as sport or utility gear rather than a core wardrobe piece');
     }
     const typedProfileCoverage =
       activeItems.length > 0
@@ -1400,15 +1783,19 @@ export class StyleService {
       comparatorIds: exactComparatorItems.map((entry) => entry.itemId),
       comparatorSummaries: comparatorDescriptorSummaries,
     });
-    const confidenceNotes = buildPurchaseConfidenceNotes({
-      candidateHasImage: candidate.imageUrls.length > 0,
-      comparatorCoverageMode: comparatorCoverage.mode,
-      descriptorDeltas,
-      exactComparatorCount: exactComparatorItems.length,
-      itemsById,
-    });
+    const confidenceNotes = [
+      ...calibration.purchaseAnalysisReadiness.notes,
+      ...buildPurchaseConfidenceNotes({
+        candidateHasImage: candidate.imageUrls.length > 0,
+        comparatorCoverageMode: comparatorCoverage.mode,
+        descriptorDeltas,
+        exactComparatorCount: exactComparatorItems.length,
+        itemsById,
+      }),
+    ];
 
     const analysis: StylePurchaseAnalysis = {
+      calibration,
       candidate,
       candidateDescriptorSummary,
       candidateSummary: {
@@ -1421,6 +1808,7 @@ export class StyleService {
         name: candidate.name,
         silhouette: candidate.silhouette,
         subcategory: candidate.subcategory,
+        wardrobeJob: candidate.category === 'TOP' ? candidateWardrobeJob : null,
       },
       comparatorCoverage,
       comparatorDescriptorSummaries,
@@ -1541,6 +1929,33 @@ export class StyleService {
         sourceUrl: bundlePhoto.sourceUrl ?? bundlePhoto.url ?? null,
       });
     };
+    const roleForRequestedItem = (
+      itemId: string,
+    ): Exclude<StyleVisualBundleAssetRecord['role'], 'candidate'> => {
+      const context = comparisonContextByItemId.get(itemId);
+      if (!context) {
+        return 'requested_item';
+      }
+      if (context.bucketRoles.includes('exact_comparator')) {
+        return 'exact_comparator';
+      }
+      if (context.bucketRoles.includes('typed_role')) {
+        return 'typed_role';
+      }
+      if (context.bucketRoles.includes('rejected_non_comparator')) {
+        return 'rejected_comparator';
+      }
+      if (context.bucketRoles.includes('top_comparison')) {
+        return 'adjacent_reference';
+      }
+      if (context.bucketRoles.includes('same_category')) {
+        return 'same_category';
+      }
+      if (context.bucketRoles.includes('nearby_formality')) {
+        return 'nearby_formality';
+      }
+      return 'requested_item';
+    };
 
     if (analysis) {
       const candidateImageUrl = analysis.candidate.imageUrls[0] ?? null;
@@ -1563,7 +1978,7 @@ export class StyleService {
     }
 
     for (const itemId of requestedItemIds) {
-      await pushItemPrimaryPhoto(itemId, 'requested_item');
+      await pushItemPrimaryPhoto(itemId, roleForRequestedItem(itemId));
     }
 
     if (includeComparators && analysis && requestedItemIds.length === 0) {
@@ -1998,8 +2413,8 @@ function buildComparatorCoverage(input: {
       mode: 'typed_role',
       note:
         input.candidateComparatorKey && input.candidateComparatorKey !== 'unknown'
-          ? `No exact ${input.candidateComparatorKey} comparators found; falling back to typed role context.`
-          : 'No exact comparator lane found; falling back to typed role context.',
+          ? `No exact ${input.candidateComparatorKey} comparators found; falling back to similar wardrobe-job context.`
+          : 'No exact wardrobe match found; falling back to similar wardrobe-job context.',
       sameCategoryCount: input.sameCategoryCount,
       typedRoleCount: input.typedRoleCount,
     };
@@ -2011,8 +2426,8 @@ function buildComparatorCoverage(input: {
       mode: 'category_fallback',
       note:
         input.candidateComparatorKey && input.candidateComparatorKey !== 'unknown'
-          ? `No exact ${input.candidateComparatorKey} comparators found; falling back to ${input.candidateCategory.toLowerCase()} category context.`
-          : `No exact comparator lane found; falling back to ${input.candidateCategory.toLowerCase()} category context.`,
+          ? `No exact ${input.candidateComparatorKey} comparators found; falling back to closest ${input.candidateCategory.toLowerCase()} closet context.`
+          : `No exact wardrobe match found; falling back to closest ${input.candidateCategory.toLowerCase()} closet context.`,
       sameCategoryCount: input.sameCategoryCount,
       typedRoleCount: 0,
     };
@@ -2511,6 +2926,224 @@ function matchesTypedRoleCandidate(candidate: StylePurchaseAnalysis['candidate']
   return candidateRole !== 'unknown' && candidateRole === itemRole;
 }
 
+function inferTopWardrobeJobFromCandidate(candidate: StylePurchaseAnalysis['candidate']): StyleTopWardrobeJob {
+  if (candidate.category !== 'TOP') {
+    return 'unknown';
+  }
+  return inferTopWardrobeJob([
+    candidate.name,
+    candidate.subcategory,
+    candidate.notes,
+    candidate.fabricHand,
+    candidate.fitType,
+    candidate.silhouette,
+    ...(candidate.useCases ?? []),
+    ...(candidate.avoidUseCases ?? []),
+  ]);
+}
+
+function inferTopWardrobeJobFromItem(item: StyleItemRecord): StyleTopWardrobeJob {
+  if (item.category !== 'TOP') {
+    return 'unknown';
+  }
+  const profile = item.profile?.raw;
+  return inferTopWardrobeJob([
+    item.name,
+    item.subcategory,
+    item.comparatorKey,
+    profile?.itemType,
+    profile?.styleRole,
+    profile?.fabricHand,
+    profile?.silhouette,
+    profile?.texture,
+    ...(profile?.tags ?? []),
+    ...(profile?.useCases ?? []),
+    ...(profile?.avoidUseCases ?? []),
+  ]);
+}
+
+function inferTopWardrobeJob(signals: Array<string | null | undefined>): StyleTopWardrobeJob {
+  const text = signals.filter(Boolean).join(' ').toLowerCase();
+  if (!text.trim()) {
+    return 'unknown';
+  }
+  if (/\b(basketball|nba|nhl|nfl|mlb|fanwear|hardwood classics|team jersey|game jersey)\b/.test(text)) {
+    return 'jersey_fanwear';
+  }
+  if (
+    /\bjersey\b/.test(text) &&
+    !/\b(cotton jersey|jersey cotton|jersey knit|knit jersey|jersey-knit|jersey tee|jersey t-shirt|jersey t shirt)\b/.test(text)
+  ) {
+    return 'jersey_fanwear';
+  }
+  if (/\b(undershirt|under shirt|base layer|baselayer|thermal base|compression top)\b/.test(text)) {
+    return 'undershirt_base_layer';
+  }
+  if (/\b(tour|concert|band|merch|merchandise)\s+(?:tee|t-shirt|t shirt)\b/.test(text)) {
+    return 'merch_tour_tee';
+  }
+  if (/\b(training|performance|athletic|workout|running|dri-fit|dry-fit|technical tee|tech tee|gym|deltapeak)\b/.test(text)) {
+    return 'athletic_training_performance_tee';
+  }
+  if (/\b(graphic|statement|printed|print|logo|art)\s+(?:tee|t-shirt|t shirt)\b/.test(text)) {
+    return 'graphic_statement_tee';
+  }
+  if (/\b(tee|t-shirt|t shirt|crewneck t|short sleeve)\b/.test(text)) {
+    return 'lifestyle_plain_tee';
+  }
+  return 'non_tee_top';
+}
+
+function topWardrobeJobsMatch(candidate: StylePurchaseAnalysis['candidate'], item: StyleItemRecord): boolean {
+  const candidateJob = inferTopWardrobeJobFromCandidate(candidate);
+  const itemJob = inferTopWardrobeJobFromItem(item);
+  if (candidateJob === 'unknown' || itemJob === 'unknown') {
+    return false;
+  }
+  return candidateJob === itemJob;
+}
+
+function formatTopWardrobeJob(job: StyleTopWardrobeJob): string {
+  switch (job) {
+    case 'lifestyle_plain_tee':
+      return 'lifestyle/plain tee';
+    case 'graphic_statement_tee':
+      return 'graphic/statement tee';
+    case 'athletic_training_performance_tee':
+      return 'athletic/training tee';
+    case 'merch_tour_tee':
+      return 'merch/tour tee';
+    case 'undershirt_base_layer':
+      return 'undershirt/base layer';
+    case 'jersey_fanwear':
+      return 'jersey/fanwear';
+    case 'non_tee_top':
+      return 'non-tee top';
+    case 'unknown':
+      return 'unknown top role';
+    default:
+      return job;
+  }
+}
+
+function isDirectPurchaseComparatorCandidate(candidate: StylePurchaseAnalysis['candidate'], item: StyleItemRecord): boolean {
+  if (!item.category || item.category.toLowerCase() !== candidate.category.toLowerCase()) {
+    return false;
+  }
+
+  const candidateKey = resolvePurchaseCandidateComparatorKey(candidate);
+  const itemKey = resolveStyleItemComparatorKey(item);
+
+  if (candidate.category === 'TOP') {
+    const candidateJob = inferTopWardrobeJobFromCandidate(candidate);
+    const itemJob = inferTopWardrobeJobFromItem(item);
+    if (
+      candidateJob !== 'unknown' &&
+      candidateJob !== 'non_tee_top' &&
+      itemJob !== 'unknown' &&
+      candidateJob !== itemJob
+    ) {
+      return false;
+    }
+    if (candidateKey === 'tee') {
+      return itemKey === 'tee' && !looksLikeJerseyItem(item) && candidateJob === itemJob;
+    }
+    if (candidateKey === 'jersey') {
+      return itemKey === 'jersey';
+    }
+    if (looksLikeJerseyItem(item)) {
+      return false;
+    }
+  }
+
+  if (candidate.category === 'SHOE') {
+    const candidateSignals = buildShoeComparisonSignalsFromCandidate(candidate);
+    const itemSignals = buildShoeComparisonSignalsFromItem(item);
+    if (
+      candidateSignals.wardrobeJob !== 'unknown_shoe' &&
+      itemSignals.wardrobeJob !== 'unknown_shoe' &&
+      candidateSignals.wardrobeJob !== itemSignals.wardrobeJob
+    ) {
+      return false;
+    }
+  }
+
+  if (candidateKey && !isBroadComparatorKey(candidateKey)) {
+    return itemKey === candidateKey;
+  }
+
+  return true;
+}
+
+function resolvePurchaseCandidateComparatorKey(candidate: StylePurchaseAnalysis['candidate']) {
+  if (
+    candidate.category === 'TOP' &&
+    inferTopWardrobeJobFromCandidate(candidate) !== 'jersey_fanwear' &&
+    /\b(tee|t-shirt|t shirt)\b/i.test([candidate.name, candidate.subcategory, candidate.notes].filter(Boolean).join(' '))
+  ) {
+    return 'tee';
+  }
+  return candidate.comparatorKey && candidate.comparatorKey !== 'unknown'
+    ? candidate.comparatorKey
+    : inferStyleComparatorKey({
+        category: candidate.category,
+        extraSignals: [candidate.name, candidate.notes, candidate.fabricHand, candidate.fitType, candidate.silhouette],
+        subcategory: candidate.subcategory,
+      });
+}
+
+function resolveStyleItemComparatorKey(item: StyleItemRecord) {
+  if (looksLikeJerseyItem(item)) {
+    return 'jersey';
+  }
+  if (looksLikeTeeItem(item)) {
+    return 'tee';
+  }
+  return item.comparatorKey && item.comparatorKey !== 'unknown'
+    ? item.comparatorKey
+    : inferStyleComparatorKey({
+        category: item.category,
+        name: item.name,
+        profile: item.profile?.raw ?? null,
+        subcategory: item.subcategory,
+        tags: item.profile?.raw.tags ?? [],
+      });
+}
+
+function looksLikeJerseyItem(item: StyleItemRecord): boolean {
+  const profile = item.profile?.raw;
+  return /\b(jersey|basketball jersey|nba jersey|hardwood classics)\b/i.test(
+    [
+      item.name,
+      item.subcategory,
+      profile?.itemType,
+      profile?.styleRole,
+      ...(profile?.tags ?? []),
+    ]
+      .filter(Boolean)
+      .join(' '),
+  );
+}
+
+function looksLikeTeeItem(item: StyleItemRecord): boolean {
+  const profile = item.profile?.raw;
+  return /\b(tee|t-shirt|t shirt|graphic tee|merch tee|tour tee)\b/i.test(
+    [
+      item.name,
+      item.subcategory,
+      profile?.itemType,
+      profile?.styleRole,
+      ...(profile?.tags ?? []),
+    ]
+      .filter(Boolean)
+      .join(' '),
+  );
+}
+
+function isBroadComparatorKey(key: string | null | undefined): boolean {
+  return key === 'unknown' || key === 'other_top' || key === 'other_bottom' || key === 'other_shoe';
+}
+
 function descriptorDeltaNotes(input: {
   candidate: StyleDescriptorSummaryRecord | null;
   comparatorIds: string[];
@@ -2572,22 +3205,60 @@ function buildPurchaseNonComparatorItems(input: {
   items: StyleItemRecord[];
 }): StylePurchaseAnalysis['contextBuckets']['nonComparatorItems'] {
   return input.items
-    .filter((item) => item.category?.toLowerCase() !== input.candidateCategory)
+    .filter(
+      (item) =>
+        item.category?.toLowerCase() !== input.candidateCategory ||
+        !isDirectPurchaseComparatorCandidate(input.candidate, item),
+    )
     .map((item) => {
       const reasons: string[] = [];
       let score = 0;
+      const candidateTopJob =
+        input.candidate.category === 'TOP' ? inferTopWardrobeJobFromCandidate(input.candidate) : 'unknown';
+      const itemTopJob = item.category === 'TOP' ? inferTopWardrobeJobFromItem(item) : 'unknown';
+      const sameTopNounDifferentJob =
+        input.candidate.category === 'TOP' &&
+        item.category === 'TOP' &&
+        resolvePurchaseCandidateComparatorKey(input.candidate) === 'tee' &&
+        resolveStyleItemComparatorKey(item) === 'tee' &&
+        candidateTopJob !== 'unknown' &&
+        itemTopJob !== 'unknown' &&
+        candidateTopJob !== itemTopJob;
+      const candidateComparatorKey = resolvePurchaseCandidateComparatorKey(input.candidate);
+      const itemComparatorKey = resolveStyleItemComparatorKey(item);
+      const sameCategoryDifferentComparator =
+        item.category?.toLowerCase() === input.candidateCategory &&
+        candidateComparatorKey !== 'unknown' &&
+        itemComparatorKey !== 'unknown' &&
+        candidateComparatorKey !== itemComparatorKey;
+      if (sameTopNounDifferentJob) {
+        reasons.push(
+          `same tee wording, different wardrobe job (${formatTopWardrobeJob(itemTopJob)} vs ${formatTopWardrobeJob(candidateTopJob)})`,
+        );
+        score += 4;
+      }
+      if (sameCategoryDifferentComparator) {
+        reasons.push(`same category, different item type (${itemComparatorKey} vs ${candidateComparatorKey})`);
+        score += 4;
+      }
       if (
         input.candidate.colorFamily &&
         item.colorFamily?.toLowerCase() === input.candidate.colorFamily.toLowerCase()
       ) {
         reasons.push(`same color family (${input.candidate.colorFamily})`);
         score += 3;
+        if (item.category?.toLowerCase() !== input.candidateCategory) {
+          score += 2;
+        }
       }
       if (input.candidate.formality != null && item.formality != null) {
         const formalityDistance = Math.abs(item.formality - input.candidate.formality);
         if (formalityDistance <= 1) {
           reasons.push(`nearby formality (${item.formality})`);
           score += 2 - formalityDistance;
+          if (item.category?.toLowerCase() !== input.candidateCategory) {
+            score += 2;
+          }
         }
       }
       if (sharesCandidateNameToken(input.candidate, item)) {
@@ -2599,9 +3270,17 @@ function buildPurchaseNonComparatorItems(input: {
       }
       const candidateCategoryLabel = formatCategoryLaneLabel(input.candidate.category);
       const itemCategoryLabel = formatCategoryLaneLabel(item.category);
+      const rejectedBecause =
+        sameTopNounDifferentJob
+          ? `${formatOwnedItemLabel(item)} is a ${formatTopWardrobeJob(itemTopJob)}, not a ${formatTopWardrobeJob(candidateTopJob)}; use it as context only, not as a direct substitute.`
+          : sameCategoryDifferentComparator
+          ? `${formatOwnedItemLabel(item)} is a ${formatCandidateKindLabel({ ...input.candidate, comparatorKey: itemComparatorKey })}, not a ${formatCandidateKindLabel(input.candidate)}; use it as context only, not as a direct substitute.`
+          : item.category?.toLowerCase() === input.candidateCategory
+          ? `${formatOwnedItemLabel(item)} is not a clean substitute for this ${formatCandidateKindLabel(input.candidate)}; use it as style context only, not as the closest duplicate.`
+          : `${formatOwnedItemLabel(item)} is a ${itemCategoryLabel}, not a ${candidateCategoryLabel}; use it as styling context only, not as a duplicate or substitute comparator.`;
       return {
         itemId: item.id,
-        rejectedBecause: `${formatOwnedItemLabel(item)} is a ${itemCategoryLabel}, not a ${candidateCategoryLabel}; use it as styling context only, not as a duplicate or substitute comparator.`,
+        rejectedBecause,
         reasons,
         score,
         sortName: item.name,
@@ -2611,7 +3290,7 @@ function buildPurchaseNonComparatorItems(input: {
       Boolean(entry),
     )
     .sort((left, right) => right.score - left.score || left.sortName?.localeCompare(right.sortName ?? '') || 0)
-    .slice(0, 8)
+    .slice(0, 12)
     .map(({ itemId, rejectedBecause, reasons }) => ({
       itemId,
       rejectedBecause,
@@ -2669,22 +3348,42 @@ function buildBaselineComparatorReasoning(input: {
   laneAssessment: StylePurchaseAnalysis['laneAssessment'];
   rejectedComparisons: StylePurchaseAnalysis['comparatorReasoning']['rejectedComparisons'];
 }): StylePurchaseAnalysis['comparatorReasoning'] {
-  const topComparisons = input.comparatorItems.slice(0, 3).map((item) => ({
-    confidence: 'medium' as const,
-    itemId: item.id,
-    notes: [`same category lane (${input.candidate.category.toLowerCase()})`],
-    overlapScore: item.category === input.candidate.category ? (sameCandidateColorFamily(input.candidate, item) ? 68 : 58) : 42,
-    relation: 'adjacent' as const,
-    summary: `${item.name ?? item.id} sits in a nearby lane, but it is not a clean duplicate.`,
-  }));
-
-  if (input.coverageImpact.strengthensWeakArea || input.laneAssessment.introduces) {
+  const topComparisons = input.comparatorItems.slice(0, 3).map((item) => {
+    const candidateKey = resolvePurchaseCandidateComparatorKey(input.candidate);
+    const itemKey = resolveStyleItemComparatorKey(item);
+    const exactOuterwearOverlap =
+      input.candidate.category === 'OUTERWEAR' &&
+      candidateKey &&
+      candidateKey === itemKey &&
+      sameCandidateColorFamily(input.candidate, item);
+    const relation = exactOuterwearOverlap ? 'duplicate' as const : 'adjacent' as const;
+    const itemLabel = formatOwnedItemLabel(item);
     return {
-      framing: 'addition',
+      confidence: exactOuterwearOverlap ? 'high' as const : 'medium' as const,
+      itemId: item.id,
+      notes: exactOuterwearOverlap
+        ? [`same outerwear type (${candidateKey})`, `same color family (${input.candidate.colorFamily})`]
+        : [`same kind of item (${input.candidate.category.toLowerCase()})`],
+      overlapScore: exactOuterwearOverlap
+        ? 86
+        : item.category === input.candidate.category
+          ? (sameCandidateColorFamily(input.candidate, item) ? 68 : 58)
+          : 42,
+      relation,
+      summary: exactOuterwearOverlap
+        ? `${itemLabel} already covers this outerwear need in the same color family.`
+        : `${itemLabel} shares some closet context, but it is not a true duplicate.`,
+    };
+  });
+
+  const duplicateComparisons = topComparisons.filter((entry) => entry.relation === 'duplicate');
+  if (duplicateComparisons.length > 0) {
+    return {
+      framing: 'duplicate',
       mode: 'baseline',
-      notes: ['This still reads like a real addition rather than a near-duplicate.'],
+      notes: duplicateComparisons.slice(0, 2).map((entry) => entry.summary),
       rejectedComparisons: input.rejectedComparisons,
-      summary: 'This looks like a real addition, not more of the same.',
+      summary: 'Your closet already covers this exact outerwear need.',
       topComparisons,
     };
   }
@@ -2696,6 +3395,17 @@ function buildBaselineComparatorReasoning(input: {
       notes: [topComparisons[0]!.summary],
       rejectedComparisons: input.rejectedComparisons,
       summary: 'There is overlap, but it does not read like an obvious duplicate.',
+      topComparisons,
+    };
+  }
+
+  if (input.coverageImpact.strengthensWeakArea || input.laneAssessment.introduces) {
+    return {
+      framing: 'addition',
+      mode: 'baseline',
+      notes: ['This still reads like a real addition rather than a near-duplicate.'],
+      rejectedComparisons: input.rejectedComparisons,
+      summary: 'This looks like a real addition, not more of the same.',
       topComparisons,
     };
   }
@@ -2744,12 +3454,38 @@ function comparePurchaseBucketEntries(
     }
   }
 
+  if (candidate.category === 'TOP') {
+    const leftJobMatches = topWardrobeJobsMatch(candidate, left);
+    const rightJobMatches = topWardrobeJobsMatch(candidate, right);
+    if (Number(rightJobMatches) - Number(leftJobMatches) !== 0) {
+      return Number(rightJobMatches) - Number(leftJobMatches);
+    }
+    const imagePriority = Number(hasPurchaseComparableImage(right)) - Number(hasPurchaseComparableImage(left));
+    if (imagePriority !== 0) {
+      return imagePriority;
+    }
+  }
+
   return (
     Number(right.status === 'active') - Number(left.status === 'active') ||
     Number(sameCandidateColorFamily(candidate, right)) - Number(sameCandidateColorFamily(candidate, left)) ||
     left.name?.localeCompare(right.name ?? '') ||
     0
   );
+}
+
+function hasPurchaseComparableImage(item: StyleItemRecord): boolean {
+  return item.photos.some((photo) =>
+    Boolean(photo.delivery?.originalUrl || photo.sourceUrl || photo.url),
+  );
+}
+
+function formatCandidateKindLabel(candidate: StylePurchaseAnalysis['candidate']): string {
+  const key = resolvePurchaseCandidateComparatorKey(candidate);
+  if (key && !isBroadComparatorKey(key)) {
+    return key.replace(/_/g, ' ');
+  }
+  return formatCategoryLaneLabel(candidate.category);
 }
 
 function sameCandidateColorFamily(candidate: StylePurchaseAnalysis['candidate'], item: StyleItemRecord): boolean {
@@ -2768,7 +3504,7 @@ function buildShoeComparatorReasoning(input: {
   rejectedComparisons: StylePurchaseAnalysis['comparatorReasoning']['rejectedComparisons'];
 }): StylePurchaseAnalysis['comparatorReasoning'] {
   const shoeKindLabel = describeShoeKind(input.candidate);
-  const topComparisons = input.comparatorItems
+  const rankedComparisons = input.comparatorItems
     .map((item) => compareShoeCandidateAgainstItem(input.candidate, item))
     .sort((left, right) => {
       const priority = shoeRelationPriority(right.relation) - shoeRelationPriority(left.relation);
@@ -2776,8 +3512,9 @@ function buildShoeComparatorReasoning(input: {
         return priority;
       }
       return right.overlapScore - left.overlapScore;
-    })
-    .slice(0, 4);
+    });
+  const meaningfulComparisons = rankedComparisons.filter((entry) => entry.relation !== 'distinct');
+  const topComparisons = meaningfulComparisons.slice(0, 4);
 
   const duplicateComparisons = topComparisons.filter((entry) => entry.relation === 'duplicate');
   const replacementComparisons = topComparisons.filter((entry) => entry.relation === 'replacement');
@@ -2873,6 +3610,7 @@ function compareShoeCandidateAgainstItem(
   const colorSignalMissing = !candidate.colorFamily || !item.colorFamily;
   const overlappingRoles = intersectStrings(candidateSignals.roleTags, itemSignals.roleTags);
   const sameRole = overlappingRoles.length > 0;
+  const sameWardrobeJob = candidateSignals.wardrobeJob === itemSignals.wardrobeJob;
   const refinementDelta = candidateSignals.refinementScore - itemSignals.refinementScore;
   const candidateMoreRefined = refinementDelta >= 1.4;
 
@@ -2890,7 +3628,10 @@ function compareShoeCandidateAgainstItem(
     notes.push(`same color detail (${colorDetailOverlap.map(formatShoeColorDetailLabel).join(', ')})`);
   }
   if (sameRole) {
-    notes.push(`same role (${overlappingRoles.map(formatShoeRoleLabel).join(', ')})`);
+    notes.push(`same footwear job (${overlappingRoles.map(formatShoeRoleLabel).join(', ')})`);
+  }
+  if (sameWardrobeJob) {
+    notes.push(`same shoe job (${formatShoeWardrobeJobLabel(candidateSignals.wardrobeJob)})`);
   }
   if (candidateMoreRefined) {
     notes.push('candidate reads more refined than the owned comparator');
@@ -2900,36 +3641,36 @@ function compareShoeCandidateAgainstItem(
 
   let relation: StylePurchaseAnalysis['comparatorReasoning']['topComparisons'][number]['relation'] = 'distinct';
   if (
-    (familyOverlap.length > 0 && sameRole && !candidateMoreRefined) ||
-    (sameArchetype && sameRole && !candidateMoreRefined && (sameColor || colorSignalMissing))
+    sameWardrobeJob &&
+    ((familyOverlap.length > 0 && sameRole && !candidateMoreRefined) ||
+      (sameArchetype && sameRole && !candidateMoreRefined && (sameColor || colorSignalMissing)))
   ) {
     relation = 'duplicate';
-  } else if ((familyOverlap.length > 0 || sameArchetype) && sameRole && candidateMoreRefined && sameColor) {
+  } else if (sameWardrobeJob && (familyOverlap.length > 0 || sameArchetype) && sameRole && candidateMoreRefined && sameColor) {
     relation = 'replacement';
-  } else if ((familyOverlap.length > 0 || sameArchetype) && sameRole && candidateMoreRefined) {
+  } else if (sameWardrobeJob && (familyOverlap.length > 0 || sameArchetype) && sameRole && candidateMoreRefined) {
     relation = 'upgrade';
-  } else if (familyOverlap.length > 0 || sameArchetype || (sameColor && sameRole)) {
+  } else if (familyOverlap.length > 0 || sameArchetype || sameWardrobeJob || (sameColor && sameRole)) {
     relation = 'adjacent';
   }
 
+  const rawOverlapScore =
+    18 +
+    (familyOverlap.length > 0 ? 42 : 0) +
+    (sameArchetype ? 20 : 0) +
+    (sameColor ? 8 : 0) +
+    (sameSpecificColorDetail ? 12 : colorDetailOverlap.length > 0 ? 4 : 0) +
+    (sameRole ? 12 : 0) +
+    (sameWardrobeJob ? 20 : sameArchetype ? -8 : 0) +
+    (relation === 'replacement' || relation === 'upgrade' ? 6 : 0);
   const overlapScore = Math.max(
     24,
-    Math.min(
-      100,
-      18 +
-        (familyOverlap.length > 0 ? 42 : 0) +
-        (sameArchetype ? 20 : 0) +
-        (sameColor ? 8 : 0) +
-        (sameSpecificColorDetail ? 12 : colorDetailOverlap.length > 0 ? 4 : 0) +
-        (conflictingSpecificColorDetail ? -10 : 0) +
-        (sameRole ? 12 : 0) +
-        (relation === 'replacement' || relation === 'upgrade' ? 6 : 0),
-    ),
+    Math.min(100, rawOverlapScore) - (conflictingSpecificColorDetail ? 10 : 0),
   );
   const confidence =
-    familyOverlap.length > 0 || (sameArchetype && sameRole && sameColor)
+    familyOverlap.length > 0 || (sameWardrobeJob && sameArchetype && sameRole && sameColor)
       ? 'high'
-      : sameArchetype || sameRole
+      : sameWardrobeJob || sameArchetype || sameRole
         ? 'medium'
         : 'low';
 
@@ -3028,6 +3769,12 @@ function buildShoeComparisonSignals(input: {
     families: extractShoeFamilySignals(input.blob),
     refinementScore,
     roleTags: inferShoeRoleTags({
+      archetype: input.archetype,
+      blob: input.blob,
+      refinementScore,
+      styleRole: input.styleRole,
+    }),
+    wardrobeJob: inferShoeWardrobeJob({
       archetype: input.archetype,
       blob: input.blob,
       refinementScore,
@@ -3164,6 +3911,47 @@ function inferShoeRoleTags(input: {
     tags.add('general');
   }
   return [...tags];
+}
+
+function inferShoeWardrobeJob(input: {
+  archetype: string | null;
+  blob: string;
+  refinementScore: number;
+  styleRole: string | null;
+}): string {
+  const styleRole = input.styleRole ?? '';
+  if (input.archetype === 'loafer') {
+    return 'loafer_bridge';
+  }
+  if (input.archetype === 'dress_shoe') {
+    return 'formal_dress_shoe';
+  }
+  if (input.archetype === 'chelsea_boot' || input.archetype === 'boot') {
+    return 'boot';
+  }
+  if (input.archetype === 'slide') {
+    return 'slide';
+  }
+  if (input.archetype === 'runner' || /\b(runner|running|air max|performance|training)\b/.test(input.blob)) {
+    return 'runner_sneaker';
+  }
+  if (
+    /\b(air force 1|af1|nocta|jordan|kobe|basketball|streetwear|collab|statement)\b/.test(input.blob) ||
+    /streetwear|statement/i.test(styleRole)
+  ) {
+    return 'streetwear_sneaker';
+  }
+  if (
+    input.archetype === 'court_sneaker' &&
+    (/\b(common projects|achilles|minimal|minimalist|smart casual|refined|leather low[- ]?top|white sneaker)\b/.test(input.blob) ||
+      input.refinementScore >= 4.2)
+  ) {
+    return 'minimal_smart_sneaker';
+  }
+  if (input.archetype === 'court_sneaker' || input.archetype === 'general_sneaker') {
+    return 'everyday_sneaker';
+  }
+  return input.archetype ?? 'unknown_shoe';
 }
 
 function inferShoeRefinementScore(input: {
@@ -3390,6 +4178,23 @@ function formatShoeRoleLabel(role: string): string {
       return 'elevated casual';
     default:
       return role.replace(/_/g, ' ');
+  }
+}
+
+function formatShoeWardrobeJobLabel(job: string): string {
+  switch (job) {
+    case 'minimal_smart_sneaker':
+      return 'minimal smart sneaker';
+    case 'streetwear_sneaker':
+      return 'streetwear sneaker';
+    case 'runner_sneaker':
+      return 'runner sneaker';
+    case 'loafer_bridge':
+      return 'loafer';
+    case 'formal_dress_shoe':
+      return 'dress shoe';
+    default:
+      return job.replace(/_/g, ' ');
   }
 }
 
@@ -3827,17 +4632,17 @@ function buildLaneAssessment(input: {
   const bridges: string[] = [];
   if (input.exactComparatorCount > 0) {
     existingLane = input.candidateComparatorKey;
-    notes.push(`candidate sits inside the existing ${buildLaneLabel(input.candidateComparatorKey)} lane`);
+    notes.push(`candidate sits inside the existing ${buildLaneLabel(input.candidateComparatorKey)} area`);
   } else if (input.typedRoleCount > 0 || input.sameCategoryCount > 0) {
     existingLane = input.candidateCategory.toLowerCase();
-    notes.push(`candidate extends the existing ${input.candidateCategory.toLowerCase()} lane without a direct exact comparator`);
+    notes.push(`candidate extends the existing ${input.candidateCategory.toLowerCase()} area without a direct exact comparator`);
   } else {
     introduces = input.candidateComparatorKey ?? input.candidateCategory.toLowerCase();
-    notes.push(`candidate introduces a relatively new ${input.candidateCategory.toLowerCase()} lane`);
+    notes.push(`candidate introduces a relatively new ${input.candidateCategory.toLowerCase()} area`);
   }
   if (input.pairingCount >= 2 && input.nearbyFormalityCount >= 1) {
-    bridges.push('multiple existing pairing lanes');
-    notes.push('candidate can bridge into multiple existing pairing lanes');
+    bridges.push('multiple existing pairing groups');
+    notes.push('candidate can bridge into multiple existing pairing groups');
   }
   return {
     bridges,
@@ -3857,15 +4662,15 @@ function buildCoverageImpact(input: {
   let strengthensWeakArea = false;
   let pilesIntoCoveredLane = false;
   if (input.gapLane) {
-    notes.push('candidate strengthens a weak or missing lane in the current wardrobe');
+    notes.push('candidate strengthens a weak or missing area in the current wardrobe');
     strengthensWeakArea = true;
   }
   if (!input.gapLane && (input.exactComparatorCount >= 2 || input.sameCategoryCount >= 4)) {
-    notes.push('candidate enters a lane that is already fairly covered');
+    notes.push('candidate enters an area that is already fairly covered');
     pilesIntoCoveredLane = true;
   }
   if (input.bridgeCandidateCount >= 2) {
-    notes.push('candidate has strong bridge potential across existing outfit lanes');
+    notes.push('candidate has strong bridge potential across existing outfit groups');
   }
   return {
     notes,
@@ -3889,7 +4694,7 @@ function buildPurchaseConfidenceNotes(input: {
     notes.push(`comparator confidence is ${input.comparatorCoverageMode.replace(/_/g, ' ')} rather than exact comparator coverage`);
   }
   if (input.exactComparatorCount === 0) {
-    notes.push('descriptor comparisons rely on adjacent closet lanes rather than exact twins');
+    notes.push('descriptor comparisons rely on related closet areas rather than exact twins');
   }
   if (Object.keys(input.itemsById).length === 0) {
     notes.push('closet context is sparse for this candidate');

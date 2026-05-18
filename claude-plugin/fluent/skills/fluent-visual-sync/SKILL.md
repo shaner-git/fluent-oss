@@ -9,27 +9,28 @@ description: Render Fluent state as an interactive visual with clickable local U
 
 Render Fluent state as an interactive widget inside the chat using the `visualize:show_widget` tool, and close the persistence loop by having the widget call `sendPrompt()` with a serialized summary of user actions. The assistant then reads that summary on the next turn and writes the corresponding changes back to Fluent through MCP.
 
-This skill is the implementation reference for visual-sync patterns in Fluent. In the Claude package, groceries are the primary shipped example and `fluent-meals` routes grocery-list-first turns into this path in Claude-side rich hosts.
+This skill is the implementation reference for visual-sync patterns in Fluent. In the Claude package, groceries are the primary shipped example and `fluent-meals` routes grocery-list-first turns into this path only for Claude visualizer hosts that are not using Fluent MCP Apps UI resources.
 
 Follow the host routing matrix in [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md):
 
-- Claude-side hosts should prefer this skill when `visualize:show_widget` is available
+- Claude-side visualizer hosts should prefer this skill when `visualize:show_widget` is available and MCP Apps UI-resource mounting is not the active path
 - ChatGPT / MCP Apps-style hosts should prefer `meals_render_grocery_list_v2` instead
 - plain clients should fall back to canonical data plus text
 
 ## When to use
 
-Use this skill when:
+Use this skill only when all of these are true:
 
 - The user asks for the grocery checklist itself, such as "What's on my grocery list?", "What do I still need to buy?", or "Show me this week's grocery list".
-- The assistant has just offered to pull up or show the grocery list and the user accepts with "yes", "pull it up", "bring it up", "show it", or similar.
 - The host supports `visualize:show_widget` and the goal is an inline interactive checklist instead of plain markdown.
-- The user explicitly asks for an inline, visual, or interactive grocery view.
+- The native Fluent MCP Apps grocery render tool is unavailable, not visible, or failed to mount.
+
+Also use this skill when the assistant has just offered to pull up or show the visualizer grocery list and the user accepts with "yes", "pull it up", "bring it up", "show it", or similar.
 
 Do **not** use this skill when:
 
 - The user only wants a text summary.
-- The host is known to support Fluent MCP widget payloads directly, such as ChatGPT app surfaces where `meals_render_grocery_list_v2` is the correct path.
+- The host is known to support Fluent MCP Apps widget payloads directly, including Claude.ai MCP Apps runs and ChatGPT app surfaces where `meals_render_grocery_list_v2` is the correct path.
 - The current turn needs raw grocery-plan detail, order reconciliation, or intent debugging more than the checklist UI itself.
 
 ## Core pattern: visualizer + sendPrompt round-trip

@@ -280,10 +280,12 @@ export interface GroceryPlanRecord {
       recipeCount: number;
     };
     weekStart: string;
+    calibrationContext?: MealsCalibrationContextRecord;
   };
 }
 
 export interface GroceryPlanSummaryRecord {
+  calibrationContext?: MealsCalibrationContextRecord;
   id: string;
   weekStart: string;
   mealPlanId: string | null;
@@ -329,6 +331,7 @@ export interface CurrentGroceryListSourceRecord {
 }
 
 export interface CurrentGroceryListRecord {
+  calibrationContext?: MealsCalibrationContextRecord;
   objectRole: CurrentGroceryListObjectRole;
   listId: string;
   version: string;
@@ -359,6 +362,7 @@ export interface CurrentGroceryListRecord {
 }
 
 export interface CurrentGroceryListSummaryRecord {
+  calibrationContext?: MealsCalibrationContextRecord;
   objectRole: CurrentGroceryListObjectRole;
   listId: string;
   version: string;
@@ -544,6 +548,154 @@ export interface MealPreferencesSummaryRecord {
   budgetCadPerMeal: number | null;
   longLifeDefaultsCount: number;
   hostedBrandPreferenceFamiliesCount: number;
+}
+
+export type MealsSetupState =
+  | 'no_meals_state'
+  | 'setup_started'
+  | 'starter_preferences_ready'
+  | 'pantry_imported_unconfirmed'
+  | 'planning_evidence_ready'
+  | 'preferences_inferred'
+  | 'preferences_partially_confirmed'
+  | 'meals_calibrated';
+
+export type MealsCalibrationSignalSource =
+  | 'user_confirmed'
+  | 'meal_history_inferred'
+  | 'pantry_inferred'
+  | 'recipe_metadata'
+  | 'grocery_action_inferred'
+  | 'fallback';
+
+export type MealsCalibrationSignalStatus = 'inferred' | 'confirmed' | 'corrected' | 'rejected';
+
+export type MealsCalibrationSignalKind =
+  | 'household_shape'
+  | 'disliked_food'
+  | 'allergy'
+  | 'dietary_constraint'
+  | 'preferred_cuisine'
+  | 'cooking_cadence'
+  | 'weeknight_time_limit'
+  | 'budget_sensitivity'
+  | 'leftover_preference'
+  | 'grocery_expectation'
+  | 'meal_pattern'
+  | 'pantry_pattern'
+  | 'starter_preference';
+
+export interface MealsCalibrationSignalRecord {
+  confidence: number;
+  correctedValue: string | null;
+  id: string;
+  kind: MealsCalibrationSignalKind;
+  note: string | null;
+  source: MealsCalibrationSignalSource;
+  status: MealsCalibrationSignalStatus;
+  updatedAt: string | null;
+  value: string;
+}
+
+export type MealsPantryCalibrationStatus = 'stale' | 'accidental' | 'not_representative' | 'representative';
+
+export interface MealsPantryCalibrationRecord {
+  itemName: string;
+  note: string | null;
+  source: MealsCalibrationSignalSource;
+  status: MealsPantryCalibrationStatus;
+  updatedAt: string | null;
+}
+
+export interface MealsConfidenceBreakdown {
+  groceryDecisionConfidence: number;
+  mealHistoryConfidence: number;
+  pantryCoverageConfidence: number;
+  planningDecisionConfidence: number;
+  preferenceCalibrationConfidence: number;
+}
+
+export interface MealsReadinessRecord {
+  basis: string;
+  label: string;
+  notes: string[];
+  ready: boolean;
+  readinessLevel: 'not_ready' | 'provisional' | 'ready';
+}
+
+export interface MealsCalibrationPromptRecord {
+  id: string;
+  kind: 'starter_signal' | 'confirm_signal' | 'pantry_review' | 'constraint' | 'grocery_expectation' | 'opportunistic';
+  label: string;
+  question: string;
+  rationale: string;
+  responseOptions: Array<{
+    label: string;
+    requiresFreeText: string | null;
+    source: MealsCalibrationSignalSource | null;
+    status: MealsCalibrationSignalStatus | null;
+    value: string | null;
+  }>;
+  signal: Pick<MealsCalibrationSignalRecord, 'id' | 'kind' | 'source' | 'value'> | null;
+  toolName: string | null;
+}
+
+export interface MealsOnboardingCalibrationRecord {
+  calibrationPrompts: MealsCalibrationPromptRecord[];
+  confidenceBreakdown: MealsConfidenceBreakdown;
+  confirmedPreferences: MealsCalibrationSignalRecord[];
+  evidenceGaps: string[];
+  groceryListReadiness: {
+    currentListPresent: boolean;
+    groceryExpectationConfirmed: boolean;
+    pantryCheckCount: number;
+    trustState: CurrentGroceryListTrustState | null;
+  };
+  groceryReadiness: MealsReadinessRecord;
+  hostGuidance: {
+    answerMode: 'text_first' | 'widget_deferred';
+    copyGuardrails: string[];
+    firstTool: 'meals_get_onboarding_calibration';
+  };
+  householdPreferenceStatus: {
+    allergiesExplicitlyConfirmed: boolean;
+    constraintsExplicitlyConfirmed: boolean;
+    groceryExpectationsConfirmed: boolean;
+    hardAvoidsExplicitlyConfirmed: boolean;
+    householdShapeConfirmed: boolean;
+    weeknightTimeLimitConfirmed: boolean;
+  };
+  inferredMealSignals: MealsCalibrationSignalRecord[];
+  mealPlanningReadiness: MealsReadinessRecord;
+  pantryInventoryCoverage: {
+    activeInventoryCount: number;
+    excludedCalibrationCount: number;
+    hasImportedInventory: boolean;
+    importedInventoryConfirmed: boolean;
+    staleOrExpiredCount: number;
+  };
+  recipePlanHistoryCoverage: {
+    activeRecipeMemoryCount: number;
+    approvedPlanCount: number;
+    recentPlanCount: number;
+    totalPlanCount: number;
+  };
+  setupState: MealsSetupState;
+  suggestedNextAction: {
+    label: string;
+    rationale: string;
+    toolName: string | null;
+  };
+  unresolvedQuestions: string[];
+}
+
+export interface MealsCalibrationContextRecord {
+  basis: string;
+  confidenceBreakdown: MealsConfidenceBreakdown;
+  copyGuardrails: string[];
+  groceryReadiness: MealsReadinessRecord;
+  mealPlanningReadiness: MealsReadinessRecord;
+  setupState: MealsSetupState;
 }
 
 export interface MutationAckRecord {

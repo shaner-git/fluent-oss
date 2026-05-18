@@ -955,9 +955,15 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         domainId: 'meals',
         guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/meals-planning'],
         toolPrefixes: ['meals_'],
-        starterReadTools: ['meals_get_preferences', 'meals_get_plan', 'meals_list_plan_history'],
-        starterWriteTools: ['meals_generate_plan', 'meals_accept_plan_candidate', 'meals_generate_grocery_plan'],
-        whenToUse: 'Weekly planning, plan revision, or grocery-plan generation from an approved week.',
+        starterReadTools: ['meals_get_onboarding_calibration', 'meals_get_preferences', 'meals_get_plan', 'meals_list_plan_history'],
+        starterWriteTools: [
+          'meals_record_calibration_response',
+          'meals_generate_plan',
+          'meals_accept_plan_candidate',
+          'meals_generate_grocery_plan',
+        ],
+        whenToUse:
+          'Weekly planning, plan revision, setup/calibration, inferred food preference confirmation, or grocery-plan generation from an approved week. Start setup and confidence-sensitive planning from meals_get_onboarding_calibration.',
         domainReady: isReady('meals'),
       },
       {
@@ -977,7 +983,7 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         ],
         starterWriteTools: ['meals_upsert_grocery_plan_action', 'meals_update_inventory_batch', 'meals_upsert_grocery_intent'],
         whenToUse:
-          'Shopping, pantry checks, substitutions, receipt reconciliation, or the primary living grocery-list view. In ChatGPT / MCP Apps-style hosts, start from the Fluent render tools for the richer Fluent surface; in Claude-style hosts, start from meals_get_current_grocery_list before host-native visuals; in Codex, OpenClaw, and generic plain MCP clients, default to canonical grocery data plus text.',
+          'Shopping, pantry checks, substitutions, receipt reconciliation, or the primary living grocery-list view. In ChatGPT / MCP Apps-style hosts and Claude MCP Apps-capable runs, start from meals_render_grocery_list_v2 for the richer Fluent surface; in Claude visualizer-only hosts, start from meals_get_current_grocery_list before host-native visuals; in Codex, OpenClaw, and generic plain MCP clients, default to canonical grocery data plus text.',
         domainReady: isReady('meals'),
       },
       {
@@ -997,8 +1003,16 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         domainId: 'style',
         guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/style-purchase-analysis'],
         toolPrefixes: ['style_'],
-        starterReadTools: ['style_get_context', 'style_list_descriptor_backlog', 'style_analyze_wardrobe', 'style_get_profile'],
+        starterReadTools: [
+          'style_get_onboarding_calibration',
+          'style_get_context',
+          'style_list_descriptor_backlog',
+          'style_analyze_wardrobe',
+          'style_get_profile',
+        ],
         starterWriteTools: [
+          'style_record_calibration_response',
+          'style_add_starter_closet_item',
           'style_update_profile',
           'style_upsert_item_profile',
           'style_upsert_item',
@@ -1176,7 +1190,7 @@ function readyDomainActions(input: {
         chatgpt
           ? {
               kind: 'render',
-              reason: 'In ChatGPT/App SDK hosts, render the recipe card when the user is asking for the recipe itself.',
+              reason: 'In ChatGPT/MCP Apps-style hosts, render the recipe card when the user is asking for the recipe itself.',
               tool: 'meals_render_recipe_card',
             }
           : {
@@ -1207,17 +1221,23 @@ function readyDomainActions(input: {
 
   if (input.domain === 'style') {
     if (/buy|purchase|link|product|return|keep|closet|wardrobe|style|shoe|shirt|pants|jacket|sweater/i.test(goal)) {
+      const productPageEvidenceActions: FluentRecommendedAction[] = chatgpt
+        ? []
+        : [
+            {
+              kind: 'read',
+              reason:
+                'For product URLs without usable candidate images yet, extract direct public product-page image references before requesting the vision packet.',
+              tool: 'style_extract_purchase_page_evidence',
+            },
+          ];
       return [
         {
           kind: 'read',
           reason: 'First hop for purchase questions and product URLs; returns evidence requirements before any widget render.',
           tool: 'style_prepare_purchase_analysis',
         },
-        {
-          kind: 'read',
-          reason: 'For product URLs without usable candidate images yet, extract direct public product-page image references before requesting the vision packet.',
-          tool: 'style_extract_purchase_page_evidence',
-        },
+        ...productPageEvidenceActions,
         {
           kind: 'read',
           reason: 'Retrieve model-visible candidate and closet-comparator images for host visual inspection after purchase preparation.',
@@ -1389,7 +1409,9 @@ function buildHostWarnings(hostFamily: FluentHostFamily): string[] {
     ];
   }
   if (hostFamily === 'claude') {
-    return ['Claude may have packaged skills or native visuals; prefer canonical Fluent data plus Claude-native rendering over ChatGPT/App SDK render tools.'];
+    return [
+      'Claude visualizer-only runs should prefer canonical Fluent data plus Claude-native rendering; Claude MCP Apps-capable runs may use proven Fluent ui:// resources such as meals_render_grocery_list_v2 for Grocery.',
+    ];
   }
   if (hostFamily === 'openclaw' || hostFamily === 'codex' || hostFamily === 'generic_mcp') {
     return ['Default to canonical data tools and text; do not assume ChatGPT/App SDK widget support.'];

@@ -15,7 +15,7 @@ Use this repo when you want Fluent running on infrastructure you control. If you
 - current docs bucket: [docs/oss](https://github.com/shaner-git/fluent-oss/tree/main/docs/oss)
 - release history: [Fluent open-source runtime releases](https://github.com/shaner-git/fluent-oss/releases)
 - supported direct runtime: Node.js `22.x`
-- supported minimum contract version: `2026-05-12.fluent-core-v1.66`
+- supported minimum contract version: `2026-05-17.fluent-core-v1.84`
 
 ## Who This Is For
 
