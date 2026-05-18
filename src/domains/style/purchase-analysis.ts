@@ -1,4 +1,12 @@
-import type { StylePurchaseAnalysis, StylePurchaseCandidate, StylePurchaseComparisonRelation } from './types';
+import type {
+  StylePurchaseAnalysis,
+  StylePurchaseCandidate,
+  StylePurchaseComparisonRelation,
+  StylePurchaseStylistJudgment,
+  StylePurchaseStylistJudgmentDecisionBasis,
+  StylePurchaseStylistJudgmentVerdict,
+  StylePurchaseStylistJudgmentWardrobeImpact,
+} from './types';
 
 export const STYLE_PURCHASE_ANALYSIS_LEGACY_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v2.html';
 export const STYLE_PURCHASE_ANALYSIS_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v3.html';
@@ -16,8 +24,11 @@ export const STYLE_PURCHASE_ANALYSIS_PHOTO_READ_PREVIOUS_TEMPLATE_URI = 'ui://wi
 export const STYLE_PURCHASE_ANALYSIS_DECISION_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v16.html';
 export const STYLE_PURCHASE_ANALYSIS_SECONDARY_ACTION_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v17.html';
 export const STYLE_PURCHASE_ANALYSIS_HYDRATION_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v18.html';
-export const STYLE_PURCHASE_ANALYSIS_TEMPLATE_VERSION = 'v19';
-export const STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v19.html';
+export const STYLE_PURCHASE_ANALYSIS_NATIVE_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v19.html';
+export const STYLE_PURCHASE_ANALYSIS_MCP_APPS_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v20.html';
+export const STYLE_PURCHASE_ANALYSIS_JUDGMENT_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v21.html';
+export const STYLE_PURCHASE_ANALYSIS_TEMPLATE_VERSION = 'v22';
+export const STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI = 'ui://widget/fluent-purchase-analysis-v22.html';
 
 export type PurchaseVerdict = 'recommend' | 'skip' | 'consider' | 'wait';
 export type PurchaseConfidence = 'low' | 'medium' | 'high';
@@ -78,7 +89,11 @@ export interface PurchaseAnalysisAlternativeViewModel {
 }
 
 export interface PurchaseAnalysisClosetContextViewModel {
+  calibrationLabel: string | null;
+  calibrationNotes: string[];
+  closetEvidenceBasis: StylePurchaseAnalysis['calibration']['purchaseAnalysisReadiness']['basis'];
   closetItemsChecked: number | null;
+  totalActiveEvidenceItems: number | null;
   wearHistoryMonths: number | null;
   similarItemsOwned: number | null;
 }
@@ -103,11 +118,12 @@ export interface PurchaseAnalysisGapViewModel {
   note: string | null;
 }
 
-export type PurchaseAnalysisShoppingVerdict = 'buy' | 'skip' | 'wait';
+export type PurchaseAnalysisShoppingVerdict = 'buy' | 'skip' | 'consider' | 'wait';
 export type PurchaseAnalysisShoppingComparatorRole = 'direct_comparator' | 'adjacent_reference';
 
 export interface PurchaseAnalysisShoppingComparatorViewModel {
   itemId: string;
+  canonicalItemId: string;
   name: string;
   brand: string | null;
   category: string | null;
@@ -139,6 +155,21 @@ export interface PurchaseAnalysisShoppingEvidenceViewModel {
   missing: string[];
 }
 
+export type PurchaseAnalysisJudgmentSource = 'host_stylist_judgment' | 'computed_fallback';
+
+export interface PurchaseAnalysisStylistJudgmentViewModel {
+  caveats: string[];
+  decisionBasis: StylePurchaseStylistJudgmentDecisionBasis | null;
+  headline: string | null;
+  pairingOpportunities: string[];
+  rationale: string | null;
+  referencedComparatorIds: string[];
+  verdict: StylePurchaseStylistJudgmentVerdict;
+  wardrobeImpact: StylePurchaseStylistJudgmentWardrobeImpact | null;
+  whatItAdds: string | null;
+  whereItOverlaps: string | null;
+}
+
 export interface PurchaseAnalysisShoppingAnswerViewModel {
   verdict: PurchaseAnalysisShoppingVerdict;
   verdictReason: string;
@@ -167,7 +198,9 @@ export interface PurchaseAnalysisViewModel {
   alternatives: PurchaseAnalysisAlternativeViewModel[];
   context: PurchaseAnalysisClosetContextViewModel;
   visualGrounding: PurchaseAnalysisVisualGroundingViewModel;
+  judgmentSource: PurchaseAnalysisJudgmentSource;
   shoppingAnswer: PurchaseAnalysisShoppingAnswerViewModel;
+  stylistJudgment: PurchaseAnalysisStylistJudgmentViewModel | null;
   generatedAt: string | null;
   actions: PurchaseAnalysisActionViewModel[];
 }
@@ -187,17 +220,30 @@ export function buildPurchaseAnalysisViewModel(
     actionToolName?: string;
     comparatorItemIdMode?: 'canonical' | 'handles';
     imageHints?: PurchaseAnalysisImageHints;
+    stylistJudgment?: StylePurchaseStylistJudgment | null;
   },
 ): PurchaseAnalysisViewModel {
-  const verdict = deriveVerdict(analysis);
-  const confidencePercent = deriveConfidencePercent(analysis);
+  const rawStylistJudgment = buildStylistJudgmentViewModel(analysis, options?.stylistJudgment ?? null);
+  const suppressWardrobeFitCopy = analysis.calibration.purchaseAnalysisReadiness.readinessLevel === 'not_ready';
+  const stylistJudgment = suppressWardrobeFitCopy ? null : rawStylistJudgment;
+  const judgmentSource: PurchaseAnalysisJudgmentSource = stylistJudgment ? 'host_stylist_judgment' : 'computed_fallback';
+  const rawVerdict = stylistJudgment ? mapStylistJudgmentVerdictToPurchaseVerdict(stylistJudgment.verdict) : deriveVerdict(analysis);
+  const verdict = capPurchaseVerdictForCalibration(rawVerdict, analysis);
+  const confidencePercent = capConfidencePercentForCalibration(deriveConfidencePercent(analysis), analysis);
   const confidence = confidencePercent >= 76 ? 'high' : confidencePercent >= 56 ? 'medium' : 'low';
   const item = buildItemViewModel(analysis.candidate, options?.imageHints);
   const visualGrounding = buildVisualGroundingViewModel(analysis);
-  const overlap = buildOverlapViewModel(analysis);
-  const reasons = buildReasons(analysis, verdict);
-  const findings = buildFindings(analysis);
-  const gaps = buildGapViewModel(analysis);
+  const overlap = suppressWardrobeFitCopy ? [] : buildOverlapViewModel(analysis);
+  const reasons = [
+    ...calibrationReasonNotes(analysis, rawVerdict, verdict),
+    ...(suppressWardrobeFitCopy
+      ? buildCandidateOnlyReasons(analysis, verdict)
+      : stylistJudgment
+        ? buildReasonsFromStylistJudgment(stylistJudgment)
+        : buildReasons(analysis, verdict)),
+  ];
+  const findings = suppressWardrobeFitCopy ? buildCandidateOnlyFindings(analysis) : buildFindings(analysis);
+  const gaps = suppressWardrobeFitCopy ? [] : buildGapViewModel(analysis);
   const actions = item.name && verdict === 'recommend'
     ? [
         {
@@ -216,16 +262,23 @@ export function buildPurchaseAnalysisViewModel(
   return {
     actions,
     alternatives: [],
-    analysisSummary: buildSummary(analysis, verdict),
+    analysisSummary:
+      cleanPurchasePresentationCopy(
+        suppressWardrobeFitCopy ? buildCandidateOnlySummary(analysis, verdict) : stylistJudgment?.rationale ?? buildSummary(analysis, verdict),
+      ) ?? '',
     confidence,
     confidenceLabel: `Confidence · ${titleCase(confidence)}`,
     confidencePercent,
     context: {
+      calibrationLabel: analysis.calibration.purchaseAnalysisReadiness.label,
+      calibrationNotes: analysis.calibration.purchaseAnalysisReadiness.notes,
+      closetEvidenceBasis: analysis.calibration.purchaseAnalysisReadiness.basis,
       closetItemsChecked: Object.keys(analysis.itemsById).length,
       similarItemsOwned:
         analysis.contextBuckets.exactComparatorItems.length +
         analysis.contextBuckets.typedRoleItems.length +
         analysis.contextBuckets.sameCategoryItems.length,
+      totalActiveEvidenceItems: analysis.calibration.activeItemCount,
       wearHistoryMonths: null,
     },
     findings,
@@ -233,12 +286,28 @@ export function buildPurchaseAnalysisViewModel(
     generatedAt: null,
     id: buildAnalysisId(analysis),
     item,
+    judgmentSource,
     overlap,
-    reasons,
-    shoppingAnswer: buildShoppingAnswerViewModel(analysis, verdict, options?.imageHints, options?.comparatorItemIdMode ?? 'canonical'),
+    reasons: cleanPurchasePresentationCopyArray(reasons),
+    shoppingAnswer: buildShoppingAnswerViewModel(
+      analysis,
+      verdict,
+      options?.imageHints,
+      options?.comparatorItemIdMode ?? 'canonical',
+      stylistJudgment,
+      suppressWardrobeFitCopy,
+    ),
+    stylistJudgment,
     verdict,
     verdictEmphasis: null,
-    verdictHeadline: addVisualGroundingToHeadline(analysis, buildVerdictHeadline(analysis, verdict)),
+    verdictHeadline:
+      cleanPurchasePresentationCopy(
+        stylistJudgment?.headline
+          ? stylistJudgment.headline
+          : suppressWardrobeFitCopy
+            ? buildCandidateOnlyHeadline(verdict)
+            : addVisualGroundingToHeadline(analysis, buildVerdictHeadline(analysis, verdict)),
+      ) ?? '',
     visualGrounding,
   };
 }
@@ -252,9 +321,12 @@ export function buildPurchaseAnalysisStructuredContent(viewModel: PurchaseAnalys
     experience: 'purchase_analysis_widget',
     findingCount: widget.findings.length,
     gapCount: widget.gaps.length,
+    judgmentSource: widget.judgmentSource,
     overlapCount: widget.overlap.length,
     purchaseAnalysis: widget,
+    recommendationTrust: widget.context,
     shoppingAnswer: widget.shoppingAnswer,
+    stylistJudgment: widget.stylistJudgment,
     title: widget.item.name,
     verdict: widget.verdict,
     visualGrounding: widget.visualGrounding,
@@ -267,12 +339,164 @@ export function buildPurchaseAnalysisMetadata(viewModel: PurchaseAnalysisViewMod
     analysisId: viewModel.id,
     experience: 'purchase_analysis_widget',
     purchaseAnalysis: buildPurchaseAnalysisWidgetViewModel(viewModel),
+    judgmentSource: viewModel.judgmentSource,
     shoppingAnswer: viewModel.shoppingAnswer,
+    stylistJudgment: viewModel.stylistJudgment,
     title: viewModel.item.name,
     verdict: viewModel.verdict,
     visualGrounding: viewModel.visualGrounding,
     version: STYLE_PURCHASE_ANALYSIS_TEMPLATE_VERSION,
   };
+}
+
+function buildStylistJudgmentViewModel(
+  analysis: StylePurchaseAnalysis,
+  judgment: StylePurchaseStylistJudgment | null,
+): PurchaseAnalysisStylistJudgmentViewModel | null {
+  if (!judgment) return null;
+  const knownComparatorIds = new Set([
+    ...Object.keys(analysis.itemsById),
+    ...analysis.comparatorReasoning.topComparisons.map((entry) => entry.itemId),
+    ...analysis.comparatorReasoning.rejectedComparisons.map((entry) => entry.itemId),
+  ]);
+  const referencedComparatorIds = uniqueStrings(
+    judgment.referencedComparatorIds.filter((itemId) => knownComparatorIds.has(itemId)),
+  ).slice(0, 6);
+  return {
+    caveats: uniqueStrings(judgment.caveats.map(cleanStylistJudgmentCopy).filter(isPresentString)).slice(0, 4),
+    decisionBasis: judgment.decisionBasis,
+    headline: cleanStylistJudgmentCopy(judgment.headline),
+    pairingOpportunities: uniqueStrings(
+      judgment.pairingOpportunities.map(cleanStylistJudgmentCopy).filter(isPresentString),
+    ).slice(0, 4),
+    rationale: cleanStylistJudgmentCopy(judgment.rationale),
+    referencedComparatorIds,
+    verdict: judgment.verdict,
+    wardrobeImpact: judgment.wardrobeImpact,
+    whatItAdds: cleanStylistJudgmentCopy(judgment.whatItAdds),
+    whereItOverlaps: cleanStylistJudgmentCopy(judgment.whereItOverlaps),
+  };
+}
+
+function cleanStylistJudgmentCopy(value: string | null): string | null {
+  return cleanPurchasePresentationCopy(value);
+}
+
+function cleanPurchasePresentationCopy(value: string | null): string | null {
+  if (!value) return null;
+  const cleaned = value
+    .replace(/\byes\s+if\b/gi, 'stronger case when')
+    .replace(/\bno\s+if\b/gi, 'weaker case when')
+    .replace(/\bnearby lane\b/gi, 'adjacent style context')
+    .replace(/\bsame role\b/gi, 'same wardrobe job')
+    .replace(/\bcloset already covers this lane\b/gi, 'closet already covers this job')
+    .replace(/\blane\b/gi, 'area')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return null;
+  if (/^adds variety\.?$/i.test(cleaned)) return null;
+  return cleaned;
+}
+
+function cleanPurchasePresentationCopyArray(values: string[]): string[] {
+  return values.map(cleanPurchasePresentationCopy).filter(isPresentString);
+}
+
+function isPresentString(value: string | null): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function mapStylistJudgmentVerdictToPurchaseVerdict(verdict: StylePurchaseStylistJudgmentVerdict): PurchaseVerdict {
+  if (verdict === 'buy') return 'recommend';
+  if (verdict === 'skip') return 'skip';
+  if (verdict === 'consider') return 'consider';
+  return 'wait';
+}
+
+function capPurchaseVerdictForCalibration(verdict: PurchaseVerdict, analysis: StylePurchaseAnalysis): PurchaseVerdict {
+  const basis = analysis.calibration.purchaseAnalysisReadiness.basis;
+  if (verdict !== 'recommend') {
+    return verdict;
+  }
+  if (basis === 'no_closet' || basis === 'thin_closet' || basis === 'imported_unconfirmed') {
+    return 'consider';
+  }
+  return verdict;
+}
+
+function capConfidencePercentForCalibration(percent: number, analysis: StylePurchaseAnalysis): number {
+  const basis = analysis.calibration.purchaseAnalysisReadiness.basis;
+  if (basis === 'no_closet') return Math.min(percent, 45);
+  if (basis === 'thin_closet') return Math.min(percent, 55);
+  if (basis === 'imported_unconfirmed' || basis === 'closet_inferred') return Math.min(percent, 68);
+  return percent;
+}
+
+function calibrationReasonNotes(
+  analysis: StylePurchaseAnalysis,
+  rawVerdict: PurchaseVerdict,
+  finalVerdict: PurchaseVerdict,
+): string[] {
+  const notes: string[] = [];
+  const readiness = analysis.calibration.purchaseAnalysisReadiness;
+  if (readiness.basis === 'no_closet') {
+    notes.push('I can judge the item itself, but I do not know your wardrobe yet.');
+  } else if (readiness.basis === 'thin_closet') {
+    notes.push('This is based on early closet signal, not a fully learned wardrobe.');
+  } else if (readiness.basis === 'imported_unconfirmed') {
+    notes.push('Your imported closet suggests this, but those items have not been confirmed as active taste yet.');
+  } else if (readiness.basis === 'closet_inferred') {
+    notes.push('Your closet suggests this pattern; you have not confirmed it as a preference yet.');
+  }
+  if (rawVerdict === 'recommend' && finalVerdict !== 'recommend') {
+    notes.push('I am keeping this as a consider rather than a buy because the Style calibration is not strong enough for a confident wardrobe-fit claim.');
+  }
+  return notes;
+}
+
+function buildReasonsFromStylistJudgment(judgment: PurchaseAnalysisStylistJudgmentViewModel): string[] {
+  return uniqueStrings([
+    judgment.rationale,
+    ...judgment.caveats,
+    ...judgment.pairingOpportunities,
+  ].filter(isPresentString)).slice(0, 4);
+}
+
+function buildCandidateOnlyHeadline(verdict: PurchaseVerdict): string {
+  if (verdict === 'skip') return 'Candidate-focused skip; Style needs more closet evidence.';
+  if (verdict === 'consider') return 'Candidate-focused consider; Style needs more closet evidence.';
+  if (verdict === 'recommend') return 'Candidate-focused buy signal; Style needs more closet evidence.';
+  return 'Candidate-focused wait; Style needs more closet evidence.';
+}
+
+function buildCandidateOnlySummary(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict): string {
+  if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
+    return 'I can only judge the item cautiously until a usable candidate image is inspected and Style has stronger closet evidence.';
+  }
+  if (verdict === 'skip') {
+    return 'The item itself does not make a strong enough case, and Style does not have enough closet evidence for a wardrobe-fit claim.';
+  }
+  if (verdict === 'consider' || verdict === 'recommend') {
+    return 'The item itself has some promise, but Style does not have enough closet evidence for a confident wardrobe-fit claim.';
+  }
+  return 'The item needs more evidence before a real recommendation, and Style does not have enough closet evidence for a wardrobe-fit claim.';
+}
+
+function buildCandidateOnlyReasons(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict): string[] {
+  const reasons: string[] = [];
+  if (analysis.evidenceQuality.candidateVisualGrounding === 'host_visual_inspection') {
+    reasons.push('The candidate image has been inspected, so this read can discuss the item itself.');
+  } else if (analysis.evidenceQuality.candidateVisualGrounding === 'image_reference_only') {
+    reasons.push('The candidate image reference exists, but its pixels still need inspection before a final visual call.');
+  } else {
+    reasons.push('No usable candidate image has been inspected yet.');
+  }
+  if (verdict === 'skip') {
+    reasons.push('The current evidence does not support a strong buy call on the item itself.');
+  } else {
+    reasons.push('Style needs starter or confirmed closet evidence before it can judge how this fits the wardrobe.');
+  }
+  return cleanPurchasePresentationCopyArray(reasons);
 }
 
 export function getPurchaseAnalysisWidgetHtml(): string {
@@ -834,6 +1058,17 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     color: var(--pa-ink);
     font-weight: 750;
   }
+  .pa-editorial-change-mind {
+    border-top: 1px solid rgba(17, 24, 39, 0.08);
+    margin-top: 10px;
+    padding-top: 10px;
+  }
+  .pa-editorial-change-mind p {
+    margin: 0;
+  }
+  .pa-editorial-change-mind p + p {
+    margin-top: 6px;
+  }
   .pa-editorial-footer {
     align-items: center;
     border-top: 1px solid var(--pa-border);
@@ -876,13 +1111,29 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     var bridgeRpcId = 0;
     var bridgeReady = null;
     var bridgePending = Object.create(null);
+    var bridgeInitialized = false;
     var hostHydratedViewModel = null;
+    var localWidgetState = null;
 
-    function getOpenAI() { return window.openai || {}; }
-    function getSummary() { return getOpenAI().toolOutput || null; }
+    function getOpenAI() {
+      if (!window.openai) {
+        window.openai = {};
+      }
+      return window.openai;
+    }
+    function getSummary() {
+      return getOpenAI().toolOutput || getOpenAI().structuredContent || null;
+    }
     function getMetadata() { return getOpenAI().toolResponseMetadata || null; }
     function notifyHeight() {
-      getOpenAI().notifyIntrinsicHeight && getOpenAI().notifyIntrinsicHeight(document.body.scrollHeight);
+      var height = document.body.scrollHeight;
+      getOpenAI().notifyIntrinsicHeight && getOpenAI().notifyIntrinsicHeight(height);
+      if (bridgeInitialized) {
+        bridgeNotify('ui/notifications/size-changed', {
+          height: height,
+          width: document.documentElement.scrollWidth || document.body.scrollWidth || 0,
+        });
+      }
     }
     function escapeHtml(value) {
       return String(value == null ? '' : value)
@@ -896,19 +1147,16 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         .replace(/\b\w/g, function (letter) { return letter.toUpperCase(); });
     }
     function toArray(value) { return Array.isArray(value) ? value : []; }
-    function getBridgeTargets() {
-      var targets = [];
-      if (window.parent && window.parent !== window) targets.push(window.parent);
+    function getBridgeTarget() {
+      if (window.parent && window.parent !== window) return window.parent;
       try {
-        if (window.top && window.top !== window && targets.indexOf(window.top) === -1) {
-          targets.push(window.top);
-        }
+        if (window.top && window.top !== window) return window.top;
       } catch (error) {}
-      return targets;
+      return null;
     }
 
     function isBridgeSource(source) {
-      return getBridgeTargets().indexOf(source) !== -1;
+      return source === getBridgeTarget();
     }
 
     window.addEventListener('message', function (event) {
@@ -916,15 +1164,22 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       var message = event.data;
       if (!message || message.jsonrpc !== '2.0') return;
       if (message.method === 'ui/initialize' && message.id != null) {
+        if (message.params) hydrateFromCandidate(message.params);
+        bridgeInitialized = true;
         event.source.postMessage({
           jsonrpc: '2.0',
           id: message.id,
           result: { appCapabilities: {}, protocolVersion: '2026-01-26' },
         }, '*');
         bridgeNotify('ui/notifications/initialized', {});
+        render();
         return;
       }
-      if (message.method === 'ui/notifications/tool-result' || message.method === 'ui/notifications/tool-input') {
+      if (
+        message.method === 'ui/notifications/tool-result'
+        || message.method === 'ui/notifications/tool-input'
+        || message.method === 'ui/notifications/tool-input-partial'
+      ) {
         if (hydrateFromCandidate(message)) render();
         return;
       }
@@ -942,8 +1197,8 @@ export function getPurchaseAnalysisWidgetHtml(): string {
 
     function bridgeRequest(method, params, timeoutMs) {
       return new Promise(function (resolve, reject) {
-        var targets = getBridgeTargets();
-        if (!targets.length) {
+        var target = getBridgeTarget();
+        if (!target) {
           reject(new Error('MCP Apps bridge is not available.'));
           return;
         }
@@ -957,14 +1212,15 @@ export function getPurchaseAnalysisWidgetHtml(): string {
           }, timeoutMs || 12000),
         };
         var message = { jsonrpc: '2.0', id: id, method: method, params: params };
-        targets.forEach(function (target) { target.postMessage(message, '*'); });
+        target.postMessage(message, '*');
       });
     }
 
     function bridgeNotify(method, params) {
-      getBridgeTargets().forEach(function (target) {
-        target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
-      });
+      if (method !== 'ui/notifications/initialized' && !bridgeInitialized) return;
+      var target = getBridgeTarget();
+      if (!target) return;
+      target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
     }
 
     function callToolViaBridge(name, args) {
@@ -974,7 +1230,7 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     function getCallTool() {
       var openai = getOpenAI();
       var compatibilityCall = typeof openai.callTool === 'function' ? openai.callTool.bind(openai) : null;
-      return compatibilityCall || (getBridgeTargets().length ? callToolViaBridge : null);
+      return compatibilityCall || (getBridgeTarget() ? callToolViaBridge : null);
     }
     function normalize(value) {
       if (!value || typeof value !== 'object') return null;
@@ -988,13 +1244,16 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         confidenceLabel: typeof value.confidenceLabel === 'string' ? value.confidenceLabel : 'Confidence · Medium',
         confidencePercent: typeof value.confidencePercent === 'number' ? value.confidencePercent : null,
         context: value.context && typeof value.context === 'object' ? value.context : {
-          closetItemsChecked: null, wearHistoryMonths: null, similarItemsOwned: null,
+          calibrationLabel: null, calibrationNotes: [], closetEvidenceBasis: 'no_closet',
+          closetItemsChecked: null, totalActiveEvidenceItems: null, wearHistoryMonths: null, similarItemsOwned: null,
         },
         findings: toArray(value.findings),
         overlap: toArray(value.overlap),
         gaps: toArray(value.gaps),
+        judgmentSource: typeof value.judgmentSource === 'string' ? value.judgmentSource : 'computed_fallback',
         reasons: toArray(value.reasons).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
         shoppingAnswer: normalizeShoppingAnswer(value.shoppingAnswer),
+        stylistJudgment: normalizeStylistJudgment(value.stylistJudgment),
         visualGrounding: normalizeVisualGrounding(value.visualGrounding),
         generatedAt: typeof value.generatedAt === 'string' ? value.generatedAt : null,
         id: typeof value.id === 'string' ? value.id : '',
@@ -1014,6 +1273,22 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         verdict: typeof value.verdict === 'string' ? value.verdict : 'consider',
         verdictEmphasis: typeof value.verdictEmphasis === 'string' ? value.verdictEmphasis : null,
         verdictHeadline: typeof value.verdictHeadline === 'string' ? value.verdictHeadline : 'Consider',
+      };
+    }
+    function normalizeStylistJudgment(value) {
+      if (!value || typeof value !== 'object') return null;
+      if (typeof value.verdict !== 'string') return null;
+      return {
+        caveats: toArray(value.caveats).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
+        decisionBasis: typeof value.decisionBasis === 'string' ? value.decisionBasis : null,
+        headline: typeof value.headline === 'string' ? value.headline : null,
+        pairingOpportunities: toArray(value.pairingOpportunities).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
+        rationale: typeof value.rationale === 'string' ? value.rationale : null,
+        referencedComparatorIds: toArray(value.referencedComparatorIds).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
+        verdict: value.verdict,
+        wardrobeImpact: typeof value.wardrobeImpact === 'string' ? value.wardrobeImpact : null,
+        whatItAdds: typeof value.whatItAdds === 'string' ? value.whatItAdds : null,
+        whereItOverlaps: typeof value.whereItOverlaps === 'string' ? value.whereItOverlaps : null,
       };
     }
     function normalizeShoppingAnswer(value) {
@@ -1047,6 +1322,7 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         hasImage: Boolean(value.hasImage),
         imageAlt: typeof value.imageAlt === 'string' ? value.imageAlt : null,
         imageUrl: typeof value.imageUrl === 'string' ? value.imageUrl : null,
+        canonicalItemId: typeof value.canonicalItemId === 'string' ? value.canonicalItemId : null,
         itemId: typeof value.itemId === 'string' ? value.itemId : '',
         name: typeof value.name === 'string' ? value.name : 'Saved closet item',
         overlapScore: typeof value.overlapScore === 'number' ? value.overlapScore : 0,
@@ -1088,14 +1364,49 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       }
       return null;
     }
+    function extractMetadata(candidate) {
+      if (!candidate || typeof candidate !== 'object') return null;
+      if (candidate._meta && typeof candidate._meta === 'object') return candidate._meta;
+      if (candidate.toolResponseMetadata && typeof candidate.toolResponseMetadata === 'object') return candidate.toolResponseMetadata;
+      var keys = ['result', 'structuredContent', 'output', 'data', 'value', 'params'];
+      for (var i = 0; i < keys.length; i += 1) {
+        if (candidate[keys[i]]) {
+          var sub = extractMetadata(candidate[keys[i]]);
+          if (sub) return sub;
+        }
+      }
+      return null;
+    }
     function hydrateFromCandidate(candidate) {
       var next = extract(candidate);
       if (!next) return false;
       hostHydratedViewModel = next;
+      var openai = getOpenAI();
+      if (openai && typeof openai === 'object') {
+        var metadata = extractMetadata(candidate);
+        openai.toolResponseMetadata = metadata ? Object.assign({}, metadata, { purchaseAnalysis: next }) : { purchaseAnalysis: next };
+        openai.toolOutput = { purchaseAnalysis: next };
+      }
       return true;
     }
     function getViewModel() {
-      return extract(getMetadata()) || extract(getSummary()) || extract(getOpenAI().toolOutput) || hostHydratedViewModel;
+      var openai = getOpenAI();
+      return extract(getMetadata())
+        || extract(getSummary())
+        || extract(openai.toolOutput)
+        || extract(openai.structuredContent)
+        || extract(openai.params)
+        || extract(openai.requestParams)
+        || extract(openai.modalParams)
+        || hostHydratedViewModel;
+    }
+    function setWidgetState(next) {
+      var openai = getOpenAI();
+      if (openai && typeof openai.setWidgetState === 'function') {
+        openai.setWidgetState(next);
+      } else {
+        localWidgetState = next;
+      }
     }
     function getActionInvocations() {
       var metadata = getMetadata();
@@ -1127,7 +1438,7 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     function renderVerdictLabel(verdict) {
       if (verdict === 'recommend') return 'Buy';
       if (verdict === 'skip') return 'Skip';
-      if (verdict === 'consider') return 'Worth considering';
+      if (verdict === 'consider') return 'Lean skip';
       return 'Wait';
     }
     function renderVisualGrounding(grounding) {
@@ -1187,7 +1498,10 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     }
     function renderContext(context) {
       var parts = [];
-      if (typeof context.closetItemsChecked === 'number') parts.push(context.closetItemsChecked + ' closet items checked');
+      if (context.calibrationLabel) parts.push(context.calibrationLabel);
+      if (typeof context.closetItemsChecked === 'number' && typeof context.totalActiveEvidenceItems === 'number') {
+        parts.push(context.closetItemsChecked + ' relevant pieces checked from ' + context.totalActiveEvidenceItems + ' active evidence items');
+      } else if (typeof context.closetItemsChecked === 'number') parts.push(context.closetItemsChecked + ' closet items checked');
       if (typeof context.similarItemsOwned === 'number') parts.push(context.similarItemsOwned + ' similar owned');
       if (!parts.length) return '';
       return '<div class="pa-context">' + parts.map(function (p) { return '<span>' + escapeHtml(p) + '</span>'; }).join('') + '</div>';
@@ -1209,44 +1523,81 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       if (item.priceDisplay) parts.push(item.priceDisplay);
       return parts.join(' · ');
     }
+    function getJudgment(vm) {
+      return vm && vm.stylistJudgment ? vm.stylistJudgment : null;
+    }
+    function judgmentVerdictLabel(verdict) {
+      if (verdict === 'buy') return 'Buy';
+      if (verdict === 'skip') return 'Skip';
+      if (verdict === 'consider') return 'Lean skip';
+      return 'Wait';
+    }
     function isTeeText(value) {
       return /\\b(tee|t-shirt|shirt)\\b/i.test(String(value || ''));
     }
+    function isJerseyText(value) {
+      return /\\b(jersey|basketball jersey|nba jersey|hardwood classics)\\b/i.test(String(value || ''));
+    }
     function isTeePurchase(vm) {
-      return false;
+      return isTeeText(vm.item.name) || isTeeText(vm.item.descriptor) || isTeeText(vm.item.subcategory);
     }
     function getComparators(vm) {
       if (!vm.shoppingAnswer) return [];
       var candidateCategory = String(vm.item.category || '').toUpperCase();
       var candidateSubcategory = String(vm.item.subcategory || '').toUpperCase();
+      var candidateIsTee = isTeePurchase(vm);
+      var candidateIsJersey = isJerseyText(vm.item.name) || isJerseyText(vm.item.descriptor) || isJerseyText(vm.item.subcategory);
       var comparators = toArray(vm.shoppingAnswer.closestComparators);
+      var judgment = getJudgment(vm);
+      var referenced = judgment ? toArray(judgment.referencedComparatorIds) : [];
+      if (referenced.length) {
+        var referencedSet = {};
+        referenced.forEach(function (id) { referencedSet[String(id)] = true; });
+        var referencedComparators = comparators.filter(function (item) {
+          return referencedSet[String(item.canonicalItemId || item.itemId)];
+        });
+        if (referencedComparators.length) comparators = referencedComparators;
+      }
       var sameRole = comparators.filter(function (item) {
         var itemCategory = String(item.category || '').toUpperCase();
         var itemSubcategory = String(item.subcategory || '').toUpperCase();
         if (candidateCategory && itemCategory && candidateCategory !== itemCategory) return false;
+        var itemIsJersey = isJerseyText(item.name) || isJerseyText(item.descriptor) || isJerseyText(item.subcategory);
+        if (candidateIsTee && itemIsJersey) return false;
+        if (candidateIsJersey && !itemIsJersey) return false;
+        if (candidateIsTee) {
+          return isTeeText(item.name) || isTeeText(item.descriptor) || isTeeText(item.subcategory);
+        }
         if (candidateSubcategory && itemSubcategory && candidateSubcategory !== itemSubcategory) {
-          return /tee|shirt|top/.test(candidateSubcategory.toLowerCase() + ' ' + itemSubcategory.toLowerCase());
+          return false;
         }
         return true;
       });
+      if (candidateIsTee || candidateIsJersey) {
+        return sameRole.slice(0, 3);
+      }
       return (sameRole.length ? sameRole : comparators).slice(0, 3);
     }
     function editorialComparatorBadge(item) {
       var relation = String(item.relationLabel || '').toLowerCase();
       if (/very close|duplicate/.test(relation)) return 'Already close';
       if (/replacement/.test(relation)) return 'Could replace';
-      if (/upgrade/.test(relation)) return 'Upgrade lane';
+      if (/upgrade/.test(relation)) return 'Upgrade candidate';
       if (/different/.test(relation)) return 'Useful contrast';
-      if (isTeeText(item.name) || isTeeText(item.descriptor) || isTeeText(item.subcategory)) return 'Same tee role';
-      return 'Similar role';
+      if (isJerseyText(item.name) || isJerseyText(item.descriptor) || isJerseyText(item.subcategory)) return 'Style context';
+      if (isTeeText(item.name) || isTeeText(item.descriptor) || isTeeText(item.subcategory)) return 'Tee comparison';
+      return 'Useful reference';
     }
     function editorialComparatorNote(item) {
       var name = String(item.name || '').toLowerCase();
+      if (isJerseyText(item.name) || isJerseyText(item.descriptor) || isJerseyText(item.subcategory)) {
+        return 'Sportswear context, not a true substitute for this tee.';
+      }
       if (isTeeText(item.name) || isTeeText(item.descriptor) || isTeeText(item.subcategory)) {
-        if (/pocket/.test(name)) return 'Same dark tee lane, but the chest pocket makes it read more casual.';
-        if (/navy|slub/.test(name)) return 'Same easy tee role, with a softer color and more visible texture.';
-        if (/black|crewneck/.test(name)) return 'Closest basic tee role; the question is whether the new fabric feels more structured.';
-        return 'Same tee role, useful as a fit and fabric comparison rather than a styling add-on.';
+        if (/pocket/.test(name)) return 'Another casual tee, but the chest pocket changes the feel.';
+        if (/navy|slub/.test(name)) return 'Another easy tee, with a softer color and more visible texture.';
+        if (/black|crewneck/.test(name)) return 'The closest basic tee; the question is whether the new fabric feels more structured.';
+        return 'Useful as a fit and fabric comparison, not a separate reason to buy.';
       }
       return item.summary || (toArray(item.reasons)[0]) || 'A remembered closet item that helps ground the recommendation.';
     }
@@ -1259,13 +1610,16 @@ export function getPurchaseAnalysisWidgetHtml(): string {
           : '<div class="pa-editorial-closet-fallback">' + escapeHtml(item.hasImage ? 'Photo on file' : 'No photo yet') + '</div>';
         return '<article class="pa-editorial-closet-card"><div class="pa-editorial-closet-image">' + image + '</div><div class="pa-editorial-closet-body"><div class="pa-editorial-closet-name">' + escapeHtml(item.name) + '</div><div class="pa-editorial-closet-badge">' + escapeHtml(editorialComparatorBadge(item)) + '</div><div class="pa-editorial-closet-note">' + escapeHtml(editorialComparatorNote(item)) + '</div></div></article>';
       }).join('');
-      return '<section class="pa-editorial-section"><div class="pa-editorial-label-row"><div class="pa-editorial-label">What you already have</div><div class="pa-editorial-source">From your closet</div></div><div class="pa-editorial-closet">' + cards + '</div></section>';
+      return '<section class="pa-editorial-section"><div class="pa-editorial-label-row"><div class="pa-editorial-label">Closet proof</div><div class="pa-editorial-source">From your closet</div></div><div class="pa-editorial-closet">' + cards + '</div></section>';
     }
     function buildEditorialTake(vm) {
+      var judgment = getJudgment(vm);
+      if (judgment && judgment.rationale) return judgment.rationale;
+      if (judgment && judgment.headline) return judgment.headline;
       var comparators = getComparators(vm);
       if (isTeePurchase(vm) && comparators.length) {
         var names = comparators.slice(0, 3).map(function (item) { return item.name; });
-        return 'Your closet already covers this tee role with ' + names.join(names.length > 2 ? ', ' : ' and ').replace(/, ([^,]*)$/, ', and $1') + '. The reason to buy this would be the heavier charcoal fabric and cleaner structure, not simply needing another dark tee.';
+        return 'Your closest tee comparisons are ' + names.join(names.length > 2 ? ', ' : ' and ').replace(/, ([^,]*)$/, ', and $1') + '. I would judge this on whether the color, fabric, and fit add real use beyond those tees.';
       }
       if (vm.verdict === 'skip' && comparators.length) {
         var first = comparators[0];
@@ -1277,22 +1631,27 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       return read || reason || 'Fluent is weighing the product against your saved closet context.';
     }
     function buildWhatAdds(vm) {
-      if (isTeePurchase(vm)) return 'A heavier charcoal tee that could read a little more structured than your black and navy basics.';
+      var judgment = getJudgment(vm);
+      if (judgment && judgment.whatItAdds) return judgment.whatItAdds;
+      if (isTeePurchase(vm)) return vm.verdict === 'skip' ? 'Not enough new utility beyond tees you already own.' : 'Potentially a different color or fabric note in your tee rotation.';
       if (vm.gaps.length && vm.gaps[0].note) return vm.gaps[0].note;
       if (vm.verdict === 'recommend') return vm.verdictHeadline;
       if (vm.verdict === 'skip') return 'Not much beyond another version of something you already own.';
       if (vm.verdict === 'wait') return 'The potential is there, but the visual and closet evidence are not strong enough yet.';
-      return 'A slightly different take on a role your closet already recognizes.';
+      return 'A slightly different take on a job your closet already covers.';
     }
     function buildWhereOverlaps(vm) {
+      var judgment = getJudgment(vm);
+      if (judgment && judgment.whereItOverlaps) return judgment.whereItOverlaps;
       var comparators = getComparators(vm);
       if (comparators.length) {
         if (isTeePurchase(vm)) {
-          return 'Closest match: ' + comparators[0].name + '. Buy only if the fabric or fit is meaningfully different.';
+          return 'Closest tee comparison: ' + comparators[0].name + '. This is the closet overlap I would actually weigh.';
         }
         var first = comparators[0];
         return 'Closest match: ' + first.name + '. Treat the other photos as supporting evidence, not separate reasons to buy.';
       }
+      if (isTeePurchase(vm)) return 'I do not see a clean tee duplicate in the visible closet evidence.';
       return vm.analysisSummary || 'No close closet overlap was strong enough to anchor this decision.';
     }
     function renderEditorialPhotoRead(vm) {
@@ -1304,57 +1663,64 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       }
       return '<section class="pa-editorial-photo-read" data-tone="' + escapeHtml(vm.visualGrounding.tone || 'neutral') + '"><strong>' + escapeHtml(vm.visualGrounding.label || 'Photo read') + '</strong>' + escapeHtml(pieces.filter(Boolean).join(' ')) + '</section>';
     }
-    function buildDecisionRows(vm) {
-      var changer = vm.shoppingAnswer ? toArray(vm.shoppingAnswer.whatWouldChangeVerdict)[0] : null;
-      if (isTeePurchase(vm)) {
-        return [
-          ['Yes if', 'you want a sturdier dark tee to replace or sharpen your basics rotation.'],
-          ['No if', 'you are only filling the same everyday tee slot again.'],
-        ];
+    function renderEditorialWhy(vm) {
+      var judgment = getJudgment(vm);
+      var rows = judgment
+        ? [judgment.headline, judgment.rationale].concat(toArray(judgment.pairingOpportunities)).filter(Boolean)
+        : toArray(vm.reasons);
+      rows = rows.filter(function (entry, index, arr) {
+        return entry && arr.indexOf(entry) === index;
+      }).slice(0, 3);
+      if (!rows.length) return '';
+      return '<section class="pa-editorial-section"><div class="pa-editorial-label">Why</div><div class="pa-editorial-why">' + rows.map(function (entry) { return '<p class="pa-take-copy">' + escapeHtml(entry) + '</p>'; }).join('') + '</div></section>';
+    }
+    function buildDecisionCall(vm) {
+      var judgment = getJudgment(vm);
+      if (judgment) {
+        var label = judgmentVerdictLabel(judgment.verdict);
+        var detail = judgment.rationale || judgment.headline || 'The stylist call is based on the inspected product image and closet proof above.';
+        return [label === 'Buy' ? 'Buy it' : label === 'Skip' ? 'Skip it' : label, detail];
       }
+      var changer = vm.shoppingAnswer ? toArray(vm.shoppingAnswer.whatWouldChangeVerdict)[0] : null;
       if (vm.verdict === 'recommend') {
-        return [
-          ['Yes if', 'you want this exact role in rotation.'],
-          ['No if', changer || 'you find a close match already active in your closet.'],
-        ];
+        return ['Buy it', 'This adds enough utility or coverage to earn a place in the closet.'];
       }
       if (vm.verdict === 'skip') {
-        return [
-          ['Yes if', changer || 'this is replacing a worn-out closet item.'],
-          ['No if', 'you are trying to add a genuinely new role or fill a clearer gap.'],
-        ];
+        return ['Skip it', changer || 'The closet case is not strong enough to justify adding this right now.'];
       }
       if (vm.verdict === 'wait') {
-        return [
-          ['Yes if', changer || 'better visual evidence shows it is more distinct than it looks.'],
-          ['No if', 'you need a confident buy call today.'],
-        ];
+        return ['Wait', changer || 'The evidence is not strong enough for a confident stylist call yet.'];
       }
-      return [
-        ['Yes if', 'the fabric, fit, or condition is meaningfully better than what you own.'],
-        ['No if', changer || 'you want the next purchase to fill a clearer gap.'],
-      ];
+      return ['Lean skip', changer || 'It is attractive, but the closet utility is not clear enough to make it a priority buy.'];
     }
     function renderEditorialDecision(vm) {
-      return '<div class="pa-editorial-decision">' + buildDecisionRows(vm).map(function (row) {
-        return '<div class="pa-editorial-decision-row"><strong>' + escapeHtml(row[0]) + '</strong> — ' + escapeHtml(row[1]) + '</div>';
-      }).join('') + '</div>';
+      var call = buildDecisionCall(vm);
+      var judgment = getJudgment(vm);
+      var caveats = judgment ? toArray(judgment.caveats).filter(Boolean).slice(0, 2) : [];
+      var caveatHtml = caveats.length
+        ? '<div class="pa-editorial-change-mind"><div class="pa-editorial-insight-title">What would change this</div>' + caveats.map(function (entry) { return '<p class="pa-editorial-insight-copy">' + escapeHtml(entry) + '</p>'; }).join('') + '</div>'
+        : '';
+      return '<div class="pa-editorial-decision"><div class="pa-editorial-insight-title">The decision</div><div class="pa-editorial-decision-row"><strong>' + escapeHtml(call[0]) + '</strong> — ' + escapeHtml(call[1]) + '</div>' + caveatHtml + '</div>';
     }
     function renderEditorialInsights(vm) {
-      return '<section class="pa-editorial-insights"><div><div class="pa-editorial-insight-title">What it adds</div><div class="pa-editorial-insight-copy">' + escapeHtml(buildWhatAdds(vm)) + '</div></div><div><div class="pa-editorial-insight-title">Where it overlaps</div><div class="pa-editorial-insight-copy">' + escapeHtml(buildWhereOverlaps(vm)) + '</div></div></section>';
+      return '<section class="pa-editorial-insights"><div><div class="pa-editorial-insight-title">What it unlocks</div><div class="pa-editorial-insight-copy">' + escapeHtml(buildWhatAdds(vm)) + '</div></div><div><div class="pa-editorial-insight-title">What it competes with</div><div class="pa-editorial-insight-copy">' + escapeHtml(buildWhereOverlaps(vm)) + '</div></div></section>';
     }
     function renderEditorialContext(vm) {
-      var parts = ['From your closet'];
-      if (typeof vm.context.closetItemsChecked === 'number') parts.push(vm.context.closetItemsChecked + ' items checked');
+      var parts = [vm.context.calibrationLabel || 'From your closet'];
+      if (typeof vm.context.closetItemsChecked === 'number' && typeof vm.context.totalActiveEvidenceItems === 'number') {
+        parts.push(vm.context.closetItemsChecked + ' relevant pieces checked from ' + vm.context.totalActiveEvidenceItems + ' active evidence items');
+      } else if (typeof vm.context.closetItemsChecked === 'number') parts.push(vm.context.closetItemsChecked + ' items checked');
       var displayedComparators = getComparators(vm).length;
-      if (displayedComparators > 0) parts.push(displayedComparators + ' similar shown');
+      if (displayedComparators > 0) parts.push(displayedComparators + ' closet pieces checked');
       return '<div class="pa-editorial-context">' + escapeHtml(parts.join(' · ')) + '</div>';
     }
     function renderEditorialActions(actions) {
       return actions.length ? renderActions(actions) : '';
     }
     function renderEditorialVerdictLabel(vm) {
-      if (isTeePurchase(vm)) return 'Worth considering';
+      var judgment = getJudgment(vm);
+      if (judgment) return judgmentVerdictLabel(judgment.verdict);
+      if (vm.verdict === 'consider') return 'Lean skip';
       return renderVerdictLabel(vm.verdict);
     }
     async function handleAction(actionId) {
@@ -1375,6 +1741,11 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         pendingActionId = null;
         completedActionIds[actionId] = true;
         successMessage = 'Saved to your closet.';
+        setWidgetState({
+          completedActionIds: completedActionIds,
+          lastActionId: actionId,
+          status: 'saved',
+        });
         render();
       } catch (error) {
         pendingActionId = null;
@@ -1396,9 +1767,10 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       }
       root.innerHTML =
         '<article class="pa-card pa-editorial"><div class="pa-card-inner">'
-        + '<header class="pa-editorial-head"><div class="pa-thumb">' + renderThumb(vm.item) + '</div><div><div class="pa-editorial-kicker">Should I buy this?</div><h2 class="pa-editorial-title pa-title">' + escapeHtml(vm.item.name) + '</h2>' + (productMeta(vm.item) ? '<div class="pa-editorial-meta">' + escapeHtml(productMeta(vm.item)) + '</div>' : '') + '<div class="pa-editorial-verdict">' + escapeHtml(renderEditorialVerdictLabel(vm)) + '</div><p class="pa-editorial-headline">' + escapeHtml(isTeePurchase(vm) ? 'Worth considering only if the heavier fabric earns a clear role in your rotation.' : vm.verdictHeadline) + '</p></div></header>'
-        + '<section class="pa-editorial-section"><div class="pa-editorial-label">The take</div><p class="pa-take-copy">' + escapeHtml(buildEditorialTake(vm)) + '</p></section>'
+        + '<header class="pa-editorial-head"><div class="pa-thumb">' + renderThumb(vm.item) + '</div><div><div class="pa-editorial-kicker">Should I buy this?</div><h2 class="pa-editorial-title pa-title">' + escapeHtml(vm.item.name) + '</h2>' + (productMeta(vm.item) ? '<div class="pa-editorial-meta">' + escapeHtml(productMeta(vm.item)) + '</div>' : '') + '<div class="pa-editorial-verdict">' + escapeHtml(renderEditorialVerdictLabel(vm)) + '</div><p class="pa-editorial-headline">' + escapeHtml(vm.verdictHeadline) + '</p></div></header>'
+        + '<section class="pa-editorial-section"><div class="pa-editorial-label">The call</div><p class="pa-take-copy">' + escapeHtml(buildEditorialTake(vm)) + '</p></section>'
         + renderEditorialPhotoRead(vm)
+        + renderEditorialWhy(vm)
         + renderEditorialCloset(vm)
         + renderEditorialInsights(vm)
         + renderEditorialDecision(vm)
@@ -1421,6 +1793,27 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       hydrateFromCandidate(getOpenAI().toolResponseMetadata) || hydrateFromCandidate(getOpenAI().toolOutput);
       render();
     });
+    function connectMcpAppsHost() {
+      if (bridgeReady) return bridgeReady;
+      bridgeReady = bridgeRequest('ui/initialize', {
+        appInfo: {
+          name: 'Fluent Style Purchase Analysis',
+          version: '${STYLE_PURCHASE_ANALYSIS_TEMPLATE_VERSION}',
+        },
+        protocolVersion: '2026-01-26',
+        appCapabilities: {},
+      }, 3000).then(function (result) {
+        bridgeInitialized = true;
+        hydrateFromCandidate(result);
+        bridgeNotify('ui/notifications/initialized', {});
+        notifyHeight();
+        return result;
+      }).catch(function () {
+        return null;
+      });
+      return bridgeReady;
+    }
+    void connectMcpAppsHost();
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', function () { render(); });
     } else {
@@ -1445,9 +1838,11 @@ function buildPurchaseAnalysisWidgetViewModel(viewModel: PurchaseAnalysisViewMod
     generatedAt: viewModel.generatedAt,
     id: viewModel.id,
     item: viewModel.item,
+    judgmentSource: viewModel.judgmentSource,
     overlap: viewModel.overlap,
     reasons: viewModel.reasons,
     shoppingAnswer: viewModel.shoppingAnswer,
+    stylistJudgment: viewModel.stylistJudgment,
     verdict: viewModel.verdict,
     verdictEmphasis: viewModel.verdictEmphasis,
     verdictHeadline: viewModel.verdictHeadline,
@@ -1612,7 +2007,7 @@ function buildVerdictHeadline(analysis: StylePurchaseAnalysis, verdict: Purchase
   if (verdict === 'recommend') {
     if (analysis.comparatorReasoning.framing === 'addition') return analysis.comparatorReasoning.summary;
     if (analysis.coverageImpact.strengthensWeakArea) return 'This adds something your closet is lighter on.';
-    if (analysis.laneAssessment.introduces) return `This opens up a useful ${analysis.laneAssessment.introduces} option.`;
+    if (analysis.laneAssessment.introduces) return `This opens up a useful ${formatJudgmentAreaLabel(analysis.laneAssessment.introduces)} option.`;
     return 'This looks like a real addition, not more of the same.';
   }
   if (verdict === 'skip') {
@@ -1632,10 +2027,10 @@ function buildVerdictHeadline(analysis: StylePurchaseAnalysis, verdict: Purchase
     return 'This feels more like a replacement than a true addition.';
   }
   if (analysis.comparatorReasoning.framing === 'upgrade') {
-    return 'This could upgrade a lane you already wear.';
+    return 'This could upgrade something you already wear often.';
   }
   if (analysis.comparatorReasoning.framing === 'adjacent') {
-    return `Worth considering if the ${describeCandidateItemKind(analysis)} adds a meaningfully different fabric, fit, or color role.`;
+    return `Lean skip: this feels too close to what your closet already does, and the difference is not strong enough yet.`;
   }
   return 'The case is mixed: it could work, but the overlap is real.';
 }
@@ -1665,9 +2060,9 @@ function buildSummary(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict)
   }
   if (analysis.comparatorReasoning.framing === 'adjacent') {
     if (overlapNames.length > 0) {
-      return `Your closet already has nearby ${describeCandidateItemKind(analysis)} options like ${overlapNames.join(' and ')}; the buy case depends on whether this one brings a clearer fabric, fit, or color role.`;
+      return `Your closet already has ${describeCandidateItemKind(analysis)} options like ${overlapNames.join(' and ')}. I would pass for now; the difference is not obvious enough from the available evidence.`;
     }
-    return `This is close to a role your closet already covers; the buy case depends on whether the fabric, fit, or color gives it a distinct job.`;
+    return `This is close to something your closet already covers. I would pass for now; the available evidence does not show a distinct enough reason to add it.`;
   }
   return 'There is a case for it, but the decision depends on how much you want another version of this kind of item.';
 }
@@ -1676,7 +2071,7 @@ function buildOverlapViewModel(analysis: StylePurchaseAnalysis): PurchaseAnalysi
   if (analysis.comparatorReasoning.topComparisons.length > 0) {
     return selectVisibleComparisons(analysis).map((entry) => ({
       name: formatOwnedOverlapName(analysis.itemsById[entry.itemId]),
-      note: entry.summary,
+      note: cleanPurchasePresentationCopy(entry.summary),
       pct: entry.overlapScore,
     }));
   }
@@ -1705,7 +2100,7 @@ function buildOverlapViewModel(analysis: StylePurchaseAnalysis): PurchaseAnalysi
     .slice(0, 4)
     .map((entry) => ({
       name: formatOwnedOverlapName(analysis.itemsById[entry.itemId]),
-      note: entry.note,
+      note: cleanPurchasePresentationCopy(entry.note),
       pct: entry.pct,
     }));
 }
@@ -1715,17 +2110,26 @@ function buildShoppingAnswerViewModel(
   verdict: PurchaseVerdict,
   imageHints?: PurchaseAnalysisImageHints,
   comparatorItemIdMode: 'canonical' | 'handles' = 'canonical',
+  stylistJudgment?: PurchaseAnalysisStylistJudgmentViewModel | null,
+  suppressWardrobeFitCopy = false,
 ): PurchaseAnalysisShoppingAnswerViewModel {
-  const closestComparators = buildShoppingClosestComparators(analysis, imageHints, comparatorItemIdMode);
+  const closestComparators = suppressWardrobeFitCopy ? [] : buildShoppingClosestComparators(analysis, imageHints, comparatorItemIdMode);
   return {
-    adjacentReferences: buildShoppingAdjacentReferences(analysis, imageHints, comparatorItemIdMode),
+    adjacentReferences: suppressWardrobeFitCopy ? [] : buildShoppingAdjacentReferences(analysis, imageHints, comparatorItemIdMode),
     closestComparators,
     directComparators: closestComparators.filter((entry) => entry.comparatorRole === 'direct_comparator'),
-    evidence: buildShoppingEvidence(analysis),
-    rejectedComparators: buildShoppingRejectedComparators(analysis, comparatorItemIdMode),
+    evidence: suppressWardrobeFitCopy ? buildCandidateOnlyShoppingEvidence(analysis) : buildShoppingEvidence(analysis),
+    rejectedComparators: suppressWardrobeFitCopy ? [] : buildShoppingRejectedComparators(analysis, comparatorItemIdMode),
     verdict: mapShoppingVerdict(verdict),
-    verdictReason: buildSummary(analysis, verdict),
-    whatWouldChangeVerdict: buildShoppingVerdictChangers(analysis, verdict),
+    verdictReason:
+      cleanPurchasePresentationCopy(
+        suppressWardrobeFitCopy ? buildCandidateOnlySummary(analysis, verdict) : stylistJudgment?.rationale ?? buildSummary(analysis, verdict),
+      ) ?? '',
+    whatWouldChangeVerdict: stylistJudgment?.caveats.length
+      ? stylistJudgment.caveats
+      : cleanPurchasePresentationCopyArray(
+          suppressWardrobeFitCopy ? buildCandidateOnlyVerdictChangers(analysis) : buildShoppingVerdictChangers(analysis, verdict),
+        ),
   };
 }
 
@@ -1753,10 +2157,10 @@ function buildShoppingAdjacentReferences(
 ): PurchaseAnalysisShoppingComparatorViewModel[] {
   const closestIds = new Set(selectVisibleComparisons(analysis).map((entry) => entry.itemId));
   const adjacentReferences = analysis.comparatorReasoning.topComparisons.filter(
-    (entry) => mapShoppingComparatorRole(entry.relation) === 'adjacent_reference',
+    (entry) => determineShoppingComparatorRole(analysis, entry) === 'adjacent_reference',
   );
   return [
-    ...selectVisibleComparisons(analysis).filter((entry) => mapShoppingComparatorRole(entry.relation) === 'adjacent_reference'),
+    ...selectVisibleComparisons(analysis).filter((entry) => determineShoppingComparatorRole(analysis, entry) === 'adjacent_reference'),
     ...adjacentReferences.filter((entry) => !closestIds.has(entry.itemId)),
   ]
     .slice(0, 4)
@@ -1778,11 +2182,13 @@ function buildShoppingComparatorViewModel(
 ): PurchaseAnalysisShoppingComparatorViewModel {
   const item = analysis.itemsById[entry.itemId];
   const hintedImageUrl = imageHints?.comparatorImageUrlsByItemId?.[entry.itemId] ?? null;
+  const comparatorRole = determineShoppingComparatorRole(analysis, entry);
   return {
     brand: item?.brand ?? null,
+    canonicalItemId: entry.itemId,
     category: item?.category ?? null,
     colorFamily: item?.colorFamily ?? null,
-    comparatorRole: mapShoppingComparatorRole(entry.relation),
+    comparatorRole,
     confidence: entry.confidence,
     descriptor: buildOwnedComparatorDescriptor(item),
     hasImage: Boolean(item?.primaryPhotoDelivery),
@@ -1791,11 +2197,11 @@ function buildShoppingComparatorViewModel(
     itemId: displayItemId,
     name: formatOwnedOverlapName(item),
     overlapScore: entry.overlapScore,
-    reasons: entry.notes.slice(0, 3),
+    reasons: cleanPurchasePresentationCopyArray(entry.notes.slice(0, 3)),
     relation: entry.relation,
-    relationLabel: formatRelationLabel(entry.relation),
-    roleLabel: mapShoppingComparatorRole(entry.relation) === 'direct_comparator' ? 'Closest in your closet' : 'Adjacent reference',
-    summary: entry.summary,
+    relationLabel: cleanPurchasePresentationCopy(formatRelationLabel(entry.relation)) ?? formatRelationLabel(entry.relation),
+    roleLabel: comparatorRole === 'direct_comparator' ? 'Closest in your closet' : 'Adjacent reference',
+    summary: cleanPurchasePresentationCopy(entry.summary) ?? '',
     subcategory: item?.subcategory ?? null,
   };
 }
@@ -1807,6 +2213,20 @@ function mapShoppingComparatorRole(relation: StylePurchaseComparisonRelation): P
   return 'adjacent_reference';
 }
 
+function determineShoppingComparatorRole(
+  analysis: StylePurchaseAnalysis,
+  entry: StylePurchaseAnalysis['comparatorReasoning']['topComparisons'][number],
+): PurchaseAnalysisShoppingComparatorRole {
+  const directBucketIds = new Set([
+    ...analysis.contextBuckets.exactComparatorItems.map((match) => match.itemId),
+    ...analysis.contextBuckets.typedRoleItems.map((match) => match.itemId),
+  ]);
+  if (directBucketIds.has(entry.itemId)) {
+    return 'direct_comparator';
+  }
+  return mapShoppingComparatorRole(entry.relation);
+}
+
 function buildShoppingRejectedComparators(
   analysis: StylePurchaseAnalysis,
   comparatorItemIdMode: 'canonical' | 'handles' = 'canonical',
@@ -1814,8 +2234,8 @@ function buildShoppingRejectedComparators(
   return analysis.comparatorReasoning.rejectedComparisons.slice(0, 6).map((entry, index) => ({
     itemId: comparatorItemIdMode === 'handles' ? `rejected-match-${index + 1}` : entry.itemId,
     name: formatOwnedOverlapName(analysis.itemsById[entry.itemId]),
-    reasons: entry.reasons.slice(0, 3),
-    rejectedBecause: entry.rejectedBecause,
+    reasons: cleanPurchasePresentationCopyArray(entry.reasons.slice(0, 3)),
+    rejectedBecause: cleanPurchasePresentationCopy(entry.rejectedBecause) ?? '',
   }));
 }
 
@@ -1862,6 +2282,23 @@ function buildShoppingEvidence(analysis: StylePurchaseAnalysis): PurchaseAnalysi
   };
 }
 
+function buildCandidateOnlyShoppingEvidence(analysis: StylePurchaseAnalysis): PurchaseAnalysisShoppingEvidenceViewModel {
+  const used = ['candidate item details'];
+  const missing = ['starter closet evidence or confirmed active closet evidence'];
+  if (analysis.evidenceQuality.candidateVisualGrounding === 'host_visual_inspection') {
+    used.push('host-inspected candidate image observations');
+  } else if (analysis.evidenceQuality.candidateVisualGrounding === 'image_reference_only') {
+    used.push('candidate image URL presence');
+    missing.push('candidate image pixels have not been inspected by Fluent');
+  } else {
+    missing.push('no candidate image was available to inspect');
+  }
+  return {
+    missing: uniqueStrings(missing).slice(0, 5),
+    used: uniqueStrings(used).slice(0, 6),
+  };
+}
+
 function isMissingEvidenceNote(note: string) {
   return /not inspected|no candidate image|lack|missing|incomplete|partial|requires|could not/i.test(note);
 }
@@ -1872,7 +2309,7 @@ function buildShoppingVerdictChangers(analysis: StylePurchaseAnalysis, verdict: 
     changes.push('A host-inspected candidate image showing a materially different silhouette, material, colorway, or role.');
   }
   if (analysis.evidenceQuality.comparatorItemIdsInspected.length === 0 && analysis.comparatorReasoning.topComparisons.length > 0) {
-    changes.push('Images for the closest closet comparators confirming they are less visually similar than the metadata suggests.');
+    changes.push('Images for the closest closet comparators confirming they are less visually similar than the current closet evidence suggests.');
   }
   if (verdict === 'skip') {
     changes.push('A clear reason this would replace a worn-out closet item rather than add another near-duplicate.');
@@ -1881,6 +2318,15 @@ function buildShoppingVerdictChangers(analysis: StylePurchaseAnalysis, verdict: 
   } else {
     changes.push(`A clearer replacement need or a distinct use case for this ${describeCandidateItemKind(analysis)}.`);
   }
+  return uniqueStrings(changes).slice(0, 4);
+}
+
+function buildCandidateOnlyVerdictChangers(analysis: StylePurchaseAnalysis): string[] {
+  const changes: string[] = [];
+  if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
+    changes.push('A host-inspected candidate image showing concrete silhouette, material, colorway, and detail.');
+  }
+  changes.push('A few starter closet anchors or confirmed active closet items before making wardrobe-fit claims.');
   return uniqueStrings(changes).slice(0, 4);
 }
 
@@ -1894,7 +2340,7 @@ function buildReasons(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict)
   const reasons: string[] = [];
   const overlapNames = buildNamedOverlapList(analysis);
   if (verdict === 'skip' && overlapNames.length > 0) {
-    reasons.push(`Your closet already covers this lane, especially with ${overlapNames.slice(0, 2).join(' and ')}.`);
+    reasons.push(`Your closet already covers this wardrobe job, especially with ${overlapNames.slice(0, 2).join(' and ')}.`);
   } else if (analysis.comparatorReasoning.notes.length > 0) {
     reasons.push(...analysis.comparatorReasoning.notes.slice(0, 2));
   }
@@ -1914,10 +2360,10 @@ function buildReasons(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict)
     reasons.push('The gain here is more about refinement than opening a genuinely new role.');
   }
   if (analysis.laneAssessment.introduces) {
-    reasons.push(`It would add a clearer ${analysis.laneAssessment.introduces} option than you have right now.`);
+    reasons.push(`It would add a clearer ${formatJudgmentAreaLabel(analysis.laneAssessment.introduces)} option than you have right now.`);
   }
   if (analysis.laneAssessment.bridges.length > 0) {
-    reasons.push(`It bridges well with ${analysis.laneAssessment.bridges.slice(0, 2).join(' and ')}.`);
+    reasons.push(`It works with ${analysis.laneAssessment.bridges.slice(0, 2).map(formatJudgmentAreaLabel).join(' and ')} pieces you already own.`);
   }
   if (analysis.alignmentSignals.notes.length > 0) {
     reasons.push(analysis.alignmentSignals.notes[0]!);
@@ -1928,7 +2374,7 @@ function buildReasons(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict)
   if (analysis.confidenceNotes.length > 0 && verdict === 'wait') {
     reasons.push(analysis.confidenceNotes[0]!);
   }
-  return uniqueStrings(reasons).slice(0, 4);
+  return cleanPurchasePresentationCopyArray(uniqueStrings(reasons).slice(0, 4));
 }
 
 function buildFindings(analysis: StylePurchaseAnalysis): PurchaseAnalysisFindingViewModel[] {
@@ -1940,7 +2386,7 @@ function buildFindings(analysis: StylePurchaseAnalysis): PurchaseAnalysisFinding
         overlapNames.length > 0
           ? `Closest overlaps: ${overlapNames.join(' and ')}.`
           : `You already own direct overlaps in this kind of ${describeCandidateItemKind(analysis)}.`,
-      bodySecondary: analysis.contextBuckets.exactComparatorItems[0]?.reasons[0] ?? null,
+      bodySecondary: cleanPurchasePresentationCopy(analysis.contextBuckets.exactComparatorItems[0]?.reasons[0] ?? null),
       id: 'coverage',
       metricLabel: 'Overlap',
       metricValue: `${analysis.contextBuckets.exactComparatorItems.length}`,
@@ -1950,8 +2396,8 @@ function buildFindings(analysis: StylePurchaseAnalysis): PurchaseAnalysisFinding
   } else if (analysis.comparatorReasoning.topComparisons.length > 0) {
     const closest = selectVisibleComparisons(analysis)[0] ?? analysis.comparatorReasoning.topComparisons[0]!;
     findings.push({
-      body: closest.summary,
-      bodySecondary: closest.notes[0] ?? null,
+      body: cleanPurchasePresentationCopy(closest.summary) ?? '',
+      bodySecondary: cleanPurchasePresentationCopy(closest.notes[0] ?? null),
       id: 'coverage',
       metricLabel: 'Overlap',
       metricValue: `${Math.round(closest.overlapScore)}`,
@@ -1960,7 +2406,7 @@ function buildFindings(analysis: StylePurchaseAnalysis): PurchaseAnalysisFinding
     });
   } else if (analysis.comparatorCoverage.note) {
     findings.push({
-      body: analysis.comparatorCoverage.note,
+      body: cleanPurchasePresentationCopy(analysis.comparatorCoverage.note) ?? '',
       bodySecondary: null,
       id: 'coverage',
       metricLabel: 'Coverage',
@@ -1980,9 +2426,9 @@ function buildFindings(analysis: StylePurchaseAnalysis): PurchaseAnalysisFinding
   ) {
     findings.push({
       body: analysis.laneAssessment.introduces
-        ? `This would introduce a more distinct ${analysis.laneAssessment.introduces} option.`
+        ? `This would introduce a more distinct ${formatJudgmentAreaLabel(analysis.laneAssessment.introduces)} option.`
         : `This sits in a part of your closet you already wear.`,
-      bodySecondary: analysis.laneAssessment.notes[0] ?? null,
+      bodySecondary: cleanPurchasePresentationCopy(analysis.laneAssessment.notes[0] ?? null),
       id: 'lane',
       metricLabel: 'Category',
       metricValue: analysis.laneAssessment.introduces ? 'New' : 'Known',
@@ -1995,7 +2441,7 @@ function buildFindings(analysis: StylePurchaseAnalysis): PurchaseAnalysisFinding
       body: analysis.tensionSignals.hardAvoid
         ? `Hard avoid: ${analysis.tensionSignals.hardAvoid}.`
         : analysis.tensionSignals.notes[0]!,
-      bodySecondary: analysis.confidenceNotes[0] ?? null,
+      bodySecondary: cleanPurchasePresentationCopy(analysis.confidenceNotes[0] ?? null),
       id: 'tension',
       metricLabel: 'Risk',
       metricValue: analysis.tensionSignals.hardAvoid ? 'High' : 'Watch',
@@ -2004,6 +2450,33 @@ function buildFindings(analysis: StylePurchaseAnalysis): PurchaseAnalysisFinding
     });
   }
   return findings.slice(0, 3);
+}
+
+function buildCandidateOnlyFindings(analysis: StylePurchaseAnalysis): PurchaseAnalysisFindingViewModel[] {
+  if (analysis.evidenceQuality.candidateVisualGrounding === 'host_visual_inspection') {
+    return [
+      {
+        body: 'Candidate image inspected; closet-fit claims are paused until Style has stronger closet evidence.',
+        bodySecondary: null,
+        id: 'candidate-evidence',
+        metricLabel: 'Scope',
+        metricValue: 'Item only',
+        tag: 'Evidence',
+        tone: 'neutral',
+      },
+    ];
+  }
+  return [
+    {
+      body: 'Candidate image evidence is still needed before a final visual shopping call.',
+      bodySecondary: null,
+      id: 'candidate-evidence',
+      metricLabel: 'Scope',
+      metricValue: 'Item only',
+      tag: 'Evidence',
+      tone: 'neutral',
+    },
+  ];
 }
 
 function buildGapViewModel(analysis: StylePurchaseAnalysis): PurchaseAnalysisGapViewModel[] {
@@ -2020,14 +2493,14 @@ function buildGapViewModel(analysis: StylePurchaseAnalysis): PurchaseAnalysisGap
   }
   if (analysis.laneAssessment.introduces) {
     gaps.push({
-      lane: titleCase(analysis.laneAssessment.introduces),
+      lane: cleanPurchasePresentationCopy(titleCase(formatJudgmentAreaLabel(analysis.laneAssessment.introduces))) ?? '',
       need: 'high',
       note: 'This would add something you do not currently cover clearly.',
     });
   }
   if (analysis.coverageImpact.strengthensWeakArea && analysis.laneAssessment.existingLane) {
     gaps.push({
-      lane: titleCase(analysis.laneAssessment.existingLane),
+      lane: cleanPurchasePresentationCopy(titleCase(formatJudgmentAreaLabel(analysis.laneAssessment.existingLane))) ?? '',
       need: 'med',
       note: 'This would deepen a part of your closet that still looks a little thin.',
     });
@@ -2113,8 +2586,8 @@ function buildOwnedComparatorDescriptor(item: StylePurchaseAnalysis['itemsById']
 function formatRelationLabel(relation: StylePurchaseComparisonRelation): string {
   if (relation === 'duplicate') return 'Very close';
   if (relation === 'replacement') return 'Replacement';
-  if (relation === 'upgrade') return 'Upgrade lane';
-  if (relation === 'adjacent') return 'Similar role';
+  if (relation === 'upgrade') return 'Upgrade candidate';
+  if (relation === 'adjacent') return 'Useful reference';
   if (relation === 'distinct') return 'Different enough';
   return 'Needs a closer look';
 }
@@ -2142,6 +2615,10 @@ function titleCase(value: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+function formatJudgmentAreaLabel(value: string): string {
+  return value.replace(/_/g, ' ').replace(/\blane\b/gi, 'area');
 }
 
 function formatPrice(price: StylePurchaseCandidate['estimatedPrice']): string | null {

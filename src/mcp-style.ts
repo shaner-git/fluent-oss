@@ -18,7 +18,15 @@ import {
   parseJsonLike,
 } from './domains/style/helpers';
 import { buildSignedStyleRemoteImageUrl } from './domains/style/media';
-import type { StyleVisualBundleAssetRecord, StyleVisualBundleRecord } from './domains/style/types';
+import {
+  getStyleSetupCalibrationWidgetHtml,
+  STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
+} from './domains/style/onboarding-calibration';
+import type {
+  StylePurchaseStylistJudgment,
+  StyleVisualBundleAssetRecord,
+  StyleVisualBundleRecord,
+} from './domains/style/types';
 import {
   buildPurchaseAnalysisMetadata,
   buildPurchaseAnalysisStructuredContent,
@@ -36,7 +44,10 @@ import {
   STYLE_PURCHASE_ANALYSIS_HUMAN_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_HYDRATION_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_IMAGE_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_JUDGMENT_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_LEGACY_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_NATIVE_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_MCP_APPS_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_PHOTO_READ_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_SECONDARY_ACTION_PREVIOUS_TEMPLATE_URI,
@@ -72,6 +83,25 @@ const styleVisualBundleDeliveryModeSchema = z.enum(['authenticated_only', 'authe
 const styleEvidenceGapPriorityFilterSchema = z.enum(['actionable', 'all', 'high', 'medium', 'low']).optional();
 const styleDescriptorBacklogFocusSchema = z.enum(['priority', 'blocked', 'all']).optional();
 const stylePurchaseAnalysisActionIdSchema = z.enum(['log_purchase']);
+const styleCalibrationSignalKindSchema = z.enum([
+  'aesthetic',
+  'budget',
+  'color',
+  'fit',
+  'formality',
+  'hard_avoid',
+  'occasion',
+  'silhouette',
+]);
+const styleCalibrationSignalStatusSchema = z.enum(['inferred', 'confirmed', 'rejected', 'corrected']);
+const styleInferenceSourceSchema = z.enum([
+  'user_confirmed',
+  'closet_inferred',
+  'item_metadata',
+  'host_visual_inspection',
+  'fallback',
+]);
+const styleItemWearStatusSchema = z.enum(['actively_worn', 'stale', 'accidental', 'unknown']);
 const STYLE_PURCHASE_VISUAL_EVIDENCE_SOURCE = 'style_submit_purchase_visual_observations';
 const STYLE_PURCHASE_VISUAL_EVIDENCE_CACHE_TTL_MS = 15 * 60 * 1000;
 const STYLE_PURCHASE_HOST_VISION_SOURCES = new Set([
@@ -114,6 +144,63 @@ const stylePurchaseVisualEvidenceInputSchema = z.object({
   visionPacketId: z.string().nullable().optional(),
   visualObservationId: z.string().optional(),
 });
+const stylePurchaseStylistJudgmentSchema = z.object({
+  caveats: z.array(z.string().trim().min(1)).optional(),
+  decisionBasis: z.enum(['gap', 'upgrade', 'replacement', 'duplicate', 'taste_fit', 'unclear']).nullable().optional(),
+  decision_basis: z.enum(['gap', 'upgrade', 'replacement', 'duplicate', 'taste_fit', 'unclear']).nullable().optional(),
+  headline: z.string().trim().min(1).nullable().optional(),
+  pairingOpportunities: z.array(z.string().trim().min(1)).optional(),
+  pairing_opportunities: z.array(z.string().trim().min(1)).optional(),
+  rationale: z.string().trim().min(1).nullable().optional(),
+  referencedComparatorIds: z.array(z.string().trim().min(1)).optional(),
+  referenced_comparator_ids: z.array(z.string().trim().min(1)).optional(),
+  verdict: z.enum(['buy', 'skip', 'consider', 'wait']),
+  wardrobeImpact: z
+    .enum(['positive_addition', 'deepens_existing', 'replaces_item', 'redundant', 'expands_range'])
+    .nullable()
+    .optional(),
+  wardrobe_impact: z
+    .enum(['positive_addition', 'deepens_existing', 'replaces_item', 'redundant', 'expands_range'])
+    .nullable()
+    .optional(),
+  whatItAdds: z.string().trim().min(1).nullable().optional(),
+  what_it_adds: z.string().trim().min(1).nullable().optional(),
+  whereItOverlaps: z.string().trim().min(1).nullable().optional(),
+  where_it_overlaps: z.string().trim().min(1).nullable().optional(),
+});
+
+function normalizeStylePurchaseStylistJudgment(value: unknown): StylePurchaseStylistJudgment | null {
+  if (value == null) return null;
+  const parsed = stylePurchaseStylistJudgmentSchema.parse(value);
+  return {
+    caveats: parsed.caveats ?? [],
+    decisionBasis: parsed.decisionBasis ?? parsed.decision_basis ?? null,
+    headline: parsed.headline ?? null,
+    pairingOpportunities: parsed.pairingOpportunities ?? parsed.pairing_opportunities ?? [],
+    rationale: parsed.rationale ?? null,
+    referencedComparatorIds: parsed.referencedComparatorIds ?? parsed.referenced_comparator_ids ?? [],
+    verdict: parsed.verdict,
+    wardrobeImpact: parsed.wardrobeImpact ?? parsed.wardrobe_impact ?? null,
+    whatItAdds: parsed.whatItAdds ?? parsed.what_it_adds ?? null,
+    whereItOverlaps: parsed.whereItOverlaps ?? parsed.where_it_overlaps ?? null,
+  };
+}
+
+function extractStylePurchaseStylistJudgmentArgument(record: Record<string, unknown>): StylePurchaseStylistJudgment | null {
+  return normalizeStylePurchaseStylistJudgment(record.stylist_judgment ?? record.stylistJudgment ?? null);
+}
+
+function buildStylePurchaseRenderInput(input: {
+  candidate: unknown;
+  stylistJudgment?: StylePurchaseStylistJudgment | null;
+  visualEvidence: unknown;
+}) {
+  return {
+    candidate: input.candidate,
+    visual_evidence: input.visualEvidence,
+    ...(input.stylistJudgment ? { stylist_judgment: input.stylistJudgment } : {}),
+  };
+}
 
 type AppsOAuth2SecurityScheme = {
   scopes: string[];
@@ -151,6 +238,7 @@ const stylePurchaseVisualObservationRoleSchema = z.enum([
   'requested_item',
   'exact_comparator',
   'typed_role',
+  'rejected_comparator',
   'same_category',
   'nearby_formality',
 ]);
@@ -238,6 +326,8 @@ const styleSubmitPurchaseVisualObservationsInputSchema = z.object({
   comparator_item_ids_inspected: z.array(z.string()).optional(),
   observations: z.array(stylePurchaseVisualObservationDetailSchema).min(1),
   source: z.string().optional(),
+  stylistJudgment: stylePurchaseStylistJudgmentSchema.optional(),
+  stylist_judgment: stylePurchaseStylistJudgmentSchema.optional(),
   vision_packet_id: z.string().optional(),
 });
 const stylePurchasePageEvidenceInputSchema = {
@@ -289,6 +379,59 @@ const stylePurchaseVisualEvidenceCache = new Map<string, StylePurchaseVisualEvid
 
 const STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES = 4;
 const STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGE_BYTES = 1_500_000;
+const STYLE_PURCHASE_STATE_AUTHORITY_RULE =
+  'Do not let host memory, prior chat context, or an earlier unsaved recommendation determine the buy/wait/skip call unless the user confirms it in the current turn or Fluent state/tool evidence supports it. Mention outside context only as outside Fluent state.';
+
+function buildStylePurchaseCalibrationContext(analysis: Awaited<ReturnType<StyleService['analyzePurchase']>>) {
+  const readiness = analysis.calibration.purchaseAnalysisReadiness;
+  const callablePrompts = analysis.calibration.calibrationPrompts.filter((entry) => entry.toolName);
+  const prompt =
+    readiness.readinessLevel === 'not_ready'
+      ? analysis.calibration.calibrationPrompts.find((entry) => entry.toolName === 'style_add_starter_closet_item') ??
+        callablePrompts.find((entry) => entry.kind === 'import_review') ??
+        callablePrompts[0] ??
+        null
+      : analysis.calibration.calibrationPrompts.find((entry) => entry.toolName === 'style_record_calibration_response') ??
+        callablePrompts[0] ??
+        null;
+  return {
+    activeItemCount: analysis.calibration.activeItemCount,
+    confidenceBreakdown: analysis.calibration.confidenceBreakdown,
+    confirmedSignalCount: analysis.calibration.confirmedStyleSignals.length,
+    inferredSignalCount: analysis.calibration.inferredStyleSignals.length,
+    hostMemoryRule: STYLE_PURCHASE_STATE_AUTHORITY_RULE,
+    languageRule:
+      readiness.basis === 'closet_inferred' || readiness.basis === 'imported_unconfirmed'
+        ? 'Say "your closet suggests" for inferred signals. Do not say "you prefer" unless citing confirmed taste.'
+        : readiness.basis === 'no_closet' || readiness.basis === 'thin_closet'
+          ? 'Do not make wardrobe-fit claims beyond the available starter evidence.'
+          : readiness.readinessLevel === 'provisional'
+            ? 'Use cautious wording and do not present ownership as confirmed taste.'
+            : 'Cite confirmed signals for strong taste claims.',
+    opportunisticCalibrationPrompt: prompt,
+    readinessBasis: readiness.basis,
+    readinessLabel: readiness.label,
+    readinessLevel: readiness.readinessLevel,
+    readinessNotes: readiness.notes,
+    readinessReady: readiness.ready,
+  };
+}
+
+function buildStylePurchaseFinalHostInstruction(input: {
+  calibrationContext: ReturnType<typeof buildStylePurchaseCalibrationContext>;
+  mode: 'render_ready' | 'widget_rendered';
+  verdict?: string | null;
+}): string {
+  const notReadyPrefix = input.calibrationContext.readinessLevel === 'not_ready'
+    ? 'This is a candidate-focused answer only: avoid wardrobe-fit claims until Style has stronger closet evidence. '
+    : '';
+  const stateAuthorityRule = `${input.calibrationContext.hostMemoryRule} `;
+  if (input.mode === 'widget_rendered') {
+    return `${notReadyPrefix}${stateAuthorityRule}The native Fluent Style card is mounted with verdict "${input.verdict ?? 'unknown'}". If you add prose after the card, it must match that verdict and the same stylist_judgment used for the card; do not introduce a second conflicting buy/skip/wait recommendation. Keep user-facing prose stylist-like and avoid the banned phrases "lane", "nearby lane", "same role", "Yes if", and "No if".`;
+  }
+  return `${notReadyPrefix}${stateAuthorityRule}Native purchase-analysis card data is ready. In MCP Apps-style hosts, especially Claude.ai MCP Apps-capable runs, call style_show_purchase_analysis_widget next with renderInput if a native card is not already mounted. Do not treat style_render_purchase_analysis as the final visual step in those hosts. In visualizer-only or plain text hosts, answer from this structured result.`;
+}
+
 function buildClaudeWidgetDomain(origin: string) {
   return `${createHash('sha256').update(origin).digest('hex').slice(0, 32)}.claudemcpcontent.com`;
 }
@@ -315,13 +458,16 @@ function buildWidgetMeta(description: string, origin: string) {
 }
 
 function buildStylePurchasePreparation(input: {
+  allowPurchasePageExtraction?: boolean;
   analysis: Awaited<ReturnType<StyleService['analyzePurchase']>>;
   candidateInput: unknown;
 }) {
   const { analysis, candidateInput } = input;
+  const allowPurchasePageExtraction = input.allowPurchasePageExtraction ?? true;
   const candidate = analysis.candidate;
   const sourceUrl = extractPurchaseCandidateSourceUrl(candidateInput);
   const visuallyGrounded = analysis.evidenceQuality.candidateVisualGrounding === 'host_visual_inspection';
+  const calibrationContext = buildStylePurchaseCalibrationContext(analysis);
   const rankedComparatorItemIds = analysis.comparatorReasoning.topComparisons.map((entry) => entry.itemId);
   const fallbackComparatorItemIds = [
     ...analysis.contextBuckets.exactComparatorItems.map((entry) => entry.itemId),
@@ -331,35 +477,62 @@ function buildStylePurchasePreparation(input: {
   const comparatorItemIds = Array.from(
     new Set(rankedComparatorItemIds.length > 0 ? rankedComparatorItemIds : fallbackComparatorItemIds),
   ).slice(0, 6);
-  const directComparatorItemIds = analysis.comparatorReasoning.topComparisons
-    .filter((entry) => isDirectPurchaseComparisonRelation(entry.relation))
-    .map((entry) => entry.itemId)
-    .filter((itemId) => comparatorItemIds.includes(itemId));
+  const taxonomyDirectComparatorIds = new Set([
+    ...analysis.contextBuckets.exactComparatorItems.map((entry) => entry.itemId),
+    ...analysis.contextBuckets.typedRoleItems.map((entry) => entry.itemId),
+  ]);
+  const directComparatorItemIds = Array.from(
+    new Set(
+      analysis.comparatorReasoning.topComparisons
+        .filter((entry) => isDirectPurchaseComparisonRelation(entry.relation) || taxonomyDirectComparatorIds.has(entry.itemId))
+        .map((entry) => entry.itemId)
+        .filter((itemId) => comparatorItemIds.includes(itemId)),
+    ),
+  );
   const adjacentReferenceItemIds = comparatorItemIds.filter((itemId) => !directComparatorItemIds.includes(itemId));
+  const rejectedComparatorItemIds = analysis.comparatorReasoning.rejectedComparisons.map((entry) => entry.itemId);
   const candidateHasImageReference = analysis.evidenceQuality.candidateImageCount > 0;
   const hostResponseMode = visuallyGrounded
     ? 'final_recommendation_ready'
     : candidateHasImageReference
       ? 'inspect_purchase_vision_packet'
       : 'request_candidate_image';
+  const evidenceStatusPrefix = calibrationContext.readinessLevel === 'not_ready'
+    ? 'I can judge the candidate, but I do not know the wardrobe well enough for wardrobe-fit claims yet'
+    : 'I have the closet comparison set';
   const userFacingStatus = visuallyGrounded
-    ? 'Ready for the final widget and short stylist explanation.'
+    ? calibrationContext.readinessLevel === 'not_ready'
+      ? 'Ready for a candidate-focused final answer; avoid wardrobe-fit claims until Style has stronger closet evidence.'
+      : 'Ready for the final widget and short stylist explanation.'
     : candidateHasImageReference
-      ? 'I have the closet comparison lane and image references; I am checking the actual visuals before making the call.'
+      ? `${evidenceStatusPrefix} and image references; I am checking the actual visuals before making the call.`
       : sourceUrl
-        ? 'I have the closet comparison lane; I am pulling product-page evidence before making the call.'
-        : 'I have the closet comparison lane; I need a product image before making the call.';
-  const userFacingNarrationInstruction =
-    'When narrating this step to the user, do not say a tool call was blocked. Say the analysis is waiting on product-page evidence, image inspection, or the final widget step.';
+        ? allowPurchasePageExtraction
+          ? `${evidenceStatusPrefix}; I am pulling product-page evidence before making the call.`
+          : `${evidenceStatusPrefix}; I need item details plus a direct product image or uploaded photo before making the call.`
+        : `${evidenceStatusPrefix}; I need a product image before making the call.`;
+  const userFacingNarrationInstruction = allowPurchasePageExtraction
+    ? 'When narrating this step to the user, do not say a tool call was blocked. Say the analysis is waiting on product-page evidence, image inspection, or the final widget step.'
+    : 'When narrating this step to the user, do not say a tool call was blocked. Say the analysis is waiting on item details, an uploaded/direct image, image inspection, or the final widget step.';
+  const calibrationInstruction =
+    calibrationContext.readinessLevel === 'ready'
+      ? `Calibration: ${calibrationContext.readinessLabel}`
+      : calibrationContext.readinessLevel === 'not_ready'
+        ? `Calibration: ${calibrationContext.readinessLabel} This is not ready for wardrobe-fit claims; judge the candidate only, ask for starter/import confirmation evidence, and ${calibrationContext.languageRule}`
+        : `Calibration: ${calibrationContext.readinessLabel} Use provisional language and ${calibrationContext.languageRule}`;
+  const runtimeStateAuthorityInstruction = calibrationContext.hostMemoryRule;
   const hostResponseInstruction = visuallyGrounded
-    ? 'Host visual evidence is present. In ChatGPT/App SDK hosts, call style_show_purchase_analysis_widget next before or alongside the final buy/wait/skip explanation; use style_render_purchase_analysis only for text-first clients.'
+    ? `Host visual evidence is present. ${calibrationInstruction} ${runtimeStateAuthorityInstruction} In ChatGPT/MCP Apps-style hosts, including Claude.ai runs that have proved ui:// mounting, call style_show_purchase_analysis_widget next before or alongside the final buy/wait/skip explanation; use style_render_purchase_analysis only for visualizer-only or text-first clients.`
     : candidateHasImageReference
-      ? 'Do not give a final buy/wait/skip recommendation yet. Call style_get_purchase_vision_packet next, inspect the returned candidate and comparator images, then call style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose style_submit_purchase_visual_observations, call style_render_purchase_analysis after inspection with concrete visual_evidence and source: "host_vision".'
+      ? `Do not give a final buy/wait/skip recommendation yet. ${calibrationInstruction} ${runtimeStateAuthorityInstruction} Call style_get_purchase_vision_packet next, inspect the returned candidate and comparator images, then call style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose style_submit_purchase_visual_observations, call style_render_purchase_analysis after inspection with concrete visual_evidence and source: "host_vision".`
       : sourceUrl
-        ? 'Do not give a final buy/wait/skip recommendation yet. Call style_extract_purchase_page_evidence next with the product URL, re-run style_prepare_purchase_analysis with the enriched candidate it returns, then call style_get_purchase_vision_packet and style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose the submit tool, use style_render_purchase_analysis with concrete host_vision visual_evidence after image inspection. If extraction returns no usable image, ask the user for a direct product image.'
-        : 'Do not give a final buy/wait/skip recommendation yet. Ask the user for a direct candidate image, then call style_get_purchase_vision_packet and style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose the submit tool, use style_render_purchase_analysis with concrete host_vision visual_evidence after image inspection.';
+        ? allowPurchasePageExtraction
+          ? `Do not give a final buy/wait/skip recommendation yet. ${calibrationInstruction} ${runtimeStateAuthorityInstruction} Call style_extract_purchase_page_evidence next with the product URL, re-run style_prepare_purchase_analysis with the enriched candidate it returns, then call style_get_purchase_vision_packet and style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose the submit tool, use style_render_purchase_analysis with concrete host_vision visual_evidence after image inspection. If extraction returns no usable image, ask the user for a direct product image.`
+          : `Do not give a final buy/wait/skip recommendation yet. ${calibrationInstruction} ${runtimeStateAuthorityInstruction} Ask the user for item details plus a direct candidate image or uploaded photo, then call style_get_purchase_vision_packet and style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose the submit tool, use style_render_purchase_analysis with concrete host_vision visual_evidence after image inspection.`
+        : `Do not give a final buy/wait/skip recommendation yet. ${calibrationInstruction} ${runtimeStateAuthorityInstruction} Ask the user for a direct candidate image, then call style_get_purchase_vision_packet and style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose the submit tool, use style_render_purchase_analysis with concrete host_vision visual_evidence after image inspection.`;
   const hostVisionTask = buildStylePurchaseHostVisionTask({
     adjacentReferenceItemIds,
+    allowPurchasePageExtraction,
     analysis,
     candidate,
     comparatorItemIds,
@@ -367,12 +540,15 @@ function buildStylePurchasePreparation(input: {
     sourceUrl,
     visuallyGrounded,
   });
+  const calibrationAskRule = calibrationContext.opportunisticCalibrationPrompt?.toolName === 'style_add_starter_closet_item'
+    ? 'Ask this only when it helps the current purchase decision. Call style_add_starter_closet_item only after the user provides an explicit starter item photo, product link, or description.'
+    : 'Ask this only when it helps the current purchase decision. Call style_record_calibration_response only after the user answers with explicit intent, using schema-valid signals, item_wear_statuses, or profile_patch.';
   const recommendedNextSteps = visuallyGrounded
     ? [
         {
           tool: 'style_show_purchase_analysis_widget',
           reason:
-            'Open the final rich purchase-analysis widget in ChatGPT/App SDK hosts now that host visual inspection evidence is present.',
+            'Open the final rich purchase-analysis widget in ChatGPT/MCP Apps-style hosts now that host visual inspection evidence is present.',
           input: {
             candidate,
             visual_evidence: {
@@ -416,14 +592,24 @@ function buildStylePurchasePreparation(input: {
               'Submit concrete visual observations from the returned inline images to produce render-ready visual evidence.',
             input: {
               candidate,
-              observations: 'Use the imageManifest from style_get_purchase_vision_packet and concrete observations from the inline images.',
+              observations: [
+                {
+                  image_id: 'replace with candidate image_id from style_get_purchase_vision_packet imageManifest',
+                  observed: {
+                    color: 'replace with concrete observed candidate color',
+                    distinctive_details: ['replace with concrete visible candidate details'],
+                    silhouette: 'replace with concrete observed candidate silhouette',
+                  },
+                  role: 'candidate',
+                },
+              ],
               vision_packet_id: 'use visionPacketId from style_get_purchase_vision_packet',
             },
           },
           {
             tool: 'style_render_purchase_analysis',
             reason:
-              'Claude/text-first fallback only: if style_submit_purchase_visual_observations is not exposed, inspect the candidate and comparator images first, then pass concrete visual_evidence with source: "host_vision" here instead of giving a direct freehand verdict.',
+              'Claude visualizer-only/text-first fallback only: if style_submit_purchase_visual_observations is not exposed and the host cannot mount MCP Apps ui:// resources, inspect the candidate and comparator images first, then pass concrete visual_evidence with source: "host_vision" here instead of giving a direct freehand verdict.',
             input: {
               candidate,
               visual_evidence: {
@@ -438,7 +624,7 @@ function buildStylePurchasePreparation(input: {
           },
         ]
       : [
-        ...(sourceUrl && analysis.evidenceQuality.candidateImageCount === 0
+        ...(sourceUrl && analysis.evidenceQuality.candidateImageCount === 0 && allowPurchasePageExtraction
           ? [
               {
                 tool: 'style_extract_purchase_page_evidence',
@@ -458,7 +644,9 @@ function buildStylePurchasePreparation(input: {
                   'If extraction returns no usable product image, ask the user for a direct image or uploaded photo instead of giving the final buy/wait/skip verdict.',
                 input: {
                   message:
-                    'I found the right closet comparison lane, but I need a direct product image before I can make a real visual shopping call.',
+                    calibrationContext.readinessLevel === 'not_ready'
+                      ? 'I can judge the item itself, but I need a direct product image before I can make a real visual shopping call.'
+                      : 'I found the right closet comparison set, but I need a direct product image before I can make a real visual shopping call.',
                 },
               },
             ]
@@ -467,19 +655,28 @@ function buildStylePurchasePreparation(input: {
           tool: 'host_vision',
           reason:
             sourceUrl
-              ? 'After extracting image references and re-running preparation, inspect the candidate and closest closet comparator images before any render/widget step.'
+              ? allowPurchasePageExtraction
+                ? 'After extracting image references and re-running preparation, inspect the candidate and closest closet comparator images before any render/widget step.'
+                : 'After the user provides item details plus a direct image or uploaded photo, inspect the candidate and closest closet comparator images before any render/widget step.'
               : 'Ask for or otherwise obtain a direct candidate image before making visual claims or rendering a widget.',
           input: hostVisionTask,
         },
       ];
-
   return {
     analysisSummary: summarizeStylePurchaseAnalysis(analysis),
+    calibrationAsk: calibrationContext.opportunisticCalibrationPrompt
+      ? {
+          prompt: calibrationContext.opportunisticCalibrationPrompt,
+          rule: calibrationAskRule,
+        }
+      : null,
     candidate,
     candidateSummary: analysis.candidateSummary,
+    calibrationContext,
     adjacentReferenceItemIds,
     comparatorItemIds,
     directComparatorItemIds,
+    rejectedComparatorItemIds,
     hostVisionTask,
     hostResponseInstruction,
     hostResponseMode,
@@ -498,8 +695,12 @@ function buildStylePurchasePreparation(input: {
       requiredEvidence: visuallyGrounded
         ? []
         : [
-            'Fetch or open the product page and locate direct product image(s).',
-            'If no usable direct image can be extracted, ask the user for a direct product image or uploaded photo instead of giving the final buy/wait/skip answer.',
+            allowPurchasePageExtraction
+              ? 'Fetch or open the product page and locate direct product image(s).'
+              : 'Ask the user for item details plus a direct product image or uploaded photo; do not fetch arbitrary product pages in this profile.',
+            allowPurchasePageExtraction
+              ? 'If no usable direct image can be extracted, ask the user for a direct product image or uploaded photo instead of giving the final buy/wait/skip answer.'
+              : 'If the user cannot provide a usable direct image, stop before the final buy/wait/skip answer.',
             'Call style_get_purchase_vision_packet, inspect the returned inline images with a vision-capable model, and call style_submit_purchase_visual_observations before rendering the widget or giving the final buy/wait/skip answer.',
             'Inspect the candidate image with a vision-capable model before making color, material, texture, or visual-overlap claims.',
             'Inspect the closest closet comparator images returned by the purchase vision packet when available.',
@@ -510,6 +711,7 @@ function buildStylePurchasePreparation(input: {
 
 function buildStylePurchaseHostVisionTask(input: {
   adjacentReferenceItemIds: string[];
+  allowPurchasePageExtraction: boolean;
   analysis: Awaited<ReturnType<StyleService['analyzePurchase']>>;
   candidate: unknown;
   comparatorItemIds: string[];
@@ -536,8 +738,10 @@ function buildStylePurchaseHostVisionTask(input: {
     status,
     hostAction:
       candidateImageUrls.length === 0
-        ? 'First obtain a direct candidate product image. Do not render a widget or give the final buy/wait/skip recommendation until candidate image pixels have been inspected.'
-        : 'Call style_get_purchase_vision_packet, inspect the actual candidate image and the closest closet comparator images, then call style_submit_purchase_visual_observations before rendering or giving the final shopping recommendation. In Claude/text-first hosts where the submit tool is not exposed, call style_render_purchase_analysis with concrete visual_evidence and source: "host_vision" after inspection.',
+        ? input.allowPurchasePageExtraction
+          ? 'First obtain a direct candidate product image. Do not render a widget or give the final buy/wait/skip recommendation until candidate image pixels have been inspected.'
+          : 'Ask the user for item details plus a direct candidate product image or uploaded photo. Do not render a widget or give the final buy/wait/skip recommendation until candidate image pixels have been inspected.'
+        : 'Call style_get_purchase_vision_packet, inspect the actual candidate image and the closest closet comparator images, then call style_submit_purchase_visual_observations before rendering or giving the final shopping recommendation. In Claude.ai MCP Apps-capable runs, finish with style_show_purchase_analysis_widget after accepted observations. In Claude visualizer-only or other text-first hosts where the submit tool is not exposed and ui:// mounting is unavailable, call style_render_purchase_analysis with concrete visual_evidence and source: "host_vision" after inspection.',
     candidate: {
       imageUrls: candidateImageUrls,
       name: input.analysis.candidateSummary.name,
@@ -550,6 +754,20 @@ function buildStylePurchaseHostVisionTask(input: {
     adjacentReferences: input.adjacentReferenceItemIds.map((itemId) =>
       buildStylePurchaseHostVisionComparator(input.analysis, itemId, 'adjacent_reference'),
     ),
+    rejectedComparators: input.analysis.comparatorReasoning.rejectedComparisons.slice(0, 6).map((entry) => ({
+      itemId: entry.itemId,
+      name: input.analysis.itemsById[entry.itemId]?.name ?? entry.itemId,
+      rejectedBecause: entry.rejectedBecause,
+      reasons: entry.reasons,
+    })),
+    comparatorTaxonomy: {
+      directComparatorCount: input.directComparatorItemIds.length,
+      hasCleanDirectComparator: input.directComparatorItemIds.length > 0,
+      note:
+        input.directComparatorItemIds.length > 0
+          ? 'Direct comparators are same-category, same-wardrobe-job substitutes for the candidate.'
+          : 'No clean direct comparator was found. Treat adjacent references as context only, not as substitute or duplicate evidence.',
+    },
     expectedVisualEvidence: {
       candidateInspected: true,
       candidateObservations: [
@@ -561,13 +779,15 @@ function buildStylePurchaseHostVisionTask(input: {
     inspectionQuestions: [
       ...(candidateImageUrls.length === 0
         ? [
-            'Candidate imageUrls is empty: ask for or extract a direct product image before making candidate-side visual claims or a final buy/wait/skip recommendation.',
+            input.allowPurchasePageExtraction
+              ? 'Candidate imageUrls is empty: ask for or extract a direct product image before making candidate-side visual claims or a final buy/wait/skip recommendation.'
+              : 'Candidate imageUrls is empty: ask the user for item details plus a direct product image or uploaded photo before making candidate-side visual claims or a final buy/wait/skip recommendation.',
           ]
         : [
             'Describe the candidate from the image: silhouette, shape, sole profile, material, texture, color temperature, accents, branding, and any visible fit or proportion cues.',
           ]),
       'Compare the candidate against directComparators first; decide whether each is the same item, same model family, a replacement, an upgrade, or visually distinct.',
-      'Use adjacentReferences only for styling lane, formality, and wardrobe context; do not treat them as duplicate/substitute evidence unless the pixels support it.',
+      'Use adjacentReferences only for styling direction, formality, and wardrobe context; do not treat them as duplicate/substitute evidence unless the pixels support it.',
       'Name which comparator images were actually inspected and what visual detail changed, confirmed, or weakened the closet-overlap verdict.',
       'Do not call style_render_purchase_analysis or style_show_purchase_analysis_widget until candidate image pixels and available direct comparator image pixels have been inspected. Prefer style_submit_purchase_visual_observations when available; if it is not exposed in a text-first host, pass those concrete observations directly to style_render_purchase_analysis as visual_evidence with source: "host_vision".',
     ],
@@ -577,7 +797,11 @@ function buildStylePurchaseHostVisionTask(input: {
         : [
             ...(candidateImageUrls.length > 0
               ? []
-              : ['A direct candidate product image is located from the product page or supplied by the user.']),
+              : [
+                  input.allowPurchasePageExtraction
+                    ? 'A direct candidate product image is located from the product page or supplied by the user.'
+                    : 'A direct candidate product image is supplied by the user or uploaded into the host.',
+                ]),
             'The host model inspects the candidate image pixels and records concrete observations.',
             'The host model inspects available direct comparator images from style_get_purchase_vision_packet.',
             'Concrete image observations are submitted through style_submit_purchase_visual_observations, or in a text-first host without that tool, passed directly to style_render_purchase_analysis as host_vision visual_evidence.',
@@ -639,8 +863,8 @@ function buildStylePurchaseHostVisionComparator(
     summary: comparison?.summary ?? null,
     whyInspect:
       role === 'direct_comparator'
-        ? 'Inspect this before deciding overlap; this is a likely same-lane comparator, replacement, upgrade, or duplicate candidate.'
-        : 'Inspect as context for styling lane and formality, but keep it secondary to direct comparators.',
+        ? 'Inspect this before deciding overlap; this is a likely same-category comparator, replacement, upgrade, or duplicate candidate.'
+        : 'Inspect as context for styling direction and formality, but keep it secondary to direct comparators.',
   };
 }
 
@@ -1199,12 +1423,14 @@ async function buildStylePurchaseVisionPacketToolResult(input: {
       imageId: stylePurchaseVisionImageId(asset, assetIndex),
       inlineAvailable: inlineImage != null,
       itemContext: asset.itemContext,
+      itemId: asset.itemId,
       itemHandle,
       label: asset.label,
       role: asset.role,
       sourceUrl: publicSourceUrl,
     };
   });
+  const rejectedComparatorItemIds = input.preparation.rejectedComparatorItemIds;
   const candidateManifestEntry = imageManifest.find((entry) => entry.role === 'candidate') ?? null;
   const candidateInlineAvailable = candidateManifestEntry?.inlineAvailable === true;
   const readyForHostVision =
@@ -1221,6 +1447,16 @@ async function buildStylePurchaseVisionPacketToolResult(input: {
     candidateSummary: input.preparation.candidateSummary,
     comparatorItemIds: input.preparation.comparatorItemIds,
     directComparatorItemIds: input.preparation.directComparatorItemIds,
+    adjacentReferenceItemIds: input.preparation.adjacentReferenceItemIds,
+    rejectedComparatorItemIds,
+    comparatorTaxonomy: {
+      directComparators:
+        input.preparation.directComparatorItemIds.length > 0
+          ? 'Inspect these first as true same-category, same-wardrobe-job substitutes.'
+          : 'No clean direct comparators are available; do not promote adjacent or rejected items as duplicate proof.',
+      adjacentReferences: 'Use adjacent references for taste, styling direction, and outfit context only.',
+      rejectedComparators: 'Rejected comparators are tempting metadata matches that Fluent intentionally excluded.',
+    },
     evidenceWarnings: input.bundle.evidenceWarnings,
     hostResponseMode:
       readyForHostVision
@@ -1254,6 +1490,10 @@ async function buildStylePurchaseVisionPacketToolResult(input: {
     directComparatorHandles: input.preparation.directComparatorItemIds
       .map((itemId) => stylePurchaseComparatorHandle(input.preparation, itemId))
       .filter((handle): handle is string => Boolean(handle)),
+    adjacentReferenceHandles: input.preparation.adjacentReferenceItemIds
+      .map((itemId) => stylePurchaseComparatorHandle(input.preparation, itemId))
+      .filter((handle): handle is string => Boolean(handle)),
+    rejectedComparatorItemIds,
     hostModelGuidance:
       readyForHostVision
         ? 'Inspect each inline MCP image content entry named in imageManifest. Submit concrete pixel observations with style_submit_purchase_visual_observations before rendering the widget or giving the final buy/wait/skip answer.'
@@ -1321,6 +1561,7 @@ function buildStylePurchaseVisualEvidenceFromObservations(
   const allowedComparatorItemIds = new Set([
     ...preparation.comparatorItemIds,
     ...preparation.directComparatorItemIds,
+    ...preparation.rejectedComparatorItemIds,
   ]);
   const unknownComparatorItemIds = comparatorItemIdsInspected.filter((itemId) => !allowedComparatorItemIds.has(itemId));
   if (unknownComparatorItemIds.length > 0) {
@@ -2314,12 +2555,17 @@ export function registerStyleMcpSurface(
   server: McpServer,
   style: StyleService,
   origin: string,
-  options: { imageDeliverySecret?: string | null } = {},
+  options: { allowPurchasePageExtraction?: boolean; imageDeliverySecret?: string | null } = {},
 ) {
+  const allowPurchasePageExtraction = options.allowPurchasePageExtraction ?? true;
   const styleReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_READ_SCOPE] }];
   const styleWriteSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_WRITE_SCOPE] }];
   const purchaseAnalysisWidgetMeta = buildWidgetMeta(
     'Rich Fluent purchase analysis for Style buy/skip decisions in ChatGPT-style widget hosts.',
+    origin,
+  );
+  const setupCalibrationWidgetMeta = buildWidgetMeta(
+    'Fluent Style setup and calibration view for closet confidence, inferred taste, confirmed taste, and next best action.',
     origin,
   );
 
@@ -2428,9 +2674,46 @@ export function registerStyleMcpSurface(
     'Purchase Analysis Widget Previous v18',
   );
   registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-native-previous-v19',
+    STYLE_PURCHASE_ANALYSIS_NATIVE_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v19',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-mcp-apps-previous-v20',
+    STYLE_PURCHASE_ANALYSIS_MCP_APPS_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v20',
+  );
+  registerPurchaseAnalysisWidgetResource(
+    'fluent-style-purchase-analysis-widget-judgment-previous-v21',
+    STYLE_PURCHASE_ANALYSIS_JUDGMENT_PREVIOUS_TEMPLATE_URI,
+    'Purchase Analysis Widget Previous v21',
+  );
+  registerPurchaseAnalysisWidgetResource(
     'fluent-style-purchase-analysis-widget',
     STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
     'Purchase Analysis Widget',
+  );
+
+  server.registerResource(
+    'fluent-style-setup-calibration-widget',
+    STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
+    {
+      title: 'Style Setup Calibration Widget',
+      description: 'Style setup and calibration card for empty, thin, imported, inferred, or confirmed closet states.',
+      mimeType: 'text/html;profile=mcp-app',
+      icons: iconFor(origin),
+      _meta: setupCalibrationWidgetMeta,
+    },
+    async () => ({
+      contents: [
+        {
+          uri: STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
+          mimeType: 'text/html;profile=mcp-app',
+          text: getStyleSetupCalibrationWidgetHtml(),
+          _meta: setupCalibrationWidgetMeta,
+        },
+      ],
+    }),
   );
 
   server.registerResource(
@@ -2527,7 +2810,8 @@ export function registerStyleMcpSurface(
     'style_get_profile',
     {
       title: 'Get Style Profile',
-      description: 'Fetch the current Style calibration profile.',
+      description:
+        'Fetch the current raw Style calibration profile only when raw saved profile fields are explicitly needed outside the standard setup/calibration summary lane. Do not use this for ordinary Style setup, onboarding, calibration summaries, confidence checks, confirm/correct prompts, starter closet additions, stale/accidental phrase calibration, or "what do you know about my style?" prompts; style_get_onboarding_calibration is the sufficient read model for those so closet evidence, inferred signals, confirmed taste, and purchase readiness stay distinct.',
       inputSchema: {
         view: readViewSchema,
       },
@@ -2581,7 +2865,7 @@ export function registerStyleMcpSurface(
     {
       title: 'Get Style Context',
       description:
-        'Fetch ambient closet-derived Style context for broad wardrobe and setup workflows. Do not use this as the first tool for purchase decisions, product links, direct image URLs, or "should I buy this?" prompts; use style_prepare_purchase_analysis first even when the candidate is text-only or has no image yet.',
+        'Fetch ambient closet-derived Style context for broad wardrobe detail outside the standard setup/calibration summary lane. Do not use this for ordinary Style setup, onboarding, calibration summaries, confirm/correct prompts, starter closet additions, or stale/accidental phrase calibration; style_get_onboarding_calibration is the authoritative read model for those. Do not use this as the first tool for purchase decisions, product links, direct image URLs, or "should I buy this?" prompts; use style_prepare_purchase_analysis first even when the candidate is text-only or has no image yet. When using this after setup for a specific broader wardrobe detail, carry forward the calibration language rule: say "your closet suggests" for inferred patterns and do not describe ownership as intentional taste or as what the user is wearing, avoiding, leaning toward, or preferring unless user-confirmed. Do not use this to exhaustively search for a stale/accidental phrase. If the setup read model does not expose a stable item match, record phrase-level calibration with style_record_calibration_response.',
       inputSchema: {
         view: readViewSchema,
       },
@@ -2595,6 +2879,184 @@ export function registerStyleMcpSurface(
         textData: view === 'full' ? context : summary,
         structuredContent: view === 'summary' ? summary : context,
       });
+    },
+  );
+
+  server.registerTool(
+    'style_get_onboarding_calibration',
+    {
+      title: 'Get Style Onboarding Calibration',
+      description:
+        'Required first and sufficient read model for Style setup/calibration. Fetch closet status, active evidence count, photo and category coverage, inferred versus confirmed taste signals, unresolved questions, suggested next action, and purchase-analysis readiness. Category counts are coverage evidence, not taste or aesthetic signals. Use this for Style setup, closet import calibration, stale/accidental calibration, widget rendering, confirm/correct prompts, starter closet additions, and any purchase answer that depends on closet confidence. For ordinary setup/calibration summaries, do not call style_get_context; this read model owns the onboarding state. For inferred signals, say "your closet suggests" and avoid second-person taste phrasing such as "you prefer", "you lean", or "you are going for" unless the user confirmed it. If the user marks a named item/phrase stale or accidental so it should not count as preference, and you cannot match a stable item ID, record phrase-level calibration with style_record_calibration_response instead of asking to use style_upsert_item.',
+      inputSchema: {
+        view: readViewSchema,
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true },
+    },
+    async ({ view }) => {
+      requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
+      const calibration = await style.getOnboardingCalibration();
+      const summary = {
+        activeItemCount: calibration.activeItemCount,
+        calibrationPrompts: calibration.calibrationPrompts,
+        closetState: calibration.closetStatus.state,
+        confirmedSignalCount: calibration.confirmedStyleSignals.length,
+        confidenceBreakdown: calibration.confidenceBreakdown,
+        inferredSignalCount: calibration.inferredStyleSignals.length,
+        purchaseAnalysisReadiness: calibration.purchaseAnalysisReadiness,
+        suggestedNextAction: calibration.suggestedNextAction,
+        unresolvedQuestions: calibration.unresolvedQuestions,
+      };
+      return toolResult(calibration, {
+        textData: view === 'full' ? calibration : summary,
+        structuredContent: view === 'summary' ? summary : calibration,
+      });
+    },
+  );
+
+  server.registerTool(
+    'style_record_calibration_response',
+    {
+      title: 'Record Style Calibration Response',
+      description:
+        'Save explicit Style calibration only after the user clearly confirms, rejects, or corrects a signal; marks known closet items actively worn, stale, or accidental; or gives basic constraints for a profile patch. Use signal rejections for phrase-level feedback such as "neon running tees are not me" or "mark the neon running tee accidental/stale so it does not count as my style preference" when no exact item ID is already available. In that case, call this immediately with a user_confirmed rejected signal, usually kind "aesthetic", value "neon running tee", and a note that no stable closet item match was found. Use kind "hard_avoid" only when the user explicitly says the phrase is a hard avoid. Do not fabricate item IDs, do not ask to use style_upsert_item merely to express phrase-level stale/accidental preference feedback, do not use this from inference alone, and do not treat rejected or stale/accidental evidence as confirmed taste.',
+      inputSchema: {
+        item_wear_statuses: z
+          .array(
+            z.object({
+              item_id: z.string(),
+              note: z.string().nullable().optional(),
+              wear_status: styleItemWearStatusSchema,
+            }),
+          )
+          .optional(),
+        profile_patch: z.any().optional(),
+        response_mode: writeResponseModeSchema,
+        signals: z
+          .array(
+            z.object({
+              confidence: z.number().min(0).max(1).nullable().optional(),
+              corrected_value: z.string().nullable().optional(),
+              kind: styleCalibrationSignalKindSchema,
+              note: z.string().nullable().optional(),
+              source: styleInferenceSourceSchema,
+              status: styleCalibrationSignalStatusSchema,
+              value: z.string(),
+            }),
+          )
+          .optional(),
+        ...provenanceInputSchema,
+      },
+    },
+    async (args) => {
+      const authProps = requireAnyScope([FLUENT_STYLE_WRITE_SCOPE, FLUENT_MEALS_WRITE_SCOPE]);
+      const calibration = await style.recordCalibrationResponse({
+        itemWearStatuses: args.item_wear_statuses?.map((entry) => ({
+          itemId: entry.item_id,
+          note: entry.note,
+          wearStatus: entry.wear_status,
+        })),
+        profilePatch: args.profile_patch,
+        provenance: buildMutationProvenance(authProps, args),
+        signals: args.signals?.map((entry) => ({
+          confidence: entry.confidence,
+          correctedValue: entry.corrected_value,
+          kind: entry.kind,
+          note: entry.note,
+          source: entry.source,
+          status: entry.status,
+          value: entry.value,
+        })),
+      });
+      const ack = buildStyleMutationAck('style_calibration', 'current', 'style.calibration_response_recorded', new Date().toISOString(), {
+        closetState: calibration.closetStatus.state,
+        confirmedSignalCount: calibration.confirmedStyleSignals.length,
+        excludedItemCount: calibration.excludedItemCount,
+        shoppingDecisionConfidence: calibration.confidenceBreakdown.shoppingDecisionConfidence,
+      });
+      return toolResult(calibration, {
+        textData: args.response_mode === 'full' ? calibration : ack,
+        structuredContent: args.response_mode === 'ack' ? ack : calibration,
+      });
+    },
+  );
+
+  server.registerTool(
+    'style_add_starter_closet_item',
+    {
+      title: 'Add Starter Closet Item',
+      description:
+        'Preferred write tool for adding one active starter Style closet item from a user-provided description, product link, or image URL during setup. Preserve obvious descriptive details such as length, structure, silhouette, formality, occasions, and evidence gaps. This is for user-supplied evidence only; do not search for or invent closet items, and do not use style_upsert_item for starter closet onboarding unless the user is doing advanced item maintenance.',
+      inputSchema: {
+        item: z.any(),
+        photo_url: z.string().optional(),
+        response_mode: writeResponseModeSchema,
+        source_snapshot: z.any().optional(),
+        ...provenanceInputSchema,
+      },
+    },
+    async (args) => {
+      const authProps = requireAnyScope([FLUENT_STYLE_WRITE_SCOPE, FLUENT_MEALS_WRITE_SCOPE]);
+      const result = await style.addStarterClosetItem({
+        item: args.item,
+        photoUrl: args.photo_url,
+        provenance: buildMutationProvenance(authProps, args),
+        sourceSnapshot: args.source_snapshot,
+      });
+      const ack = buildStyleMutationAck('style_item', result.item.id, 'style.starter_item_added', new Date().toISOString(), {
+        closetState: result.calibration.closetStatus.state,
+        itemName: result.item.name,
+        photoCount: result.item.photos.length,
+      });
+      return toolResult(result, {
+        textData: args.response_mode === 'full' ? result : ack,
+        structuredContent: args.response_mode === 'ack' ? ack : result,
+      });
+    },
+  );
+
+  server.registerTool(
+    'style_show_setup_calibration_widget',
+    withAppsSecurity({
+      title: 'Show Style Setup Calibration Widget',
+      description:
+        'Request the native Style Setup / Calibration card for MCP Apps-capable hosts only after style_get_onboarding_calibration has already been called in this turn. Do not call this as the first Style setup/calibration tool, even when the user asks whether a native surface can mount. Do not call this for Claude.ai text-fallback onboarding; use style_get_onboarding_calibration plus explicit write tools instead. A successful tool call or Claude tool-call card is not proof that a widget rendered; claim native rendering only when the host visibly mounts ui://widget/fluent-style-setup-calibration-v1.html as an app/iframe surface. In Claude.ai/text hosts, the default classification is claude-visualizer-text unless that exact ui:// resource visibly mounts.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      _meta: {
+        ui: {
+          resourceUri: STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
+        },
+        'openai/outputTemplate': STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
+        'openai/toolInvocation/invoked': 'Style setup payload returned; render proof still required.',
+        'openai/toolInvocation/invoking': 'Requesting Style setup payload…',
+        'openai/widgetAccessible': true,
+      },
+    }, styleReadSecuritySchemes),
+    async () => {
+      requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
+      const calibration = await style.getOnboardingCalibration();
+      return {
+        _meta: {
+          styleCalibration: calibration,
+          widgetResourceUri: STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
+        },
+        content: [
+          {
+            type: 'text' as const,
+            text: `Do not say the Style setup widget rendered from this tool response alone. This is a widget payload for closet state "${calibration.closetStatus.state}", not visible render proof. Native MCP Apps proof requires the host UI to visibly mount ${STYLE_SETUP_CALIBRATION_TEMPLATE_URI} as an app/iframe surface. If the host only shows a Claude tool-call card, classify the run as claude-visualizer-text and answer from style_get_onboarding_calibration.`,
+          },
+        ],
+        structuredContent: {
+          claudeHostModeIfNoVisibleUiResource: 'claude-visualizer-text',
+          experience: 'style_setup_calibration_widget',
+          nativeRenderProofRequired: true,
+          nativeRenderProofRule:
+            'Only claim native rendering when the visible host UI mounts ui://widget/fluent-style-setup-calibration-v1.html as an app/iframe surface; a tool call card is not render proof.',
+          styleCalibration: calibration,
+          widgetResourceUri: STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
+        },
+      };
     },
   );
 
@@ -2629,7 +3091,8 @@ export function registerStyleMcpSurface(
     'style_get_item',
     {
       title: 'Get Style Item',
-      description: 'Fetch a single Style closet item with its linked photos and item profile.',
+      description:
+        'Fetch a single Style closet item with its linked photos and item profile only when you already have a stable item_id. Do not probe guessed ID ranges to locate a stale/accidental phrase; if the user wants a named phrase excluded from preference and no stable item_id is available from the setup read model, use style_record_calibration_response with a user_confirmed rejected signal instead.',
       inputSchema: {
         item_id: z.string(),
         view: readViewSchema,
@@ -2984,7 +3447,7 @@ export function registerStyleMcpSurface(
     'style_analyze_wardrobe',
     {
       title: 'Analyze Wardrobe',
-      description: 'Return derived wardrobe-level strengths, weak spots, gap lanes, replacements, and buy-next guidance for Style.',
+      description: 'Return derived wardrobe-level strengths, weak spots, wardrobe gaps, replacements, and buy-next guidance for Style.',
       inputSchema: {
         focus: z.enum(['all', 'gaps', 'replacements', 'buy_next', 'redundancy', 'occasion']).optional(),
         view: readViewSchema,
@@ -3042,8 +3505,9 @@ export function registerStyleMcpSurface(
     'style_prepare_purchase_analysis',
     {
       title: 'Prepare Style Purchase Analysis',
-      description:
-        'Required first step for every Style purchase decision, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what product-page or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. If only a product URL was provided and no candidate image references exist yet, use style_extract_purchase_page_evidence next. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.',
+      description: allowPurchasePageExtraction
+        ? 'Required first step for every Style purchase decision, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what product-page or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. If only a product URL was provided and no candidate image references exist yet, use style_extract_purchase_page_evidence next. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.'
+        : 'Required first step for every Style purchase decision, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what item details or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. In this submitted ChatGPT app profile, product links should be supported by user-provided item details plus a direct product image or uploaded photo before the final buy/wait/skip call. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.',
       inputSchema: {
         candidate: stylePurchaseCandidateInputSchema,
         evidence: z.any().optional(),
@@ -3072,6 +3536,7 @@ export function registerStyleMcpSurface(
         visualEvidence: acceptedVisualEvidence,
       });
       const preparation = buildStylePurchasePreparation({
+        allowPurchasePageExtraction,
         analysis,
         candidateInput: candidate,
       });
@@ -3115,6 +3580,7 @@ export function registerStyleMcpSurface(
       });
       const analysis = await style.analyzePurchase({ candidate: enrichedCandidate });
       const preparation = buildStylePurchasePreparation({
+        allowPurchasePageExtraction,
         analysis,
         candidateInput: enrichedCandidate,
       });
@@ -3152,17 +3618,20 @@ export function registerStyleMcpSurface(
 
   server.registerTool(
     'style_submit_purchase_visual_observations',
-    {
+    withAppsSecurity({
       title: 'Style Submit Purchase Visual Observations',
       description:
-        'Submit concrete host-model observations from an inspected candidate product image, including uploaded images or style_get_purchase_vision_packet inline image content. In ChatGPT/App SDK hosts, the next required presentation step is style_show_purchase_analysis_widget with the returned renderInput; do not stop with only a prose answer after this succeeds. Plain MCP or text-first clients may use style_render_purchase_analysis instead.',
+        'Submit concrete host-model observations from an inspected candidate product image plus the host agent stylist_judgment. The judgment is the agent-owned buy/skip/wait call; Fluent validates evidence and returns renderInput for the native v22 purchase-analysis card. In MCP Apps hosts, the next required presentation step is style_show_purchase_analysis_widget with the returned renderInput; do not stop with only a prose answer after this succeeds. Claude visualizer-only, plain MCP, or text-first clients may use style_render_purchase_analysis instead.',
       inputSchema: styleSubmitPurchaseVisualObservationsInputSchema.shape,
       annotations: { readOnlyHint: true, idempotentHint: true },
-    },
+      _meta: {},
+    }, styleReadSecuritySchemes),
     async (args) => {
       const authProps = requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
       const parsed = styleSubmitPurchaseVisualObservationsInputSchema.parse(args);
+      const stylistJudgment = extractStylePurchaseStylistJudgmentArgument(parsed);
       const preparationBeforeVisualEvidence = buildStylePurchasePreparation({
+        allowPurchasePageExtraction,
         analysis: await style.analyzePurchase({
           candidate: parsed.candidate,
         }),
@@ -3174,6 +3643,7 @@ export function registerStyleMcpSurface(
         visualEvidence,
       });
       const preparation = buildStylePurchasePreparation({
+        allowPurchasePageExtraction,
         analysis,
         candidateInput: parsed.candidate,
       });
@@ -3182,37 +3652,58 @@ export function registerStyleMcpSurface(
           'style_submit_purchase_visual_observations not_render_ready: accepted observations did not produce host-inspected candidate grounding. Re-run style_get_purchase_vision_packet for image-reference candidates, or submit uploaded-image observations with source: "host_vision_uploaded_image".',
         );
       }
+      const effectiveStylistJudgment = preparation.calibrationContext.readinessLevel === 'not_ready' ? null : stylistJudgment;
+      const finalStateAuthorityInstruction = preparation.calibrationContext.hostMemoryRule;
       const receipt = {
         analysisSummary: summarizeStylePurchaseAnalysis(analysis),
         candidate: preparation.candidate,
         candidateSummary: preparation.candidateSummary,
+        claudeAiRequiredNextToolInstruction:
+          'If this appears in Claude.ai and the native Fluent card is not visibly mounted, call style_show_purchase_analysis_widget with renderInput now. Do not answer in prose only.',
         comparatorItemIds: preparation.comparatorItemIds,
         directComparatorItemIds: preparation.directComparatorItemIds,
+        adjacentReferenceItemIds: preparation.adjacentReferenceItemIds,
+        rejectedComparatorItemIds: preparation.rejectedComparatorItemIds,
         chatgptWidgetTool: 'style_show_purchase_analysis_widget',
         hostResponseMode: 'final_recommendation_ready',
         hostResponseInstruction:
-          'Final recommendation is ready. In ChatGPT/App SDK hosts, call style_show_purchase_analysis_widget next with renderInput before giving prose; do not stop with only a text answer. In Claude, OpenClaw, Codex, and generic MCP clients, give the final buy/wait/skip answer now or call style_render_purchase_analysis for structured data; do not open the ChatGPT widget.',
+          `${preparation.calibrationContext.readinessLevel === 'not_ready' ? 'Final candidate-focused recommendation is ready, but avoid wardrobe-fit claims until Style has stronger closet evidence. ' : 'Final recommendation is ready. '}${finalStateAuthorityInstruction} In ChatGPT/MCP Apps-style hosts, including Claude.ai MCP Apps-capable runs, call style_show_purchase_analysis_widget next with renderInput before giving prose; do not stop with only a text answer. In Claude visualizer-only, OpenClaw, Codex, and generic plain MCP clients, give the final buy/wait/skip answer now or call style_render_purchase_analysis for structured data; do not open the widget unless the host has proved MCP Apps ui:// mounting.`,
         nextTool: 'style_show_purchase_analysis_widget',
         nextRequiredTool: 'style_show_purchase_analysis_widget',
         recommendedNextSteps: [
           {
-            host: 'chatgpt_app_sdk',
-            input: { candidate: preparation.candidate, visual_evidence: visualEvidence },
-            reason: 'Open the rich purchase-analysis widget in ChatGPT/App SDK hosts.',
+            host: 'mcp_apps',
+            input: buildStylePurchaseRenderInput({
+              candidate: preparation.candidate,
+              stylistJudgment: effectiveStylistJudgment,
+              visualEvidence,
+            }),
+            reason:
+              'Required normal finish for ChatGPT/MCP Apps-style hosts, including Claude.ai MCP Apps-capable runs. Open the native card before prose.',
             tool: 'style_show_purchase_analysis_widget',
           },
           {
-            host: 'claude_or_plain_mcp',
-            input: { candidate: preparation.candidate, visual_evidence: visualEvidence },
-            reason: 'Return structured purchase-analysis data without opening a ChatGPT/App SDK widget.',
+            host: 'visualizer_or_text_only',
+            input: buildStylePurchaseRenderInput({
+              candidate: preparation.candidate,
+              stylistJudgment: effectiveStylistJudgment,
+              visualEvidence,
+            }),
+            reason:
+              'Use only when the host cannot mount MCP Apps ui:// resources. Do not use this in Claude.ai MCP Apps-capable runs.',
             tool: 'style_render_purchase_analysis',
           },
         ],
-        renderInput: { candidate: preparation.candidate, visual_evidence: visualEvidence },
+        renderInput: buildStylePurchaseRenderInput({
+          candidate: preparation.candidate,
+          stylistJudgment: effectiveStylistJudgment,
+          visualEvidence,
+        }),
         renderReady: true,
         source: visualEvidence.source ?? 'host_vision',
         status: 'visual_observations_accepted',
         visual_evidence: visualEvidence,
+        stylist_judgment: effectiveStylistJudgment,
         visualGrounding: preparation.visualGrounding,
         visualObservationId: buildStylePurchaseVisualObservationReceiptId({
           observations: parsed.observations,
@@ -3225,24 +3716,51 @@ export function registerStyleMcpSurface(
         candidateInputs: [parsed.candidate, preparation.candidate],
         visualEvidence,
       });
-      return toolResult(receipt, {
+      const imageHints = await buildPurchaseAnalysisImageHints(style, analysis, preparation.candidate, {
+        imageDeliverySecret: options.imageDeliverySecret,
+        origin,
+      });
+      const viewModel = buildPurchaseAnalysisViewModel(analysis, {
+        actionToolName: 'style_apply_purchase_analysis_action',
+        comparatorItemIdMode: 'handles',
+        imageHints,
+        stylistJudgment: effectiveStylistJudgment,
+      });
+      const structuredContent = {
+        ...buildPurchaseAnalysisStructuredContent(viewModel),
+        ...receipt,
+        calibrationContext: preparation.calibrationContext,
+        experience: 'purchase_analysis_widget',
+        hostResponseInstruction:
+          `${preparation.calibrationContext.readinessLevel === 'not_ready' ? 'Native purchase-analysis card data is ready for a candidate-focused answer only; avoid wardrobe-fit claims until Style has stronger closet evidence. ' : 'Native purchase-analysis card data is ready. '}${finalStateAuthorityInstruction} In MCP Apps-style hosts, especially Claude.ai MCP Apps-capable runs, call style_show_purchase_analysis_widget next with renderInput; do not substitute style_render_purchase_analysis as the final presentation step. In visualizer-only or plain text hosts, answer from this structured result or call style_render_purchase_analysis with renderInput.`,
+        hostResponseMode: 'native_widget_ready',
+        widgetResourceUri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+      };
+      return toolResult(structuredContent, {
+        meta: buildPurchaseAnalysisMetadata(viewModel),
         textData: {
           candidateName: receipt.candidateSummary.name,
+          claudeAiRequiredNextToolInstruction: receipt.claudeAiRequiredNextToolInstruction,
           candidateObservationCount: visualEvidence.candidateObservations.length,
           comparatorItemIdsInspected: visualEvidence.comparatorItemIdsInspected,
-          hostResponseInstruction: receipt.hostResponseInstruction,
-          hostResponseMode: receipt.hostResponseMode,
+          hostResponseInstruction: structuredContent.hostResponseInstruction,
+          hostResponseMode: structuredContent.hostResponseMode,
           chatgptWidgetTool: receipt.chatgptWidgetTool,
           nextTool: receipt.nextTool,
           nextRequiredTool: receipt.nextRequiredTool,
           recommendedNextSteps: receipt.recommendedNextSteps,
-          renderInput: { candidate: receipt.candidate, visual_evidence: receipt.visual_evidence },
+          renderInput: buildStylePurchaseRenderInput({
+            candidate: receipt.candidate,
+            stylistJudgment: effectiveStylistJudgment,
+            visualEvidence: receipt.visual_evidence,
+          }),
           renderReady: receipt.renderReady,
           status: receipt.status,
           visualObservationId: receipt.visualObservationId,
           visionPacketId: receipt.visionPacketId,
+          widgetResourceUri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
         },
-        structuredContent: receipt,
+        structuredContent,
       });
     },
   );
@@ -3282,6 +3800,7 @@ export function registerStyleMcpSurface(
       });
       if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
         const preparation = buildStylePurchasePreparation({
+          allowPurchasePageExtraction,
           analysis,
           candidateInput: candidate,
         });
@@ -3318,10 +3837,10 @@ export function registerStyleMcpSurface(
 
   server.registerTool(
     'style_render_purchase_analysis',
-    {
+    withAppsSecurity({
       title: 'Render Purchase Analysis Data',
       description:
-        'Return structured Fluent Style purchase-analysis presentation data without opening a widget. For product URLs or "should I buy this?" prompts, call style_prepare_purchase_analysis first so visual evidence requirements are explicit. ChatGPT / MCP Apps-style hosts should only open the rich widget through style_show_purchase_analysis_widget after real host visual evidence exists. Claude-side visuals, Codex, OpenClaw, generic plain MCP clients, and other text-first hosts may use this after actually inspecting images and passing concrete host_vision visual_evidence or visualEvidence when style_submit_purchase_visual_observations is unavailable. This render tool accepts the text-first host_vision fallback directly; it does not require style_submit_purchase_visual_observations when candidateInspected is true and candidateObservations contains concrete pixel observations.',
+        'Return structured Fluent Style purchase-analysis presentation data after real host visual evidence exists. Pass stylist_judgment when the host agent has made the stylist call; Fluent will render that judgment instead of its conservative computed fallback. This is the visualizer-only/text-only fallback and compatibility data path, not the normal final presentation step for MCP Apps-capable Claude.ai runs. In MCP Apps-style hosts, call style_show_purchase_analysis_widget with the same candidate, visual_evidence, and stylist_judgment to open the native v22 purchase-analysis card.',
       inputSchema: {
         candidate: stylePurchaseCandidateInputSchema,
         evidence: z.any().optional(),
@@ -3335,12 +3854,16 @@ export function registerStyleMcpSurface(
         visual_evidence: z.any().optional(),
         visualObservations: z.any().optional(),
         visual_observations: z.any().optional(),
+        stylistJudgment: stylePurchaseStylistJudgmentSchema.optional(),
+        stylist_judgment: stylePurchaseStylistJudgmentSchema.optional(),
       },
       annotations: { readOnlyHint: true, idempotentHint: true },
-    },
+      _meta: {},
+    }, styleReadSecuritySchemes),
     async (args) => {
       const authProps = requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
       const { candidate } = args;
+      const stylistJudgment = extractStylePurchaseStylistJudgmentArgument(args);
       const acceptedVisualEvidence =
         acceptedPurchaseVisualEvidenceOrUndefined(extractPurchaseVisualEvidenceArgument(args), {
           allowHostVisionFallback: true,
@@ -3351,6 +3874,7 @@ export function registerStyleMcpSurface(
       });
       if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
         const preparation = buildStylePurchasePreparation({
+          allowPurchasePageExtraction,
           analysis,
           candidateInput: candidate,
         });
@@ -3385,10 +3909,39 @@ export function registerStyleMcpSurface(
         actionToolName: 'style_apply_purchase_analysis_action',
         comparatorItemIdMode: 'handles',
         imageHints,
+        stylistJudgment,
       });
-      return toolResult(buildPurchaseAnalysisStructuredContent(viewModel), {
+      const calibrationContext = buildStylePurchaseCalibrationContext(analysis);
+      const effectiveStylistJudgment = calibrationContext.readinessLevel === 'not_ready' ? null : stylistJudgment;
+      const hostResponseInstruction = buildStylePurchaseFinalHostInstruction({
+        calibrationContext,
+        mode: 'render_ready',
+      });
+      const structuredContent = {
+        ...buildPurchaseAnalysisStructuredContent(viewModel),
+        calibrationContext,
+        hostResponseInstruction,
+        hostResponseMode: 'native_widget_ready',
+        nextRequiredTool: 'style_show_purchase_analysis_widget',
+        nextTool: 'style_show_purchase_analysis_widget',
+        renderInput: buildStylePurchaseRenderInput({
+          candidate,
+          stylistJudgment: effectiveStylistJudgment,
+          visualEvidence: acceptedVisualEvidence,
+        }),
+        widgetResourceUri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+      };
+      return toolResult(structuredContent, {
         meta: buildPurchaseAnalysisMetadata(viewModel),
-        textData: `Prepared purchase analysis data for ${viewModel.item.name}.`,
+        structuredContent,
+        textData: {
+          hostResponseInstruction,
+          nextTool: 'style_show_purchase_analysis_widget',
+          status: 'native_widget_ready',
+          title: viewModel.item.name,
+          verdict: viewModel.verdict,
+          widgetResourceUri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+        },
       });
     },
   );
@@ -3398,10 +3951,12 @@ export function registerStyleMcpSurface(
     withAppsSecurity({
       title: 'Show Purchase Analysis Widget',
       description:
-        'Open the rich Fluent Style purchase-analysis widget in ChatGPT / MCP Apps-style hosts only after style_prepare_purchase_analysis has run and the host has actually inspected candidate images. Do not call this with only a product URL, text metadata, image references, or uninspected visual-bundle assets. Requires visual_evidence with candidateInspected true and concrete candidateObservations.',
+        'Open the rich Fluent Style purchase-analysis widget in ChatGPT / MCP Apps-style hosts only after style_prepare_purchase_analysis has run and the host has actually inspected candidate images. Pass stylist_judgment with the host agent buy/skip/wait call so the card renders the agent-owned stylist decision. Do not call this with only a product URL, text metadata, image references, or uninspected visual-bundle assets. Requires visual_evidence with candidateInspected true and concrete candidateObservations.',
       inputSchema: {
         candidate: stylePurchaseCandidateInputSchema,
         visual_evidence: stylePurchaseVisualEvidenceInputSchema,
+        stylistJudgment: stylePurchaseStylistJudgmentSchema.optional(),
+        stylist_judgment: stylePurchaseStylistJudgmentSchema.optional(),
       },
       annotations: { readOnlyHint: true, idempotentHint: true },
       _meta: {
@@ -3414,8 +3969,10 @@ export function registerStyleMcpSurface(
         'openai/widgetAccessible': true,
       },
     }, styleReadSecuritySchemes),
-    async ({ candidate, visual_evidence }) => {
+    async (args) => {
+      const { candidate, visual_evidence } = args;
       const authProps = requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
+      const stylistJudgment = extractStylePurchaseStylistJudgmentArgument(args);
       const acceptedVisualEvidence = acceptedPurchaseVisualEvidenceOrUndefined(visual_evidence, {
         allowHostVisionFallback: true,
       });
@@ -3441,20 +3998,47 @@ export function registerStyleMcpSurface(
         actionToolName: 'style_apply_purchase_analysis_action',
         comparatorItemIdMode: 'handles',
         imageHints,
+        stylistJudgment,
       });
       if (!authProps.scope?.includes(FLUENT_STYLE_WRITE_SCOPE)) {
         viewModel.actions = [];
       }
+      const calibrationContext = buildStylePurchaseCalibrationContext(analysis);
+      const structuredContent = {
+        ...buildPurchaseAnalysisStructuredContent(viewModel),
+        calibrationContext,
+        hostResponseInstruction: buildStylePurchaseFinalHostInstruction({
+          calibrationContext,
+          mode: 'widget_rendered',
+          verdict: viewModel.verdict,
+        }),
+        hostResponseMode: 'native_widget_rendered',
+      };
       return {
         _meta: buildPurchaseAnalysisMetadata(viewModel),
         content: [
           {
             type: 'text' as const,
-            text: `Showing the purchase analysis for ${viewModel.item.name}.`,
+            text: `Showing the native purchase analysis for ${viewModel.item.name} with verdict "${viewModel.verdict}". Any prose must match the card verdict and avoid banned fallback phrasing such as lane, same role, Yes if, or No if.`,
           },
         ],
-        structuredContent: buildPurchaseAnalysisStructuredContent(viewModel),
+        structuredContent,
       };
+    },
+  );
+
+  server.registerResource(
+    'style-onboarding-calibration',
+    'fluent://style/onboarding-calibration',
+    {
+      title: 'Style Onboarding Calibration',
+      description: 'Derived Style setup state, confidence breakdown, inferred taste, confirmed taste, and next best action.',
+      mimeType: 'application/json',
+      icons: iconFor(origin),
+    },
+    async (uri) => {
+      requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
+      return jsonResource(uri.href, await style.getOnboardingCalibration());
     },
   );
 

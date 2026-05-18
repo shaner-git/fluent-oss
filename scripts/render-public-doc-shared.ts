@@ -43,7 +43,10 @@ export const CURRENT_MEALS_RENDER_TOOL_NAMES = [
   'meals_render_grocery_list_v2',
 ] as const;
 
-export const CURRENT_STYLE_RENDER_TOOL_NAMES = ['style_show_purchase_analysis_widget'] as const;
+export const CURRENT_STYLE_RENDER_TOOL_NAMES = [
+  'style_show_setup_calibration_widget',
+  'style_show_purchase_analysis_widget',
+] as const;
 
 export const CURRENT_RENDER_TOOL_NAMES = [
   ...CURRENT_MEALS_RENDER_TOOL_NAMES,
@@ -53,8 +56,9 @@ export const CURRENT_RENDER_TOOL_NAMES = [
 export const CURRENT_RENDER_TOOL_HOST_GUIDE: readonly RenderToolHostGuide[] = [
   {
     name: 'meals_render_recipe_card',
-    hostClass: 'ChatGPT/App-SDK-style widget',
-    claude: 'Prefer `meals_get_recipe` and let Claude render a host-native card.',
+    hostClass: 'ChatGPT/MCP Apps-style widget',
+    claude:
+      'In Claude MCP Apps-capable runs, use this as the native Fluent recipe-card surface for ordinary recipe-opening asks. In Claude visualizer-only runs, prefer `meals_get_recipe` and let Claude render a host-native card.',
     openclaw: 'Use the plain-MCP recipe read path.',
     plainMcpFallback: '`meals_get_recipe`',
   },
@@ -69,15 +73,25 @@ export const CURRENT_RENDER_TOOL_HOST_GUIDE: readonly RenderToolHostGuide[] = [
     name: 'meals_render_grocery_list_v2',
     hostClass: 'ChatGPT/App-SDK-style widget',
     claude:
-      'Prefer `meals_get_current_grocery_list` for ordinary grocery-list asks and let Claude render the checklist from that living-list data. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail.',
+      'In Claude MCP Apps-capable runs, use this as the native Fluent grocery-list surface for ordinary display asks. In Claude visualizer-only runs, prefer `meals_get_current_grocery_list` and let Claude render from that living-list data. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail.',
     openclaw: 'Use `meals_get_current_grocery_list` as the plain-MCP living-list path.',
     plainMcpFallback: '`meals_get_current_grocery_list`',
   },
   {
-    name: 'style_show_purchase_analysis_widget',
-    hostClass: 'ChatGPT/App-SDK-style widget',
+    name: 'style_show_setup_calibration_widget',
+    hostClass: 'ChatGPT/MCP Apps-style widget',
     claude:
-      'Do not call this widget tool. Use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations` when exposed, then `style_render_purchase_analysis` for the final structured/text result. If the submit tool is unavailable, pass concrete `visual_evidence` with `source: "host_vision"` directly to `style_render_purchase_analysis`.',
+      'Use this only in a separate Claude MCP Apps native probe where `ui://` resources visibly mount. In visualizer-only or text-only runs, do not call the widget; read `style_get_onboarding_calibration`, ask the smallest useful confirmation question, and write explicit responses with `style_record_calibration_response`.',
+    openclaw:
+      'Do not call this widget tool. Use `style_get_onboarding_calibration`, then write explicit user confirmations or starter items with the canonical write tools.',
+    plainMcpFallback:
+      '`style_get_onboarding_calibration` plus `style_record_calibration_response` and `style_add_starter_closet_item` when the user explicitly changes state',
+  },
+  {
+    name: 'style_show_purchase_analysis_widget',
+    hostClass: 'ChatGPT/MCP Apps-style widget',
+    claude:
+      'In Claude MCP Apps-capable runs, use this as the native Fluent purchase-analysis surface after the staged evidence flow and real host image inspection. In Claude visualizer-only or text-only runs, use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations` when exposed, then `style_render_purchase_analysis` for the final structured/text result. If the submit tool is unavailable, pass concrete `visual_evidence` with `source: "host_vision"` directly to `style_render_purchase_analysis`.',
     openclaw:
       'Do not call this widget tool. Use the plain-MCP purchase-analysis path and answer from `style_render_purchase_analysis` after real visual evidence is available.',
     plainMcpFallback:

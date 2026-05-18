@@ -31,7 +31,7 @@ Use this skill when the task depends on Fluent Core state, such as:
 - Treat `readyDomains` as the primary readiness signal.
 - Treat `toolDiscovery` and `metadata.fluent` as hints, not commands.
 - Follow the host routing matrix in [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md) before choosing a rich render path.
-- Domain readiness does not imply App SDK widget support. In Claude-connected hosts, prefer the Claude visual path from the relevant domain skill rather than ChatGPT-oriented render tools.
+- Domain readiness does not imply App SDK widget support. In Claude visualizer-only hosts, prefer the Claude visual path from the relevant domain skill rather than ChatGPT-oriented render tools. In Claude.ai MCP Apps-capable hosts where a Fluent `ui://` render tool is visible, use the MCP Apps render path for the matching surface.
 - Use core write tools only for explicit enable, onboarding, or shared-profile actions.
 - Keep account-status answers text-only and omit Stripe IDs, tenant IDs, OAuth details, logs, traces, runtime mode, and other private backend identifiers.
 - Once a domain is ready, hand off to the domain skill for domain-specific work.

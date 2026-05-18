@@ -8,7 +8,7 @@ description: Use when the live host supports a Fluent-compatible visual sync sur
 ## When To Use
 
 - ChatGPT / MCP Apps-style hosts should prefer `meals_render_grocery_list_v2` instead of this skill.
-- Claude-side hosts should use this skill when `visualize:show_widget` is actually available.
+- Claude-side visualizer hosts should use this skill when `visualize:show_widget` is actually available and MCP Apps UI-resource mounting is not the active path.
 - Codex and generic plain clients should fall back to canonical data plus text.
 
 ## Pattern

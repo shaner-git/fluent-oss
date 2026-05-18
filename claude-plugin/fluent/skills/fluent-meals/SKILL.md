@@ -30,7 +30,8 @@ Use this skill when the user wants Meals help that depends on Fluent meal state,
 - Use `fluent-core` patterns for readiness and lifecycle checks.
 - If capability discovery is deferred in the client, use `meals_list_tools` as the fallback directory.
 - Follow the host routing matrix in [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md) before choosing a rich render path.
-- In Claude-connected hosts, use the Claude visual path rather than ChatGPT-oriented render tools.
+- Start setup, calibration, confidence-sensitive planning, inferred-food-pattern confirmation, and "what do you know about how we eat?" turns with `meals_get_onboarding_calibration`.
+- In Claude visualizer-only hosts, use the Claude visual path rather than ChatGPT-oriented render tools. In Claude.ai, render-tool visibility is only a candidate path; call the render tool for ordinary grocery-list-first turns when appropriate, but classify the run as MCP Apps-capable only after a `ui://` resource visibly mounts or an explicit mount failure is observed.
 - Prefer summary reads first.
 - If a summary read already answers the user's question, stop there unless the next step needs detail the summary did not provide.
 - Avoid duplicate reads in the same turn unless the user asks for a refresh.
@@ -51,13 +52,22 @@ Use this skill when the user wants Meals help that depends on Fluent meal state,
 When the user explicitly wants to set up Meals, or a Meals task needs state that is not ready:
 
 1. Use the `fluent-core` flow to confirm Meals is enabled and onboarding is in progress.
-2. If capability discovery is deferred, call `meals_list_tools` and use its grouped output as the fallback directory.
-3. Complete the minimum onboarding questions needed for the current request.
-4. When setup is complete, finish onboarding through the `fluent-core` flow.
+2. Call `meals_get_onboarding_calibration` to separate confirmed preferences, pantry evidence, meal-history inference, grocery readiness, and unresolved questions.
+3. If capability discovery is deferred, call `meals_list_tools` and use its grouped output as the fallback directory.
+4. Ask only the minimum setup questions needed for the current request: usually household shape, allergies or hard avoids, cooking cadence, weeknight time, and grocery expectation for new users, or 1-3 confirm/correct questions for returning/imported users.
+5. Use `meals_record_calibration_response` only after explicit confirmation, rejection, correction, starter preference input, or pantry stale/accidental marking.
+6. When setup is complete, finish onboarding through the `fluent-core` flow.
 
 Treat Meals as ready only when Fluent marks it ready.
 
 Do not infer onboarding readiness from prior conversation state, cached client state, or local package state.
+
+Calibration language:
+
+- Pantry ownership, old plans, accepted recipes, and grocery actions are evidence, not confirmed preference.
+- Say "your pantry suggests" or "your meal history suggests" for inferred patterns. Do not say "you like X" unless the user confirmed it.
+- Allergies, medical restrictions, dietary constraints, and hard avoids require explicit user confirmation.
+- If calibration is thin, offer a starter plan or grocery list with lower confidence instead of forcing a long quiz.
 
 ## Normal Operating Pattern
 
@@ -71,13 +81,15 @@ Default to this pattern:
 
 Default low-cost tools:
 
+- `meals_get_onboarding_calibration` for setup, calibration, and confidence-sensitive planning or grocery turns
 - `meals_get_plan` with `view: "summary"`
 - `meals_list_plan_history`
 - `meals_get_preferences` with `view: "summary"`
 - `meals_get_inventory_summary`
 - `meals_generate_plan`
 - `meals_generate_grocery_plan`
-- `meals_get_current_grocery_list` with `view: "summary"` for ordinary grocery-list/status asks
+- `meals_render_grocery_list_v2` for ordinary grocery-list-first display asks only when the active host can mount Fluent `ui://` resources or the run is explicitly probing that mount path
+- `meals_get_current_grocery_list` with `view: "summary"` for ordinary grocery-list/status asks that only need text or counts
 - `meals_get_grocery_plan` with `view: "summary"` only for explicit week-scoped/raw plan detail
 - `meals_prepare_order`
 
@@ -100,26 +112,30 @@ Recipe presentation pattern:
 - if the user names a specific saved recipe or clearly refers to one, prefer Fluent recipe reads over generic cooking knowledge
 - treat asks like "show me the recipe", "how do I make X", "what's in X", "pull up X", and "walk me through X" as recipe-first turns when `X` matches a saved recipe
 - if the user is asking "which one is X" right after recipe discovery or list output, stay in recipe-disambiguation flow with `meals_list_recipes` or `meals_get_recipe`; do not jump to `meals_get_today_context` unless the user is explicitly asking about today's plan
-- for clearly recipe-centric turns in Claude-connected clients, prefer Fluent data plus Claude-first rendering:
-  - if the host offers `recipe_display_v0`, call `meals_get_recipe` first and then render through `recipe_display_v0`
+- for clearly recipe-centric turns in Claude-connected clients, classify the host render mode first:
+  - if the active host is MCP Apps-capable and can mount Fluent `ui://` resources, use `meals_show_recipe` or `meals_render_recipe_card` for ordinary saved-recipe opening prompts
+  - otherwise, if the host offers `recipe_display_v0`, call `meals_get_recipe` first and then render through `recipe_display_v0`
   - do not require the user to ask for a "card" explicitly when the request is obviously recipe-first
-  - do not default to `meals_render_recipe_card` in Claude
 - for simple recipe-data questions, stop at `meals_get_recipe` and a text answer instead of rendering a visual
-- reserve `meals_render_recipe_card` for Claude-side debugging only, not as the normal recipe presentation path
+- reserve `meals_render_recipe_card` for Claude-side debugging only in visualizer-only runs; in Claude MCP Apps-capable runs it is the normal Fluent recipe-card path
 - keep the text answer truthful and complete even when you expect the host to render the recipe card
 - if a saved recipe lookup succeeds, do not answer from prior knowledge unless the user explicitly asks for a generic version instead of the saved Fluent recipe
 
 Grocery-list presentation pattern:
 
-- when the user is asking for the actionable grocery view itself, such as "What's on my grocery list?", "What do I still need to buy?", "Show me this week's grocery list", or "Show me my shopping list", prefer the interactive HTML visualizer as the default path in rich Claude hosts
+- when the user is asking for the actionable grocery view itself, such as "What's on my grocery list?", "What do I still need to buy?", "Show me this week's grocery list", or "Show me my shopping list", first classify the host render mode:
+  - if the active host is MCP Apps-capable and can mount Fluent `ui://` resources, use `meals_render_grocery_list_v2`
+  - otherwise, in rich Claude visualizer hosts, prefer the interactive HTML visualizer
+- In Claude.ai, if `meals_render_grocery_list_v2` is present in the available Fluent tools, treat it as a candidate native Fluent resource path, not proof of MCP Apps capability by itself.
+- For Claude.ai runs where `ui://` mounting has been proven or is being explicitly tested, call `meals_render_grocery_list_v2` directly for normal prompts like "Show me my grocery list." Do not call the run MCP Apps-capable unless the resource visibly mounts or an explicit mount failure is captured.
 - treat "yes", "pull it up", "bring up the grocery list", "show it", and similar confirmations after an assistant offers to show the grocery list as grocery-list-first turns; do not answer with another offer or a text-only summary when `visualize:show_widget` is available
-- in rich Claude hosts, load and follow `fluent-visual-sync` before the first grocery checklist render in a session; the user should not need to name the skill explicitly
-- for parity/release checks, "prepared visual rendering" is not enough: the assistant must actually call `visualize:show_widget` and the run must show a mounted visual, or it must plainly say that the visualizer did not render before falling back to text
+- in rich Claude visualizer hosts, load and follow `fluent-visual-sync` before the first grocery checklist render in a session only after `meals_render_grocery_list_v2` is unavailable or fails to mount; the user should not need to name the skill explicitly
+- for parity/release checks, "prepared visual rendering" is not enough: the assistant must actually mount the chosen visual path, either by calling `meals_render_grocery_list_v2` in an MCP Apps-capable host or by calling `visualize:show_widget` in a Claude visualizer host; otherwise it must plainly say that the visual did not render before falling back to text
 - if a visualizer call fails, does not mount, or the user says they cannot see it on mobile, fall back to canonical grocery data plus a compact text checklist; do not create a local artifact with fake or copy-only sync unless the user explicitly asks for a standalone file
 - do not require the user to ask for a "card" or "surface" explicitly when the turn is clearly grocery-list-first
-- do not default to `meals_render_grocery_list_v2` in Claude
-- if `meals_render_grocery_list_v2` appears in `tools/list`, tool discovery, or prompt context, treat it as ChatGPT/App SDK-only and ignore it for Claude
-- default Claude grocery flow in rich hosts:
+- do not default to `meals_render_grocery_list_v2` in ordinary Claude visualizer-only runs
+- if `meals_render_grocery_list_v2` appears in `tools/list`, tool discovery, or prompt context during a Claude.ai grocery-list-first run, do not ignore it; call it before loading visual-sync, reading raw grocery-plan data, or composing a custom visualizer widget
+- default Claude grocery flow in visualizer-only rich hosts:
   1. call `meals_get_current_grocery_list` with `view: "full"` for the current living list; pass `week_start` only when the user explicitly names a week
   2. use the response `selectionReason`, `weekRelation`, `trustLabel`, and `sourceProvenance` to tell the user what list is being shown, especially when Fluent falls back to a past list or future plan needs
   3. group items from the current list/grocery plan by `inventoryStatus` into:
@@ -147,7 +163,7 @@ For Claude-connected clients, separate two cases clearly:
   - this plugin does not control behavior by itself
   - use [docs/fluent-claude-ai-visual-guidance.md](../../../../docs/fluent-claude-ai-visual-guidance.md) as the prompt-shaping companion
 
-Do not treat Claude like a ChatGPT App SDK host.
+Do not treat ordinary Claude visualizer-only runs like ChatGPT App SDK hosts. If the active Claude run explicitly proves MCP Apps UI-resource mounting, classify that run under the MCP Apps path instead.
 
 Instead:
 
@@ -158,9 +174,10 @@ Instead:
 
 Claude recipe guidance:
 
-- for recipe-first turns, prefer `meals_get_recipe` and then render with `recipe_display_v0` when that first-party recipe widget is available
-- if `recipe_display_v0` is not available, let Claude render its own native recipe visual or a strongly structured text recipe
-- do not force the Fluent MCP recipe widget in Claude as the default recipe experience
+- for recipe-first turns in MCP Apps-capable hosts, prefer `meals_show_recipe` or `meals_render_recipe_card`
+- in Claude.ai, the presence of `meals_show_recipe` or `meals_render_recipe_card` means the MCP Apps recipe path is available; use it before `recipe_display_v0` for ordinary "show me the recipe" turns
+- for recipe-first turns in visualizer-only hosts, prefer `meals_get_recipe` and then render with `recipe_display_v0` when that first-party recipe widget is available
+- if `recipe_display_v0` is not available in a visualizer-only host, let Claude render its own native recipe visual or a strongly structured text recipe
 - if richer rendering is available, bias toward a first-party or Claude-native recipe card with:
   - title
   - servings
@@ -169,24 +186,26 @@ Claude recipe guidance:
   - ingredients
   - steps
   - notes, allergens, leftovers when available
-- if neither path is available, keep the answer well-structured in text rather than switching to `meals_render_recipe_card`
+- if neither rich path is available, keep the answer well-structured in text
 - do not omit the full text answer just because a richer recipe view may appear
 
 Claude grocery guidance:
 
-- for grocery-list-first turns in rich hosts, prefer `visualize:show_widget` as the default rendering path
+- for grocery-list-first turns in MCP Apps-capable hosts, prefer `meals_render_grocery_list_v2`
+- in Claude.ai, the presence of `meals_render_grocery_list_v2` means the MCP Apps grocery path is available; use it before `meals_get_grocery_plan` for ordinary "show my grocery list" turns
+- for grocery-list-first turns in rich Claude visualizer-only hosts, prefer `visualize:show_widget` as the default rendering path
 - if the previous assistant turn offered to show the grocery list and the user accepts, render the widget immediately; do not require a second explicit visual request
-- load and follow `fluent-visual-sync` before rendering the first grocery checklist in a session so the widget includes the sync round-trip, stable item keys, and supported action statuses
-- for release parity, count only a visible mounted visual or an explicit visualizer failure as valid evidence; a text response that says the visual was prepared is a failed visual pass
+- load and follow `fluent-visual-sync` before rendering the first visualizer checklist in a session only when the native render tool is unavailable or fails; the widget then includes the sync round-trip, stable item keys, and supported action statuses
+- for release parity, count only a visible mounted MCP Apps resource, a visible mounted visualizer, or an explicit host-render failure as valid evidence; a text response that says the visual was prepared is a failed visual pass
 - if `visualize:show_widget` is unavailable, say that plainly and provide a text checklist from fresh Fluent data; avoid switching to file artifacts or JSX snippets as the default fallback because they break the Fluent writeback expectation
 - render from `meals_get_current_grocery_list` full data grouped by:
   - `missing`
   - `present_without_quantity`
   - `intent`
   - `check_pantry`
-- before the first visual render in a session, load `visualize:read_me` with `modules: ["interactive"]`
-- do not use `meals_render_grocery_list_v2` as the normal Claude grocery path
-- if the Fluent widget render tools are visible anyway, do not call them just because the title mentions a grocery checklist; in Claude they are a debugging fallback at best, not the normal presentation path
+- before the first visualizer render in a session, load `visualize:read_me` with `modules: ["interactive"]`
+- do not use `meals_render_grocery_list_v2` as the normal Claude visualizer-only path
+- if the Fluent widget render tools are visible in Claude.ai or another candidate MCP Apps host, `meals_render_grocery_list_v2` is not proof by itself; it becomes the native Fluent grocery-list presentation path only when `ui://` mounting is proven live or the turn is explicitly testing that path
 - surface row notes when present:
   - `preferredBrands` as `X preferred`
   - `avoidBrands` as `avoid X`

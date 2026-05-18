@@ -1,8 +1,9 @@
 import type { MealRecipeRecord } from './types';
 
 export const MEALS_RECIPE_CARD_CACHED_TEMPLATE_URI = 'ui://widget/fluent-recipe-card-v8.html';
-export const MEALS_RECIPE_CARD_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-recipe-card-v9.html';
-export const MEALS_RECIPE_CARD_WIDGET_VERSION = 'v10';
+export const MEALS_RECIPE_CARD_LEGACY_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-recipe-card-v9.html';
+export const MEALS_RECIPE_CARD_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-recipe-card-v10.html';
+export const MEALS_RECIPE_CARD_WIDGET_VERSION = 'v11';
 export const MEALS_RECIPE_CARD_TEMPLATE_URI = `ui://widget/fluent-recipe-card-${MEALS_RECIPE_CARD_WIDGET_VERSION}.html`;
 
 export interface RecipeCardIngredientViewModel {
@@ -619,6 +620,8 @@ export function getRecipeCardWidgetHtml(): string {
   (function () {
     var root = document.getElementById('recipe-card-root');
     var DEFAULT_STATE = { cookMode: false, currentStep: 0, servings: null, unitSystem: 'metric' };
+    var hostHydratedViewModel = null;
+    var localWidgetState = DEFAULT_STATE;
     var MEAL_LABELS = {
       breakfast: 'Breakfast',
       lunch: 'Lunch',
@@ -627,24 +630,99 @@ export function getRecipeCardWidgetHtml(): string {
     };
 
     function getOpenAI() {
-      return window.openai || {};
+      if (!window.openai) {
+        window.openai = {};
+      }
+      return window.openai;
+    }
+
+    function findRecipeCard(candidate) {
+      if (!candidate || typeof candidate !== 'object') {
+        return null;
+      }
+      if (candidate.recipeCard) {
+        return candidate.recipeCard;
+      }
+      if (candidate.structuredContent && candidate.structuredContent.recipeCard) {
+        return candidate.structuredContent.recipeCard;
+      }
+      if (candidate.toolOutput && candidate.toolOutput.recipeCard) {
+        return candidate.toolOutput.recipeCard;
+      }
+      if (candidate.toolResponseMetadata && candidate.toolResponseMetadata.recipeCard) {
+        return candidate.toolResponseMetadata.recipeCard;
+      }
+      if (candidate._meta && candidate._meta.recipeCard) {
+        return candidate._meta.recipeCard;
+      }
+      if (candidate.experience === 'recipe_card' && candidate.title && Array.isArray(candidate.ingredients)) {
+        return candidate;
+      }
+      var keys = ['structuredContent', 'output', 'result', 'data', 'value', 'params'];
+      for (var index = 0; index < keys.length; index += 1) {
+        if (candidate[keys[index]]) {
+          var nested = findRecipeCard(candidate[keys[index]]);
+          if (nested) {
+            return nested;
+          }
+        }
+      }
+      return null;
+    }
+
+    function hydrateFromCandidate(candidate) {
+      var recipeCard = findRecipeCard(candidate);
+      if (!recipeCard) {
+        return false;
+      }
+      hostHydratedViewModel = recipeCard;
+      var openai = getOpenAI();
+      openai.toolResponseMetadata = {
+        experience: 'recipe_card',
+        recipeCard: recipeCard,
+        version: '${MEALS_RECIPE_CARD_WIDGET_VERSION}',
+      };
+      openai.toolOutput = {
+        experience: 'recipe_card',
+        hasCookMode: Array.isArray(recipeCard.steps) && recipeCard.steps.length > 0,
+        ingredientCount: Array.isArray(recipeCard.ingredients) ? recipeCard.ingredients.length : recipeCard.ingredientCount,
+        recipeCard: recipeCard,
+        recipeId: recipeCard.id,
+        servings: recipeCard.servings,
+        stepCount: Array.isArray(recipeCard.steps) ? recipeCard.steps.length : recipeCard.stepCount,
+        title: recipeCard.title,
+        totalTimeMinutes: recipeCard.totalTimeMinutes,
+      };
+      return true;
     }
 
     function getViewModel() {
-      var metadata = getOpenAI().toolResponseMetadata;
-      if (metadata && metadata.recipeCard) {
-        return metadata.recipeCard;
+      var openai = getOpenAI();
+      var candidates = [
+        openai.toolResponseMetadata,
+        openai.toolOutput,
+        openai.structuredContent,
+        openai.params,
+        openai.requestParams,
+        openai.modalParams,
+        openai,
+      ];
+      for (var index = 0; index < candidates.length; index += 1) {
+        var recipeCard = findRecipeCard(candidates[index]);
+        if (recipeCard) {
+          return recipeCard;
+        }
       }
-      var summary = getSummary();
-      return summary && summary.recipeCard ? summary.recipeCard : null;
+      return hostHydratedViewModel;
     }
 
     function getSummary() {
-      return getOpenAI().toolOutput || null;
+      var openai = getOpenAI();
+      return openai.toolOutput || openai.structuredContent || null;
     }
 
     function getState() {
-      var widgetState = getOpenAI().widgetState || {};
+      var widgetState = getOpenAI().widgetState || localWidgetState || {};
       return {
         cookMode: widgetState.cookMode === true,
         currentStep: Number.isFinite(widgetState.currentStep) ? widgetState.currentStep : 0,
@@ -654,6 +732,7 @@ export function getRecipeCardWidgetHtml(): string {
     }
 
     function setState(nextState) {
+      localWidgetState = nextState;
       getOpenAI().setWidgetState && getOpenAI().setWidgetState(nextState);
       render(nextState);
     }
@@ -664,6 +743,10 @@ export function getRecipeCardWidgetHtml(): string {
 
     function notifyHeight() {
       getOpenAI().notifyIntrinsicHeight && getOpenAI().notifyIntrinsicHeight(document.body.scrollHeight);
+      bridgeNotify('ui/notifications/size-changed', {
+        height: document.body.scrollHeight,
+        width: document.body.scrollWidth,
+      });
     }
 
     function escapeHtml(value) {
@@ -1150,11 +1233,33 @@ export function getRecipeCardWidgetHtml(): string {
     }
 
     window.addEventListener('openai:set_globals', function () {
+      hydrateFromCandidate(getOpenAI().toolResponseMetadata) || hydrateFromCandidate(getOpenAI().toolOutput);
       render();
     }, { passive: true });
 
+    var bridgeRpcId = 0;
+    var bridgeReady = null;
+    var bridgePending = Object.create(null);
+    var bridgeInitialized = false;
+
+    function getBridgeTarget() {
+      if (window.parent && window.parent !== window) {
+        return window.parent;
+      }
+      try {
+        if (window.top && window.top !== window) {
+          return window.top;
+        }
+      } catch (error) {}
+      return null;
+    }
+
+    function isBridgeSource(source) {
+      return source === getBridgeTarget();
+    }
+
     window.addEventListener('message', function (event) {
-      if (event.source !== window.parent) {
+      if (!isBridgeSource(event.source)) {
         return;
       }
 
@@ -1163,11 +1268,104 @@ export function getRecipeCardWidgetHtml(): string {
         return;
       }
 
-      if (message.method === 'ui/notifications/tool-result' || message.method === 'ui/notifications/tool-input') {
+      if (message.method === 'ui/initialize' && message.id != null) {
+        hydrateFromCandidate(message);
+        event.source.postMessage({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { appCapabilities: {}, protocolVersion: '2026-01-26' },
+        }, '*');
+        bridgeInitialized = true;
+        bridgeNotify('ui/notifications/initialized', {});
         render();
+        return;
       }
+      if (
+        message.method === 'ui/notifications/tool-result'
+        || message.method === 'ui/notifications/tool-input'
+        || message.method === 'ui/notifications/tool-input-partial'
+      ) {
+        if (hydrateFromCandidate(message)) {
+          render();
+        }
+        return;
+      }
+      if (typeof message.id !== 'number') return;
+      var pending = bridgePending[message.id];
+      if (!pending) return;
+      delete bridgePending[message.id];
+      window.clearTimeout(pending.timer);
+      if (message.error) {
+        pending.reject(message.error);
+        return;
+      }
+      pending.resolve(message.result);
     }, { passive: true });
 
+    function bridgeRequest(method, params, timeoutMs) {
+      return new Promise(function (resolve, reject) {
+        var target = getBridgeTarget();
+        if (!target) {
+          reject(new Error('MCP Apps bridge is not available.'));
+          return;
+        }
+        var id = ++bridgeRpcId;
+        bridgePending[id] = {
+          resolve: resolve,
+          reject: reject,
+          timer: window.setTimeout(function () {
+            delete bridgePending[id];
+            reject(new Error('MCP Apps bridge request timed out.'));
+          }, timeoutMs || 12000),
+        };
+        target.postMessage({ jsonrpc: '2.0', id: id, method: method, params: params }, '*');
+      });
+    }
+
+    function bridgeNotify(method, params) {
+      if (method !== 'ui/notifications/initialized' && !bridgeInitialized) {
+        return;
+      }
+      var target = getBridgeTarget();
+      if (!target) {
+        return;
+      }
+      target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
+    }
+
+    function connectMcpAppsHost() {
+      if (bridgeReady) {
+        return bridgeReady;
+      }
+
+      if (!getBridgeTarget()) {
+        bridgeReady = Promise.resolve(null);
+        return bridgeReady;
+      }
+
+      bridgeReady = bridgeRequest('ui/initialize', {
+        appInfo: {
+          name: 'Fluent Recipe Card',
+          version: '${MEALS_RECIPE_CARD_WIDGET_VERSION}',
+        },
+        appCapabilities: {},
+        protocolVersion: '2026-01-26',
+      }, 6000)
+        .then(function (result) {
+          bridgeInitialized = true;
+          hydrateFromCandidate(result);
+          bridgeNotify('ui/notifications/initialized', {});
+          render();
+          return result;
+        })
+        .catch(function () {
+          return null;
+        });
+
+      return bridgeReady;
+    }
+
+    void connectMcpAppsHost();
     render(DEFAULT_STATE);
   })();
 </script>

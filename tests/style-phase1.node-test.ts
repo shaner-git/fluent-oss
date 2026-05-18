@@ -1205,7 +1205,7 @@ async function analyzesPurchasesFromClosetAndCalibration() {
     assert.equal(adjacent.tensionSignals.paletteMismatch, true);
     assert.equal(adjacent.comparatorCoverage.mode, 'exact_comparator');
     assert.equal(adjacent.contextBuckets.exactComparatorItems.some((entry) => entry.itemId === 'style-item:test-oxford-white'), true);
-    assert.equal(adjacent.contextBuckets.typedRoleItems.some((entry) => entry.itemId === 'style-item:test-oxford-white'), true);
+    assert.equal(adjacent.contextBuckets.typedRoleItems.some((entry) => entry.itemId === 'style-item:test-oxford-white'), false);
     assert.equal(adjacent.contextBuckets.pairingCandidates.some((entry) => entry.itemId === 'style-item:test-trouser'), true);
     assert.equal(adjacent.itemsById['style-item:test-oxford-white']?.subcategory, 'OCBD');
     assert.equal('relatedItems' in adjacent, false);
@@ -1275,7 +1275,10 @@ async function analyzesPurchasesFromClosetAndCalibration() {
         subcategory: 'Trouser',
       },
     });
-    assert.equal(typedRoleFallback.contextBuckets.typedRoleItems.some((entry) => entry.itemId === 'style-item:test-pants-role'), true);
+    assert.equal(
+      typedRoleFallback.contextBuckets.exactComparatorItems.some((entry) => entry.itemId === 'style-item:test-pants-role'),
+      true,
+    );
 
     const exactShoe = await service.analyzePurchase({
       candidate: {
@@ -1316,7 +1319,7 @@ async function analyzesPurchasesFromClosetAndCalibration() {
       },
     });
     assert.equal(
-      sportUtility.tensionSignals.notes.includes('reads as sport or utility gear rather than a core wardrobe lane piece'),
+      sportUtility.tensionSignals.notes.includes('reads as sport or utility gear rather than a core wardrobe piece'),
       true,
     );
     assert.equal(sportUtility.tensionSignals.sportUtilityException, true);
@@ -1533,17 +1536,18 @@ async function keepsPurchaseComparatorVisualBundlesInsideCandidateCategory() {
     );
     assert.equal(
       analysis.contextBuckets.nonComparatorItems.some((entry) => entry.itemId === 'style-item:test-black-trouser'),
-      true,
-      'same-color cross-category matches should be exposed as rejected non-comparators',
+      false,
+      'same-color cross-category pairing matches should not be duplicated as rejected non-comparators',
     );
-    assert.match(
-      analysis.contextBuckets.nonComparatorItems.find((entry) => entry.itemId === 'style-item:test-black-trouser')?.rejectedBecause ?? '',
-      /not a shoe/i,
+    assert.equal(
+      analysis.contextBuckets.pairingCandidates.some((entry) => entry.itemId === 'style-item:test-black-trouser'),
+      true,
+      'same-color cross-category matches should be exposed as pairing context',
     );
     assert.equal(
       analysis.comparatorReasoning.rejectedComparisons.some((entry) => entry.itemId === 'style-item:test-black-trouser'),
-      true,
-      'assistant-facing comparator reasoning should explain tempting rejected matches',
+      false,
+      'assistant-facing comparator reasoning should not duplicate pairing context as a rejected match',
     );
     assert.equal(
       analysis.comparatorReasoning.topComparisons.some((entry) => entry.itemId === 'style-item:test-black-trouser'),
@@ -2511,7 +2515,7 @@ async function respectsVisualBundleComparatorToggleAndRequestedItemUnion() {
     assert.equal(noComparators.assets.length, 2);
     assert.deepEqual(
       noComparators.assets.map((asset) => asset.role),
-      ['candidate', 'requested_item'],
+      ['candidate', 'exact_comparator'],
     );
 
     const withComparators = await service.getVisualBundle({
@@ -2531,7 +2535,7 @@ async function respectsVisualBundleComparatorToggleAndRequestedItemUnion() {
     assert.equal(withComparators.assets.length, 2);
     assert.deepEqual(
       withComparators.assets.map((asset) => asset.role),
-      ['candidate', 'requested_item'],
+      ['candidate', 'exact_comparator'],
     );
     assert.equal(
       withComparators.assets.filter((asset) => asset.itemId === 'style-item:bundle-requested-loafer').length,
@@ -2669,7 +2673,7 @@ async function prioritizesRequestedItemsBeforeComparatorAssetsWhenBundlesAreCapp
     });
     assert.deepEqual(
       capped.assets.map((asset) => asset.role),
-      ['candidate', 'requested_item'],
+      ['candidate', 'exact_comparator'],
     );
     assert.equal(capped.assets.some((asset) => asset.itemId === 'style-item:capped-comparator-loafer'), false);
 
@@ -2689,7 +2693,7 @@ async function prioritizesRequestedItemsBeforeComparatorAssetsWhenBundlesAreCapp
     });
     assert.deepEqual(
       expanded.assets.map((asset) => asset.role),
-      ['candidate', 'requested_item'],
+      ['candidate', 'exact_comparator'],
     );
     assert.equal(expanded.assets.some((asset) => asset.itemId === 'style-item:capped-comparator-loafer'), false);
   } finally {

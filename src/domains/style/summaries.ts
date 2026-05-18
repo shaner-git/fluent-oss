@@ -80,6 +80,7 @@ export function summarizeStyleContext(context: StyleContextRecord) {
 export function summarizeStylePurchaseAnalysis(analysis: StylePurchaseAnalysis) {
   return {
     alignmentSignalCount: analysis.alignmentSignals.matchedSignals.length,
+    calibrationState: analysis.calibration.closetStatus.state,
     candidateCategory: analysis.candidateSummary.category,
     candidateComparatorKey: analysis.candidateSummary.comparatorKey,
     candidateDescriptorSummary: analysis.candidateDescriptorSummary,
@@ -89,6 +90,7 @@ export function summarizeStylePurchaseAnalysis(analysis: StylePurchaseAnalysis) 
     comparatorCoverageMode: analysis.comparatorCoverage.mode,
     comparatorReasoning: analysis.comparatorReasoning,
     confidenceNotes: analysis.confidenceNotes,
+    closetEvidenceBasis: analysis.calibration.purchaseAnalysisReadiness.basis,
     coverageImpact: analysis.coverageImpact,
     descriptorDeltas: analysis.descriptorDeltas,
     exactComparatorItemCount: analysis.contextBuckets.exactComparatorItems.length,
@@ -105,12 +107,14 @@ export function summarizeStylePurchaseAnalysis(analysis: StylePurchaseAnalysis) 
     tensionCount: analysis.tensionSignals.notes.length,
     typedRoleCount: analysis.comparatorCoverage.typedRoleCount,
     typedRoleItemCount: analysis.contextBuckets.typedRoleItems.length,
+    shoppingDecisionConfidence: analysis.calibration.confidenceBreakdown.shoppingDecisionConfidence,
   };
 }
 
 export function presentStylePurchaseAnalysis(analysis: StylePurchaseAnalysis) {
   return {
     alignmentSignals: analysis.alignmentSignals,
+    calibration: analysis.calibration,
     candidate: analysis.candidate,
     candidateDescriptorSummary: analysis.candidateDescriptorSummary,
     candidateSummary: analysis.candidateSummary,

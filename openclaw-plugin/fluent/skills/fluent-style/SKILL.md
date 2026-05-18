@@ -20,7 +20,8 @@ Use this skill when the user wants Style help that depends on Fluent Style state
 
 - Reads canonical Style state from Fluent MCP.
 - Supports Style onboarding and calibration when the user is explicitly trying to use Style and readiness is missing.
-- Uses `style_analyze_purchase` as structured wardrobe context, not as the final recommendation.
+- Uses the staged purchase-analysis flow for ordinary buy/skip prompts; in MCP Apps-capable hosts, a normal purchase recommendation should open the Fluent purchase-analysis card automatically once render-ready. The user should not have to explicitly ask for the card.
+- Treats `style_analyze_purchase` as optional structured context only, not the happy path or final recommendation.
 - Handles the explicit keep-flow that saves an item into the closet.
 - Gives the agent a stylist job, not just a tool-routing job.
 
@@ -44,7 +45,7 @@ Use this skill when the user wants Style help that depends on Fluent Style state
 
 For Style recommendations, the default should be:
 
-1. Use Fluent metadata to find the relevant lane.
+1. Use Fluent metadata to find the relevant wardrobe area.
 2. Pull the candidate image and the best closet comparators or representative items.
 3. Actually inspect the garments visually.
 4. Then make the recommendation.
@@ -70,7 +71,7 @@ Default stance for Style replies:
 
 - Start with a clear opinion, not a hedge.
 - Name what the item is doing aesthetically: cleaner, sharper, softer, louder, more mature, more relaxed, more generic, more costume-y.
-- Explain whether it adds range, replaces a weaker version, duplicates an existing lane, or solves nothing.
+- Explain whether it adds range, replaces a weaker version, duplicates an existing wardrobe job, or solves nothing.
 - Say when something is too safe, too fussy, too trend-chasing, too formal, too casual, or just not aligned with the user's profile.
 - Prefer a few strong reasons over a long mushy list of maybes.
 - If evidence is weak, give a provisional stylist read and say what would tighten the call.
@@ -79,7 +80,7 @@ Default stance for Style replies:
 
 When giving a Style recommendation, default to this structure unless the user asked for something else:
 
-1. Verdict: buy, skip, keep, pass for now, or only if they want a specific lane.
+1. Verdict: buy, skip, keep, pass for now, or only if they want a specific wardrobe job.
 2. Why: the silhouette, palette, formality, or wardrobe-role reasons that matter most.
 3. Closet impact: what it unlocks, what it duplicates, or what it should replace.
 4. Styling note: one or two concrete ways to wear it, or the exact reason it will stay orphaned.
@@ -112,12 +113,17 @@ If the user asks a broad Style question without much structure:
 When the user explicitly wants to set up Style, or a Style task needs state that is not ready:
 
 1. Use the `fluent-core` flow to confirm Style is enabled and onboarding is in progress.
-2. Call `style_get_context`.
-3. Follow the onboarding path from `style_get_context.onboardingMode`:
-   - `seeded`: summarize the imported closet and run a short calibration flow
-   - `fresh`: explain that Style can start small and does not require full closet ingestion
-4. Record calibration through `style_update_profile`.
-5. When the active path is complete, finish onboarding through the `fluent-core` flow.
+2. Call `style_get_onboarding_calibration`; this is the setup/readiness read model. Do not use `style_get_context` for ordinary setup summaries, confirm/correct prompts, starter closet additions, or stale/accidental phrase calibration.
+3. Follow the setup state from `style_get_onboarding_calibration`:
+   - empty or thin closet: help the user add a few anchor items or starter signals
+   - imported but unconfirmed closet: summarize what the closet suggests and ask for confirmation or correction
+   - category coverage: treat counts like tops, bottoms, shoes, and outerwear as closet evidence, not taste or aesthetic signals
+   - inferred but unconfirmed preferences: say "your closet suggests" rather than "you prefer", "you're going for", or "you lean"
+   - provisional purchase readiness: usable for cautious reads, not proof that taste is calibrated
+4. In MCP Apps-capable hosts, call `style_show_setup_calibration_widget` only after `style_get_onboarding_calibration` has already run in the same turn and only when the host can mount Fluent `ui://` resources. Never call the widget as the first setup/calibration tool, even for native-render probes. A host tool-call card is not native proof; only call it rendered when `ui://widget/fluent-style-setup-calibration-v1.html` visibly mounts. In Claude.ai text fallback, visualizer-only, or text-first hosts, do not call the setup widget; use the read model, explicit write tools, and concise text.
+5. Ask from the returned `calibrationPrompts` rather than inventing a quiz. Do not pass a returned prompt object directly to `style_record_calibration_response`. Record confirmed, rejected, or corrected signals only after explicit user intent; confirm/reject writes must use `source: "user_confirmed"`, and corrected writes require a user-provided `corrected_value`. For phrase-level feedback without a stable item match, record a rejected signal instead of fabricating an item ID. If the user says a named item or phrase is stale/accidental and should not count as style preference, and you cannot match a stable item ID, immediately record the phrase as a rejected `aesthetic` signal with a note. Use `hard_avoid` only when the user explicitly says it is a hard avoid; do not route stale/accidental preference exclusion through `style_upsert_item`.
+6. Add explicit starter closet items through `style_add_starter_closet_item`; do not use `style_upsert_item` for starter onboarding additions.
+7. When the active path is complete, finish onboarding through the `fluent-core` flow.
 
 Do not run this flow for casual Style conversation that can be answered without Style state.
 
@@ -128,6 +134,7 @@ Treat Style as ready only when Fluent marks it ready and the active path has the
 When Style state is needed, prefer these read tools:
 
 - `style_get_context`
+- `style_get_onboarding_calibration`
 - `style_list_descriptor_backlog`
 - `style_list_evidence_gaps`
 - `style_analyze_wardrobe`
@@ -142,11 +149,14 @@ When Style state is needed, prefer these read tools:
 - `style_analyze_purchase`
 - `style_get_visual_bundle`
 - `style_render_purchase_analysis`
+- `style_show_setup_calibration_widget`
 - `style_show_purchase_analysis_widget`
 
 Use these only for explicit writes:
 
 - `style_update_profile`
+- `style_record_calibration_response`
+- `style_add_starter_closet_item`
 - `style_upsert_item_profile`
 - `style_upsert_item`
 - `style_upsert_item_photos`
@@ -174,19 +184,29 @@ When the user clearly tells you to change closet state, treat that as a write re
 
 ## Purchase Analysis
 
-`style_prepare_purchase_analysis` is the first hop for every purchase decision, including text-only candidate names, product links, direct image URLs, and "should I buy this?" prompts. It returns normalized candidate context, the likely comparator lane, and the visual evidence still needed before a final recommendation or widget render.
+`style_prepare_purchase_analysis` is the first hop for every purchase decision, including text-only candidate names, product links, direct image URLs, and "should I buy this?" prompts. It returns normalized candidate context, the likely comparator group, and the visual evidence still needed before a final recommendation or widget render.
+Read its `calibrationContext` before narrating the purchase read. If `readinessLevel` is `not_ready`, judge the candidate only and avoid wardrobe-fit claims until starter/import confirmation evidence exists. If `readinessLevel` is `provisional`, say whether the recommendation is based on imported evidence or closet-suggested patterns; do not describe those as confirmed preferences.
+Do not let host memory, prior chat context, or an earlier unsaved recommendation determine the buy/wait/skip call unless the user confirms it in the current turn or Fluent state/tool evidence supports it. You may mention it only as outside Fluent state.
 
 `style_analyze_purchase` returns wardrobe context only.
 
-- Do not fall back to `style_get_context` as the purchase decision path when the candidate has no URL or image. Use `style_prepare_purchase_analysis` first so Fluent can return the comparator lane, render gate, and evidence requirements.
+- A regular user will usually ask "should I buy this?", "is this right for my wardrobe?", or paste a product link. Treat that as enough intent to produce the native purchase-analysis surface in MCP Apps-capable hosts after the staged visual flow succeeds. Do not wait for the user to say "show me the card", "open the widget", or "render the MCP app".
+- Do not call `style_analyze_purchase` in the normal URL purchase-analysis happy path. Use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, actual host image inspection, an agent-owned `stylist_judgment`, `style_submit_purchase_visual_observations`, then `style_show_purchase_analysis_widget` in MCP Apps hosts or `style_render_purchase_analysis` in text-first hosts.
+- Do not fall back to `style_get_context` as the purchase decision path when the candidate has no URL or image. Use `style_prepare_purchase_analysis` first so Fluent can return the comparator group, render gate, and evidence requirements.
 - In the staged purchase flow, do not call `style_get_visual_bundle`; use `style_get_purchase_vision_packet` for candidate/comparator images, then call `style_submit_purchase_visual_observations`.
 - For product URLs, call `style_prepare_purchase_analysis` before any final verdict or widget.
 - If `style_prepare_purchase_analysis` returns `hostResponseMode: "request_candidate_image"`, stop the purchase verdict path and ask for candidate image evidence. Do not call `style_analyze_purchase` just to produce a text-only shopping take.
 - URL-only purchase prompts use the staged flow: `style_prepare_purchase_analysis` -> `style_extract_purchase_page_evidence` -> enriched `style_prepare_purchase_analysis` -> `style_get_purchase_vision_packet` -> host image inspection -> `style_submit_purchase_visual_observations` -> `style_show_purchase_analysis_widget`.
 - `style_render_purchase_analysis` returns structured presentation data without opening a widget.
 - Do not use `style_show_purchase_analysis_widget` as the first analytical step; it is the final widget surface after the candidate has been prepared and usable images have been inspected.
-- In ChatGPT/App SDK hosts, once `style_submit_purchase_visual_observations` returns `renderReady: true`, call `style_show_purchase_analysis_widget` before or alongside the final buy/wait/skip explanation instead of stopping with prose only.
-- If the host actually inspected the candidate/comparator images, pass `visual_evidence` with `candidateInspected`, `candidateObservations`, and `comparatorItemIdsInspected` into `style_analyze_purchase`, `style_render_purchase_analysis`, or `style_show_purchase_analysis_widget`.
+- In ChatGPT/App SDK or MCP Apps-style hosts, once `style_submit_purchase_visual_observations` returns `renderReady: true`, call `style_show_purchase_analysis_widget` before or alongside the final buy/wait/skip explanation instead of stopping with prose only.
+- In MCP Apps-capable hosts, `style_show_purchase_analysis_widget` is the normal finish for ordinary purchase prompts, not an extra follow-up that requires explicit user wording.
+- If `style_submit_purchase_visual_observations` returns or displays `style_show_purchase_analysis_widget`, that is an instruction to make the actual `style_show_purchase_analysis_widget` tool call. Do not merely mention the tool name in prose, and do not treat the card as rendered until the tool call is made or the host visibly mounts the native card.
+- If the host actually inspected the candidate/comparator images, pass `visual_evidence` with `candidateInspected`, `candidateObservations`, and `comparatorItemIdsInspected` plus `stylist_judgment` into `style_render_purchase_analysis` or `style_show_purchase_analysis_widget`.
+- `stylist_judgment` is the agent-owned call that the card should render. Include `verdict`, `headline`, `rationale`, `decisionBasis`, `wardrobeImpact`, `whatItAdds`, `whereItOverlaps`, `pairingOpportunities`, `caveats`, and `referencedComparatorIds` when the evidence supports them.
+- Treat same category and subcategory as starting points, not proof of true overlap. True substitutes must share the same wardrobe job; broad same-category matches belong in adjacent or rejected context. Treat cross-category items as adjacent context or pairing candidates, not primary duplicates. Do not call a jersey the closest comparator for a tee.
+- Do not invent item color, material, condition, or ownership facts. Use exact owned item names only.
+- Keep internal comparator labels out of user-facing purchase decisions. Prefer plain stylist wording such as same wardrobe job, adjacent style context, stronger case when, and weaker case when; novelty by itself is not enough reason to buy. Never use lane language in user-facing purchase prose, including casual idioms such as opens a lane, tee lane, loafer lane, or same lane; say wardrobe job, closet gap, part of the wardrobe, slot, or role instead.
 - Treat `comparatorCoverage` as the signal for how strong the closet evidence is.
 - Use `contextBuckets.exactComparatorItems` first when exact comparator coverage exists.
 - Use `contextBuckets.typedRoleItems`, `sameCategoryItems`, `sameColorFamilyItems`, and `nearbyFormalityItems` as supporting context when exact coverage is weak.
@@ -211,7 +231,6 @@ When the user clearly tells you to change closet state, treat that as a write re
 - Treat purchase analysis as a staged flow:
   - `style_prepare_purchase_analysis` for URL/candidate normalization and evidence requirements
   - `style_extract_purchase_page_evidence` for product-page title and direct product image URLs when preparation needs candidate images
-  - `style_analyze_purchase` for lane/comparator reasoning
   - `style_get_purchase_vision_packet` for model-visible candidate and closet-comparator images, compact profile facts, and comparison reasons
   - `style_submit_purchase_visual_observations` after the host has actually inspected the inline images
   - `style_render_purchase_analysis` for final structured data without opening the widget in text-first clients
@@ -229,8 +248,8 @@ When the user asks for a closet critique, style reset, or "what should I buy les
 
 - Start with `style_get_context`, `style_get_profile`, and `style_list_items`.
 - Use `style_list_evidence_gaps` when confidence may be blocked by missing photos, weak descriptors, or missing typed profiles.
-- Use `style_analyze_wardrobe` when the user wants gap lanes, replacements, buy-next guidance, or closet weak spots rather than a single-item read.
-- Use metadata to identify the obvious heavy lanes, weak lanes, and suspicious outliers.
+- Use `style_analyze_wardrobe` when the user wants wardrobe gaps, replacements, buy-next guidance, or closet weak spots rather than a single-item read.
+- Use metadata to identify the obvious crowded areas, weak areas, and suspicious outliers.
 - Then inspect a representative visual sample before making the final stylist read.
 - When `style_analyze_wardrobe` returns redundancy clusters, treat them as metadata hypotheses, not final verdicts.
 - Pull `style_get_visual_bundle` for the clustered items and inspect them before telling the user they are truly redundant.
@@ -289,6 +308,16 @@ When running first-use calibration or taste updates, bias toward information tha
 - `fitNotes`: rise, length, shoulder, sleeve, drape, and fabric sensitivities
 
 Ask for the smallest set of calibration details that will materially improve the next recommendation.
+
+Treat calibration sources precisely:
+
+- `user_confirmed` means the user explicitly agreed or supplied the preference.
+- `closet_inferred` means the closet suggests a pattern, not that the user likes it.
+- Do not turn inferred patterns into second-person taste phrasing such as "you lean" or "you're going for" unless the user confirmed it.
+- `item_metadata` and `host_visual_inspection` are evidence, not taste.
+- `fallback` is a guardrail and should be framed as provisional.
+
+Do not treat ownership, imported items, or stale/accidental items as confirmed taste. Use `style_record_calibration_response` when the user confirms, rejects, corrects, or marks items active, stale, or accidental.
 
 ## Keep Flow
 

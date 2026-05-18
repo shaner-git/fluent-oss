@@ -3,10 +3,16 @@ import type {
   StyleBudgetProfileRecord,
   StyleComparatorKey,
   StyleClosetCoverage,
+  StyleCalibrationSignalKind,
+  StyleCalibrationSignalRecord,
+  StyleCalibrationSignalStatus,
   StyleExceptionRuleRecord,
   StyleFitProfileRecord,
   StyleFormalityPreferenceRecord,
+  StyleInferenceSource,
+  StyleItemCalibrationRecord,
   StyleItemProfileDocument,
+  StyleItemWearStatus,
   StyleOccasionRuleRecord,
   StyleItemStatus,
   StyleOnboardingMode,
@@ -116,6 +122,7 @@ export function defaultStyleProfile(): StyleProfileDocument {
     aestheticKeywords: [],
     brandAffinities: [],
     budgetProfile: null,
+    calibrationSignals: [],
     closetCoverage: null,
     colorPreferences: [],
     colorDirections: [],
@@ -129,6 +136,7 @@ export function defaultStyleProfile(): StyleProfileDocument {
     importedClosetAt: null,
     importedClosetConfirmed: false,
     importSource: null,
+    itemCalibration: [],
     onboardingPath: null,
     occasionRules: [],
     silhouettePreferences: [],
@@ -148,6 +156,7 @@ export function normalizeStyleProfile(value: unknown): StyleProfileDocument {
     aestheticKeywords: asStringArray(record.aestheticKeywords ?? defaults.aestheticKeywords),
     brandAffinities: normalizeBrandAffinities(record.brandAffinities ?? defaults.brandAffinities),
     budgetProfile: normalizeBudgetProfile(record.budgetProfile ?? defaults.budgetProfile),
+    calibrationSignals: normalizeCalibrationSignals(record.calibrationSignals ?? defaults.calibrationSignals),
     closetCoverage: normalizeStyleClosetCoverage(record.closetCoverage ?? defaults.closetCoverage),
     colorPreferences: normalizeWeightedPreferences(record.colorPreferences, legacyColorDirections),
     colorDirections: legacyColorDirections,
@@ -164,6 +173,7 @@ export function normalizeStyleProfile(value: unknown): StyleProfileDocument {
         ? record.importedClosetConfirmed
         : defaults.importedClosetConfirmed,
     importSource: asNullableString(record.importSource ?? defaults.importSource),
+    itemCalibration: normalizeItemCalibration(record.itemCalibration ?? defaults.itemCalibration),
     onboardingPath: normalizeStyleOnboardingPath(record.onboardingPath ?? defaults.onboardingPath),
     occasionRules: normalizeOccasionRules(record.occasionRules ?? defaults.occasionRules),
     silhouettePreferences: normalizeWeightedPreferences(record.silhouettePreferences, legacyPreferredSilhouettes),
@@ -187,6 +197,7 @@ export function normalizeStyleProfilePatch(value: unknown): Partial<StyleProfile
   if ('aestheticKeywords' in record) patch.aestheticKeywords = asStringArray(record.aestheticKeywords);
   if ('brandAffinities' in record) patch.brandAffinities = normalizeBrandAffinities(record.brandAffinities);
   if ('budgetProfile' in record) patch.budgetProfile = normalizeBudgetProfile(record.budgetProfile);
+  if ('calibrationSignals' in record) patch.calibrationSignals = normalizeCalibrationSignals(record.calibrationSignals);
   if ('closetCoverage' in record) patch.closetCoverage = normalizeStyleClosetCoverage(record.closetCoverage);
   if ('colorPreferences' in record) patch.colorPreferences = normalizeWeightedPreferences(record.colorPreferences);
   if ('colorDirections' in record) patch.colorDirections = asStringArray(record.colorDirections);
@@ -200,6 +211,7 @@ export function normalizeStyleProfilePatch(value: unknown): Partial<StyleProfile
   if ('importedClosetAt' in record) patch.importedClosetAt = asNullableString(record.importedClosetAt);
   if ('importedClosetConfirmed' in record) patch.importedClosetConfirmed = record.importedClosetConfirmed === true;
   if ('importSource' in record) patch.importSource = asNullableString(record.importSource);
+  if ('itemCalibration' in record) patch.itemCalibration = normalizeItemCalibration(record.itemCalibration);
   if ('onboardingPath' in record) patch.onboardingPath = normalizeStyleOnboardingPath(record.onboardingPath);
   if ('occasionRules' in record) patch.occasionRules = normalizeOccasionRules(record.occasionRules);
   if ('silhouettePreferences' in record) {
@@ -220,6 +232,115 @@ export function mergeStyleProfile(previous: StyleProfileDocument, patch: Partial
     ...previous,
     ...patch,
   });
+}
+
+function normalizeCalibrationSignals(value: unknown): StyleCalibrationSignalRecord[] {
+  const parsed = parseJsonLike<unknown>(value);
+  const entries = Array.isArray(parsed) ? parsed : [];
+  return entries
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .map((entry) => {
+      const kind = normalizeCalibrationSignalKind(entry.kind);
+      const value = asNullableString(entry.value);
+      if (!kind || !value) {
+        return null;
+      }
+      return {
+        confidence: clampNullableConfidence(entry.confidence),
+        correctedValue: asNullableString(entry.correctedValue ?? entry.corrected_value),
+        id: asNullableString(entry.id) ?? `style-signal:${kind}:${slugSignalValue(value)}`,
+        kind,
+        note: asNullableString(entry.note),
+        source: normalizeInferenceSource(entry.source),
+        status: normalizeCalibrationSignalStatus(entry.status),
+        updatedAt: asNullableString(entry.updatedAt ?? entry.updated_at),
+        value,
+      };
+    })
+    .filter((entry): entry is StyleCalibrationSignalRecord => Boolean(entry));
+}
+
+function normalizeItemCalibration(value: unknown): StyleItemCalibrationRecord[] {
+  const parsed = parseJsonLike<unknown>(value);
+  const entries = Array.isArray(parsed) ? parsed : [];
+  return entries
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .map((entry) => {
+      const itemId = asNullableString(entry.itemId ?? entry.item_id);
+      if (!itemId) {
+        return null;
+      }
+      return {
+        itemId,
+        note: asNullableString(entry.note),
+        source: normalizeInferenceSource(entry.source),
+        updatedAt: asNullableString(entry.updatedAt ?? entry.updated_at),
+        wearStatus: normalizeItemWearStatus(entry.wearStatus ?? entry.wear_status),
+      };
+    })
+    .filter((entry): entry is StyleItemCalibrationRecord => Boolean(entry));
+}
+
+function normalizeCalibrationSignalKind(value: unknown): StyleCalibrationSignalKind | null {
+  if (
+    value === 'aesthetic' ||
+    value === 'budget' ||
+    value === 'color' ||
+    value === 'fit' ||
+    value === 'formality' ||
+    value === 'hard_avoid' ||
+    value === 'occasion' ||
+    value === 'silhouette'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeCalibrationSignalStatus(value: unknown): StyleCalibrationSignalStatus {
+  if (value === 'confirmed' || value === 'rejected' || value === 'corrected') {
+    return value;
+  }
+  return 'inferred';
+}
+
+function normalizeInferenceSource(value: unknown): StyleInferenceSource {
+  if (
+    value === 'user_confirmed' ||
+    value === 'closet_inferred' ||
+    value === 'item_metadata' ||
+    value === 'host_visual_inspection' ||
+    value === 'fallback'
+  ) {
+    return value;
+  }
+  return 'fallback';
+}
+
+function normalizeItemWearStatus(value: unknown): StyleItemWearStatus {
+  if (value === 'actively_worn' || value === 'stale' || value === 'accidental') {
+    return value;
+  }
+  return 'unknown';
+}
+
+function clampNullableConfidence(value: unknown): number | null {
+  const number = asNullableNumber(value);
+  if (number == null || !Number.isFinite(number)) {
+    return null;
+  }
+  return Math.max(0, Math.min(1, Number(number.toFixed(2))));
+}
+
+function slugSignalValue(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || crypto.randomUUID();
 }
 
 export function normalizeStyleItemProfile(value: unknown): StyleItemProfileDocument {
@@ -480,8 +601,9 @@ function inferPurchaseCandidateSubcategory(category: string, signalText: string)
       [/\b(oxford shirt|ocbd|button down)\b/, 'Oxford Shirt'],
       [/\b(camp shirt|camp collar|resort shirt|cabana shirt)\b/, 'Camp Shirt'],
       [/\b(henley)\b/, 'Henley'],
-      [/\b(basketball jersey|soccer jersey|football jersey|jersey)\b/, 'Jersey'],
+      [/\b(basketball jersey|soccer jersey|football jersey)\b/, 'Jersey'],
       [/\b(t-shirt|t shirt|tee|tshirt)\b/, 'T-Shirt'],
+      [/\b(jersey)\b/, 'Jersey'],
       [/\b(hoodie|hooded sweatshirt)\b/, 'Hoodie'],
       [/\b(cardigan)\b/, 'Cardigan'],
       [/\b(dress shirt|button up|buttonup|shirt)\b/, 'Shirt'],
@@ -1030,7 +1152,7 @@ function inferComparatorKeyForCategory(category: string | null, signals: string[
       return 'camp_shirt';
     }
     if (matchesComparatorAlias(signals, ['henley', 'henley_shirt'])) return 'henley';
-    if (matchesComparatorAlias(signals, ['jersey', 'basketball_jersey', 'nba_jersey', 'soccer_jersey', 'football_jersey'])) {
+    if (matchesComparatorAlias(signals, ['basketball_jersey', 'nba_jersey', 'soccer_jersey', 'football_jersey'])) {
       return 'jersey';
     }
     if (
@@ -1046,6 +1168,9 @@ function inferComparatorKeyForCategory(category: string | null, signals: string[
       ])
     ) {
       return 'tee';
+    }
+    if (matchesComparatorAlias(signals, ['jersey'])) {
+      return 'jersey';
     }
     if (matchesComparatorAlias(signals, ['dress_shirt', 'shirt', 'button_up', 'buttonup'])) return 'dress_shirt';
     if (matchesComparatorAlias(signals, ['overshirt', 'shirt_jacket', 'shacket'])) return 'overshirt';
