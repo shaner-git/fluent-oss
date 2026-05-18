@@ -3,7 +3,7 @@
 This page is generated from `contracts/fluent-contract.v1.json`.
 Anything listed as a current tool is present in the frozen public contract artifact. Preview items are intentionally not current contract tools.
 
-Current contract version: `2026-05-12.fluent-core-v1.66`
+Current contract version: `2026-05-17.fluent-core-v1.84`
 
 ## How To Read This Page
 
@@ -39,6 +39,8 @@ Current contract version: `2026-05-12.fluent-core-v1.66`
 - `meals_get_recipe`
 - `meals_create_recipe`
 - `meals_list_recipes`
+- `meals_get_onboarding_calibration`
+- `meals_record_calibration_response`
 - `meals_get_preferences`
 - `meals_update_preferences`
 - `meals_upsert_plan`
@@ -97,6 +99,9 @@ Current contract version: `2026-05-12.fluent-core-v1.66`
 - `style_get_profile`
 - `style_update_profile`
 - `style_get_context`
+- `style_get_onboarding_calibration`
+- `style_record_calibration_response`
+- `style_add_starter_closet_item`
 - `style_list_descriptor_backlog`
 - `style_list_evidence_gaps`
 - `style_analyze_wardrobe`
@@ -120,13 +125,14 @@ Current contract version: `2026-05-12.fluent-core-v1.66`
 
 ### Style Host-Specific Render Tools
 
+- `style_show_setup_calibration_widget`
 - `style_show_purchase_analysis_widget`
 <!-- current-tools:end -->
 
 ## Current Render Host Classification
 
-- ChatGPT/App-SDK-style current render tools: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `style_show_purchase_analysis_widget`
-- Claude-specific current render tools: none. Claude should prefer canonical data tools and host-native visuals.
+- ChatGPT/MCP-Apps-style current render tools: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `style_show_setup_calibration_widget`, `style_show_purchase_analysis_widget`
+- Claude-specific visualizer tools are separate from Fluent MCP Apps resources. Claude visualizer-only runs should prefer canonical data plus host-native visuals; Claude MCP Apps-capable runs may use proven Fluent `ui://` render resources.
 - OpenClaw-compatible current render tools: none as dedicated Fluent rich widgets. OpenClaw should use the plain-MCP fallbacks.
 - Plain-MCP fallback tools stay canonical even when a render tool exists.
 
@@ -134,10 +140,11 @@ Current contract version: `2026-05-12.fluent-core-v1.66`
 
 | Tool | Host class | Claude guidance | OpenClaw guidance | Plain-MCP fallback |
 | --- | --- | --- | --- | --- |
-| `meals_render_recipe_card` | ChatGPT/App-SDK-style widget | Prefer `meals_get_recipe` and let Claude render a host-native card. | Use the plain-MCP recipe read path. | `meals_get_recipe` |
+| `meals_render_recipe_card` | ChatGPT/MCP Apps-style widget | In Claude MCP Apps-capable runs, use this as the native Fluent recipe-card surface for ordinary recipe-opening asks. In Claude visualizer-only runs, prefer `meals_get_recipe` and let Claude render a host-native card. | Use the plain-MCP recipe read path. | `meals_get_recipe` |
 | `meals_render_pantry_dashboard` | ChatGPT/App-SDK-style widget | Prefer canonical inventory reads and a host-native summary. | Use the plain-MCP inventory path. | `meals_get_inventory_summary` plus `meals_get_inventory` when detail is needed |
-| `meals_render_grocery_list_v2` | ChatGPT/App-SDK-style widget | Prefer `meals_get_current_grocery_list` for ordinary grocery-list asks and let Claude render the checklist from that living-list data. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail. | Use `meals_get_current_grocery_list` as the plain-MCP living-list path. | `meals_get_current_grocery_list` |
-| `style_show_purchase_analysis_widget` | ChatGPT/App-SDK-style widget | Do not call this widget tool. Use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations` when exposed, then `style_render_purchase_analysis` for the final structured/text result. If the submit tool is unavailable, pass concrete `visual_evidence` with `source: "host_vision"` directly to `style_render_purchase_analysis`. | Do not call this widget tool. Use the plain-MCP purchase-analysis path and answer from `style_render_purchase_analysis` after real visual evidence is available. | `style_prepare_purchase_analysis` plus page extraction, `style_get_purchase_vision_packet`, and `style_render_purchase_analysis` with accepted or direct `host_vision` evidence |
+| `meals_render_grocery_list_v2` | ChatGPT/App-SDK-style widget | In Claude MCP Apps-capable runs, use this as the native Fluent grocery-list surface for ordinary display asks. In Claude visualizer-only runs, prefer `meals_get_current_grocery_list` and let Claude render from that living-list data. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail. | Use `meals_get_current_grocery_list` as the plain-MCP living-list path. | `meals_get_current_grocery_list` |
+| `style_show_setup_calibration_widget` | ChatGPT/MCP Apps-style widget | Use this only in a separate Claude MCP Apps native probe where `ui://` resources visibly mount. In visualizer-only or text-only runs, do not call the widget; read `style_get_onboarding_calibration`, ask the smallest useful confirmation question, and write explicit responses with `style_record_calibration_response`. | Do not call this widget tool. Use `style_get_onboarding_calibration`, then write explicit user confirmations or starter items with the canonical write tools. | `style_get_onboarding_calibration` plus `style_record_calibration_response` and `style_add_starter_closet_item` when the user explicitly changes state |
+| `style_show_purchase_analysis_widget` | ChatGPT/MCP Apps-style widget | In Claude MCP Apps-capable runs, use this as the native Fluent purchase-analysis surface after the staged evidence flow and real host image inspection. In Claude visualizer-only or text-only runs, use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations` when exposed, then `style_render_purchase_analysis` for the final structured/text result. If the submit tool is unavailable, pass concrete `visual_evidence` with `source: "host_vision"` directly to `style_render_purchase_analysis`. | Do not call this widget tool. Use the plain-MCP purchase-analysis path and answer from `style_render_purchase_analysis` after real visual evidence is available. | `style_prepare_purchase_analysis` plus page extraction, `style_get_purchase_vision_packet`, and `style_render_purchase_analysis` with accepted or direct `host_vision` evidence |
 
 ## Preview Or Planned Rich Surfaces
 

@@ -21,7 +21,7 @@ Public release references:
 - open `GET /health`
 - open `GET /codex-probe`
 - same MCP contract as managed Fluent early access
-- supported minimum contract version: `2026-05-12.fluent-core-v1.66`
+- supported minimum contract version: `2026-05-17.fluent-core-v1.84`
 - local DB and artifacts stored under `~/.fluent/` by default
 - no OAuth, no `/authorize`, no `/token`
 - direct runtime support is documented for Node.js `22.x`

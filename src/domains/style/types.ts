@@ -47,6 +47,125 @@ export type StyleWardrobeAnalysisFocus = 'all' | 'gaps' | 'replacements' | 'buy_
 export type StyleWardrobeFindingPriority = 'low' | 'medium' | 'high';
 export type StyleOccasionCoverageLevel = 'strong' | 'partial' | 'weak';
 export type StyleDescriptorBacklogFocus = 'all' | 'blocked' | 'priority';
+export type StyleSetupState =
+  | 'no_style_state'
+  | 'empty_closet_started'
+  | 'starter_closet_ready'
+  | 'closet_imported_unconfirmed'
+  | 'closet_evidence_ready'
+  | 'preference_inferred'
+  | 'preference_partially_confirmed'
+  | 'style_calibrated';
+export type StyleInferenceSource =
+  | 'user_confirmed'
+  | 'closet_inferred'
+  | 'item_metadata'
+  | 'host_visual_inspection'
+  | 'fallback';
+export type StyleCalibrationSignalKind =
+  | 'aesthetic'
+  | 'budget'
+  | 'color'
+  | 'fit'
+  | 'formality'
+  | 'hard_avoid'
+  | 'occasion'
+  | 'silhouette';
+export type StyleCalibrationSignalStatus = 'inferred' | 'confirmed' | 'rejected' | 'corrected';
+export type StyleItemWearStatus = 'actively_worn' | 'stale' | 'accidental' | 'unknown';
+
+export interface StyleCalibrationSignalRecord {
+  confidence: number | null;
+  correctedValue: string | null;
+  id: string;
+  kind: StyleCalibrationSignalKind;
+  note: string | null;
+  source: StyleInferenceSource;
+  status: StyleCalibrationSignalStatus;
+  updatedAt: string | null;
+  value: string;
+}
+
+export interface StyleItemCalibrationRecord {
+  itemId: string;
+  note: string | null;
+  source: StyleInferenceSource;
+  updatedAt: string | null;
+  wearStatus: StyleItemWearStatus;
+}
+
+export interface StyleConfidenceBreakdown {
+  closetCoverageConfidence: number;
+  preferenceCalibrationConfidence: number;
+  shoppingDecisionConfidence: number;
+  visualEvidenceConfidence: number;
+}
+
+export interface StyleCalibrationReadiness {
+  basis:
+    | 'no_closet'
+    | 'thin_closet'
+    | 'starter_closet'
+    | 'imported_unconfirmed'
+    | 'closet_inferred'
+    | 'partially_confirmed'
+    | 'confirmed_preferences';
+  label: string;
+  notes: string[];
+  ready: boolean;
+  readinessLevel: 'not_ready' | 'provisional' | 'ready';
+}
+
+export interface StyleCalibrationPromptRecord {
+  id: string;
+  kind: 'starter_item' | 'confirm_signal' | 'constraint' | 'budget' | 'import_review' | 'opportunistic';
+  label: string;
+  question: string;
+  rationale: string;
+  signal: {
+    id: string;
+    kind: StyleCalibrationSignalKind;
+    source: StyleInferenceSource;
+    value: string;
+  } | null;
+  responseOptions: Array<{
+    label: string;
+    requiresFreeText: 'corrected_value' | 'preference_value' | 'budget_value' | 'item_selection' | 'item_description' | null;
+    source: StyleInferenceSource | null;
+    status: StyleCalibrationSignalStatus | null;
+    value: string | null;
+  }>;
+  toolName: string | null;
+}
+
+export interface StyleOnboardingCalibrationRecord {
+  activeItemCount: number;
+  calibrationPrompts: StyleCalibrationPromptRecord[];
+  categoryCoverage: Array<{ category: string; count: number }>;
+  closetStatus: {
+    hasImportedCloset: boolean;
+    importedClosetConfirmed: boolean;
+    state: StyleSetupState;
+  };
+  confirmedStyleSignals: StyleCalibrationSignalRecord[];
+  confidenceBreakdown: StyleConfidenceBreakdown;
+  excludedItemCount: number;
+  inferredStyleSignals: StyleCalibrationSignalRecord[];
+  itemCalibration: StyleItemCalibrationRecord[];
+  photoEvidenceCoverage: {
+    deliverablePhotoCoverage: number;
+    itemCountWithDeliverablePhoto: number;
+    itemCountWithPhoto: number;
+    photoCoverage: number;
+  };
+  purchaseAnalysisReadiness: StyleCalibrationReadiness;
+  suggestedNextAction: {
+    label: string;
+    toolName: string | null;
+    rationale: string;
+  };
+  unresolvedQuestions: string[];
+}
 
 export interface StyleWeightedPreferenceRecord {
   note: string | null;
@@ -115,6 +234,7 @@ export interface StyleProfileDocument {
   aestheticKeywords: string[];
   brandAffinities: StyleBrandAffinityRecord[];
   budgetProfile: StyleBudgetProfileRecord | null;
+  calibrationSignals: StyleCalibrationSignalRecord[];
   closetCoverage: StyleClosetCoverage;
   colorPreferences: StyleWeightedPreferenceRecord[];
   colorDirections: string[];
@@ -128,6 +248,7 @@ export interface StyleProfileDocument {
   importedClosetAt: string | null;
   importedClosetConfirmed: boolean;
   importSource: string | null;
+  itemCalibration: StyleItemCalibrationRecord[];
   onboardingPath: StyleOnboardingPath;
   occasionRules: StyleOccasionRuleRecord[];
   silhouettePreferences: StyleWeightedPreferenceRecord[];
@@ -307,6 +428,42 @@ export interface StylePurchaseAnalysisItemMatch {
 export type StylePurchaseComparisonRelation = 'duplicate' | 'replacement' | 'upgrade' | 'adjacent' | 'distinct' | 'uncertain';
 export type StylePurchaseComparisonConfidence = 'low' | 'medium' | 'high';
 export type StylePurchaseReasoningFraming = 'duplicate' | 'replacement' | 'upgrade' | 'adjacent' | 'addition' | 'uncertain';
+export type StyleTopWardrobeJob =
+  | 'lifestyle_plain_tee'
+  | 'graphic_statement_tee'
+  | 'athletic_training_performance_tee'
+  | 'merch_tour_tee'
+  | 'undershirt_base_layer'
+  | 'jersey_fanwear'
+  | 'non_tee_top'
+  | 'unknown';
+export type StylePurchaseStylistJudgmentVerdict = 'buy' | 'skip' | 'consider' | 'wait';
+export type StylePurchaseStylistJudgmentDecisionBasis =
+  | 'gap'
+  | 'upgrade'
+  | 'replacement'
+  | 'duplicate'
+  | 'taste_fit'
+  | 'unclear';
+export type StylePurchaseStylistJudgmentWardrobeImpact =
+  | 'positive_addition'
+  | 'deepens_existing'
+  | 'replaces_item'
+  | 'redundant'
+  | 'expands_range';
+
+export interface StylePurchaseStylistJudgment {
+  caveats: string[];
+  decisionBasis: StylePurchaseStylistJudgmentDecisionBasis | null;
+  headline: string | null;
+  pairingOpportunities: string[];
+  rationale: string | null;
+  referencedComparatorIds: string[];
+  verdict: StylePurchaseStylistJudgmentVerdict;
+  wardrobeImpact: StylePurchaseStylistJudgmentWardrobeImpact | null;
+  whatItAdds: string | null;
+  whereItOverlaps: string | null;
+}
 
 export interface StylePurchasePairwiseComparison {
   confidence: StylePurchaseComparisonConfidence;
@@ -351,6 +508,7 @@ export interface StyleComparatorCoverage {
 }
 
 export interface StylePurchaseAnalysis {
+  calibration: StyleOnboardingCalibrationRecord;
   candidate: StylePurchaseCandidate;
   candidateDescriptorSummary: StyleDescriptorSummaryRecord | null;
   candidateSummary: {
@@ -363,6 +521,7 @@ export interface StylePurchaseAnalysis {
     name: string | null;
     silhouette: string | null;
     subcategory: string | null;
+    wardrobeJob: StyleTopWardrobeJob | null;
   };
   comparatorDescriptorSummaries: Record<string, StyleDescriptorSummaryRecord | null>;
   comparatorCoverage: StyleComparatorCoverage;
@@ -519,9 +678,11 @@ export interface StyleArchiveItemResult {
 export type StyleVisualBundleDeliveryMode = 'authenticated_only' | 'authenticated_with_signed_fallback';
 
 export type StyleVisualBundleAssetRole =
+  | 'adjacent_reference'
   | 'candidate'
   | 'requested_item'
   | 'exact_comparator'
+  | 'rejected_comparator'
   | 'typed_role'
   | 'same_category'
   | 'nearby_formality';

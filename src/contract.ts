@@ -1,14 +1,25 @@
 import {
   MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_BUCKET_ACTION_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_CHECKBOX_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_DONE_SYNC_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_FALLBACK_WRITE_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_HYDRATION_PREVIOUS_TEMPLATE_URI,
   MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_MCP_APPS_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_PANTRY_UNDO_PREVIOUS_TEMPLATE_URI,
   MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_PUBLIC_ACTIONS_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_STALE_SOURCE_PREVIOUS_TEMPLATE_URI,
   MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI,
   MEALS_GROCERY_LIST_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_TRANSPORT_PREVIOUS_TEMPLATE_URI,
   MEALS_GROCERY_SMOKE_TEMPLATE_URI,
 } from './domains/meals/grocery-list';
 import { MEALS_PANTRY_DASHBOARD_PREVIOUS_TEMPLATE_URI, MEALS_PANTRY_DASHBOARD_TEMPLATE_URI } from './domains/meals/pantry-dashboard';
 import {
   MEALS_RECIPE_CARD_CACHED_TEMPLATE_URI,
+  MEALS_RECIPE_CARD_LEGACY_PREVIOUS_TEMPLATE_URI,
   MEALS_RECIPE_CARD_PREVIOUS_TEMPLATE_URI,
   MEALS_RECIPE_CARD_TEMPLATE_URI,
 } from './domains/meals/recipe-card';
@@ -24,13 +35,17 @@ import {
   STYLE_PURCHASE_ANALYSIS_HUMAN_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_HYDRATION_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_IMAGE_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_JUDGMENT_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_LEGACY_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_MCP_APPS_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_NATIVE_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_PHOTO_READ_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_SECONDARY_ACTION_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_TITLE_PREVIOUS_TEMPLATE_URI,
 } from './domains/style/purchase-analysis';
+import { STYLE_SETUP_CALIBRATION_TEMPLATE_URI } from './domains/style/onboarding-calibration';
 import {
   FLUENT_HOME_ACTIONS_PREVIOUS_TEMPLATE_URI,
   FLUENT_HOME_CACHED_TEMPLATE_URI,
@@ -46,7 +61,7 @@ import {
   FLUENT_HOME_TEMPLATE_URI,
 } from './fluent-home';
 
-export const FLUENT_CONTRACT_VERSION = '2026-05-12.fluent-core-v1.66';
+export const FLUENT_CONTRACT_VERSION = '2026-05-17.fluent-core-v1.84';
 export const FLUENT_MINIMUM_SUPPORTED_CONTRACT_VERSION = FLUENT_CONTRACT_VERSION;
 
 export const FLUENT_GUIDANCE_RESOURCE_URIS = [
@@ -92,17 +107,29 @@ export const FLUENT_RESOURCE_URIS = [
   'fluent://meals/grocery-plan/{week_start}',
   'fluent://meals/confirmed-order-sync/{retailer}/{retailer_order_id}',
   MEALS_RECIPE_CARD_CACHED_TEMPLATE_URI,
+  MEALS_RECIPE_CARD_LEGACY_PREVIOUS_TEMPLATE_URI,
   MEALS_RECIPE_CARD_PREVIOUS_TEMPLATE_URI,
   MEALS_RECIPE_CARD_TEMPLATE_URI,
   MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI,
   MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI,
   MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI,
   MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_HYDRATION_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_MCP_APPS_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_TRANSPORT_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_CHECKBOX_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_FALLBACK_WRITE_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_PUBLIC_ACTIONS_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_DONE_SYNC_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_PANTRY_UNDO_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_STALE_SOURCE_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_BUCKET_ACTION_PREVIOUS_TEMPLATE_URI,
   MEALS_GROCERY_LIST_TEMPLATE_URI,
   MEALS_PANTRY_DASHBOARD_PREVIOUS_TEMPLATE_URI,
   MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
   'fluent://style/profile',
   'fluent://style/context',
+  'fluent://style/onboarding-calibration',
   'fluent://style/items',
   'fluent://style/items/{item_id}',
   'fluent://style/item-profiles/{item_id}',
@@ -123,7 +150,11 @@ export const FLUENT_RESOURCE_URIS = [
   STYLE_PURCHASE_ANALYSIS_DECISION_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_SECONDARY_ACTION_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_HYDRATION_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_NATIVE_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_MCP_APPS_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_JUDGMENT_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+  STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
 ] as const;
 
 export const FLUENT_TOOL_NAMES = [
@@ -165,6 +196,8 @@ export const FLUENT_TOOL_NAMES = [
   'meals_render_grocery_list_v2',
   'meals_create_recipe',
   'meals_list_recipes',
+  'meals_get_onboarding_calibration',
+  'meals_record_calibration_response',
   'meals_get_preferences',
   'meals_update_preferences',
   'meals_upsert_plan',
@@ -196,6 +229,10 @@ export const FLUENT_TOOL_NAMES = [
   'style_get_profile',
   'style_update_profile',
   'style_get_context',
+  'style_get_onboarding_calibration',
+  'style_show_setup_calibration_widget',
+  'style_record_calibration_response',
+  'style_add_starter_closet_item',
   'style_list_descriptor_backlog',
   'style_list_evidence_gaps',
   'style_analyze_wardrobe',
@@ -236,6 +273,7 @@ export const FLUENT_OPTIONAL_CAPABILITIES = [
   'grocery_order_preflight',
   'grocery_pantry_sufficiency_confirmation',
   'grocery_purchase_carry_forward',
+  'meals_setup_calibration',
   'confirmed_order_sync',
   'tool_discovery_hints',
   'runtime_guidance_resources',
@@ -250,6 +288,8 @@ export const FLUENT_OPTIONAL_CAPABILITIES = [
   'grocery_list_widget_v2',
   'style_profile',
   'style_context',
+  'style_setup_calibration',
+  'style_setup_calibration_widget',
   'style_purchase_analysis',
   'style_purchase_analysis_widget',
   'style_onboarding_summary',
@@ -318,13 +358,13 @@ const FLUENT_CHATGPT_APP_MEALS_TOOLS = [
   'meals_get_current_grocery_list',
   'meals_get_grocery_plan',
   'meals_upsert_grocery_plan_action',
+  'meals_delete_grocery_plan_action',
   'meals_upsert_grocery_intent',
 ] as const;
 
 const FLUENT_CHATGPT_APP_STYLE_TOOLS = [
   'style_get_profile',
   'style_get_context',
-  'style_extract_purchase_page_evidence',
   'style_prepare_purchase_analysis',
   'style_get_purchase_vision_packet',
   'style_submit_purchase_visual_observations',
@@ -363,12 +403,23 @@ const FLUENT_CHATGPT_APP_MEALS_RESOURCES = [
   'fluent://meals/current-plan',
   'fluent://meals/inventory',
   'fluent://meals/preferences',
+  MEALS_RECIPE_CARD_LEGACY_PREVIOUS_TEMPLATE_URI,
   MEALS_RECIPE_CARD_PREVIOUS_TEMPLATE_URI,
   MEALS_RECIPE_CARD_TEMPLATE_URI,
   MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI,
   MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI,
   MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI,
   MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_HYDRATION_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_MCP_APPS_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_TRANSPORT_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_CHECKBOX_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_FALLBACK_WRITE_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_PUBLIC_ACTIONS_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_DONE_SYNC_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_PANTRY_UNDO_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_STALE_SOURCE_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_BUCKET_ACTION_PREVIOUS_TEMPLATE_URI,
   MEALS_GROCERY_LIST_TEMPLATE_URI,
 ] as const;
 
@@ -385,6 +436,9 @@ const FLUENT_CHATGPT_APP_STYLE_RESOURCES = [
   STYLE_PURCHASE_ANALYSIS_DECISION_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_SECONDARY_ACTION_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_HYDRATION_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_NATIVE_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_MCP_APPS_PREVIOUS_TEMPLATE_URI,
+  STYLE_PURCHASE_ANALYSIS_JUDGMENT_PREVIOUS_TEMPLATE_URI,
   STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
 ] as const;
 
@@ -400,14 +454,13 @@ export const FLUENT_CHATGPT_APP_WRITE_TOOL_NAMES = [
   'meals_accept_plan_candidate',
   'meals_generate_grocery_plan',
   'meals_upsert_grocery_plan_action',
+  'meals_delete_grocery_plan_action',
   'meals_upsert_grocery_intent',
   'style_submit_purchase_visual_observations',
   'style_apply_purchase_analysis_action',
 ] as const;
 
-export const FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES = [
-  'style_extract_purchase_page_evidence',
-] as const;
+export const FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES = [] as const;
 
 export const FLUENT_CHATGPT_APP_PROFILE = {
   accountLinks: {
@@ -521,7 +574,7 @@ export function fluentHostProfiles(options?: {
       packagedSkills: 'available',
       defaultAnswerMode: 'native_visuals_plus_text',
       widgetPolicy:
-        'Prefer canonical Fluent data and Claude-native visual or artifact surfaces. Do not use ChatGPT/App SDK widget adapters by default.',
+        'Prefer canonical Fluent data and Claude-native visual or artifact surfaces by default. When a Claude run is explicitly MCP Apps-capable and can mount Fluent ui:// resources, Grocery, Recipe, and Style Purchase Analysis may use their native Fluent surfaces after each surface-specific prerequisite is satisfied.',
       advertisedTools: fullContractStarterTools,
       advertisedResources: coreGuidance,
       renderAdapters: [],
@@ -530,6 +583,7 @@ export function fluentHostProfiles(options?: {
       notes: [
         'MCP tools/list remains the authoritative full tool registry for Claude.',
         'Packaged Fluent skills remain the primary Claude operating layer.',
+        'Do not let stale Claude visualizer guidance suppress a proven MCP Apps render path.',
         'Use runtime guidance when packaged skill state is missing, stale, or unclear.',
       ],
     },
@@ -603,6 +657,17 @@ export function fluentHostProfile(
 
 export const FLUENT_CONTRACT_FREEZE = {
   backwardCompatibility:
+    'Phase 84 adds the full-MCP Meals setup/calibration read and write tools, separates pantry/plan/history evidence from user-confirmed food preferences, feeds calibration context into meal planning and grocery-list/grocery-plan honesty, and keeps the new onboarding tools out of the submitted ChatGPT profile while review remains pending. Phase 83 adds the full-MCP Style setup/calibration surface, separates closet evidence from user-confirmed taste, and keeps the new onboarding tools and widget out of the submitted ChatGPT profile while review remains pending. Phase 82 adds a 10-item Style purchase-analysis shopping-assistant eval set and tightens comparator quality across shoe wardrobe jobs, jersey-knit tops, outerwear duplicates, same-category rejection buckets, and bottom pairing evidence so broad metadata matches are not promoted as primary substitutes. Phase 81 improves Style purchase-analysis comparator quality so broad same-category top matches are bucketed by wardrobe job, MCP Apps vision packets distinguish direct comparators from adjacent and rejected context, and athletic/performance tees no longer act as primary substitutes for casual/lifestyle tees. Phase 80 moves Style purchase-analysis to v22 so ChatGPT/MCP Apps hosts can pass an agent-owned structured stylist_judgment into the native card after visual inspection, while purchase-analysis v21, v20, and v19 remain registered for compatibility. Phase 79 moves Style purchase-analysis to v21 so MCP Apps hosts refetch the native card after accepted visual observations and explicit widget rendering, while purchase-analysis v20 and v19 remain registered for compatibility. Phase 78 moves Style purchase-analysis to v20 so MCP Apps hosts refetch the native ui/initialize bridge, tool-input-partial hydration, local action state, and post-initialize size notifications, while purchase-analysis v19 remains registered for compatibility. Phase 77 moves recipe-card to v11 so MCP Apps hosts refetch the native ui/initialize bridge, delayed tool-result/tool-input hydration, tool-input-partial handling, local control state, and post-initialize size notifications, while recipe-card v10, v9, and v8 remain registered for compatibility. ' +
+    'Phase 76 moves grocery-list to v71 so each visible bucket receives the correct primary widget action even when host payload action ordering carries stale pantry metadata, while grocery-list v70 remains registered for compatibility. ' +
+    'Phase 75 moves grocery-list to v70 so optimistic Done undo prefers the item bucket the user just acted from over stale source metadata, while grocery-list v69 remains registered for compatibility. ' +
+    'Phase 74 moves grocery-list to v69 so Done undo restores pantry/check-at-home items to their prior active section during optimistic local reconciliation, while grocery-list v68 remains registered for compatibility. ' +
+    'Phase 73 moves grocery-list to v68 so successful widget saves immediately move checked items into Done, keep reversible local edits visible while host refreshes catch up, and broaden deterministic MCP Apps interaction coverage, while grocery-list v67 remains registered for compatibility. ' +
+    'Phase 72 moves grocery-list to v67 and includes safe checkbox action metadata in public structuredContent so real MCP Apps hosts render bought-item controls even when _meta is unavailable, while grocery-list v66 remains registered for compatibility. ' +
+    'Phase 71 moves grocery-list to v66 so MCP Apps hosts refetch schema-valid reconstructed checkbox and pantry fallback write actions, while grocery-list v65 remains registered for compatibility. ' +
+    'Phase 70 moves grocery-list to v65 so MCP Apps hosts refetch checkbox fallback actions when only structuredContent reaches the iframe, while grocery-list v64 remains registered for compatibility. ' +
+    'Phase 69 moves grocery-list to v64 so MCP Apps hosts refetch the single-target postMessage transport, post-initialize size notifications, and behavior-tested tool-input-partial hydration, while grocery-list v63 remains registered for compatibility. ' +
+    'Phase 68 moves grocery-list to v63 so MCP Apps hosts refetch a view-initiated MCP Apps handshake, standard initialized/size notifications, and tool-input-partial hydration, while grocery-list v62 remains registered for compatibility. ' +
+    'Phase 67 moves grocery-list to v62 so MCP Apps hosts refetch widget hydration that accepts App SDK tool-result and tool-input notifications when globals arrive late, while grocery-list v61 remains registered for compatibility. ' +
     'Phase 66 moves Home to v21 and grocery-list to v61 so ChatGPT/App SDK hosts refetch Home modal handoff params and the Grocery widget hydrates from modal params as well as direct tool output, while Home v20 and grocery-list v60 remain registered for compatibility. ' +
     'Phase 65 moves Home to v20 so ChatGPT/App SDK hosts refetch typed Home handoff actions, host-message fallback prompts for Grocery and Health Today, and meal-memory copy that never exposes internal statuses such as proven or retired, while v19 remains registered for compatibility. ' +
     'Phase 64 moves Home to v19 so ChatGPT/App SDK hosts refetch direct Home action language, a Grocery List modal handoff when the host supports requestModal, less internal Health/Meals copy, and the v18 Home resource remains registered for compatibility. ' +

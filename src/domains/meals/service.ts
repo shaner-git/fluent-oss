@@ -26,6 +26,12 @@ import {
   stringifyJson,
 } from './helpers';
 import {
+  applyMealsCalibrationResponse,
+  buildMealsCalibrationContext,
+  buildMealsOnboardingCalibration,
+  type MealsCalibrationResponseInput,
+} from './onboarding-calibration';
+import {
   buildGroceryAggregation as buildGroceryAggregationHelper,
   buildPrimaryPlanCandidate as buildPrimaryPlanCandidateHelper,
   deriveCalendarPlanningConstraints,
@@ -50,6 +56,7 @@ import type {
   InventorySummary,
   MealFeedbackRecord,
   MealMemoryRecord,
+  MealsOnboardingCalibrationRecord,
   MealPlanEntryRecord,
   MealPlanHistoryRecord,
   MealPlanRecord,
@@ -232,6 +239,15 @@ export class MealsService {
       input.calendarContext ?? null,
       input.trainingContext ?? null,
     );
+    const calibration = buildMealsOnboardingCalibration({
+      currentGroceryList: null,
+      currentPlan: null,
+      inventory: snapshot.inventory,
+      mealMemory: snapshot.mealMemory,
+      planHistory: snapshot.history,
+      preferences: snapshot.preferences,
+    });
+    const calibrationContext = buildMealsCalibrationContext(calibration);
     const inputHash = await hashStableJson(snapshot.acceptanceHashInput);
     const now = new Date().toISOString();
     const generationId = `plan-generation:${input.weekStart}:${crypto.randomUUID()}`;
@@ -240,6 +256,19 @@ export class MealsService {
       overrides,
       weekStart: input.weekStart,
     });
+    candidate.summary = {
+      ...candidate.summary,
+      calibrationContext,
+      rationale: [
+        ...candidate.summary.rationale,
+        `Planning basis: ${calibration.mealPlanningReadiness.basis}; distinguish confirmed preferences, inferred meal history, pantry evidence, and fallback assumptions.`,
+        calibration.mealPlanningReadiness.label,
+      ],
+      warnings: [
+        ...candidate.summary.warnings,
+        ...calibration.mealPlanningReadiness.notes,
+      ],
+    };
     const persisted: PersistedMealPlanGenerationRecord = {
       id: generationId,
       weekStart: input.weekStart,
@@ -292,6 +321,7 @@ export class MealsService {
     });
 
     return {
+      calibrationContext,
       id: generationId,
       weekStart: input.weekStart,
       inputHash,
@@ -757,6 +787,66 @@ export class MealsService {
     });
 
     return after;
+  }
+
+  async getOnboardingCalibration(input: { includeCurrentGroceryList?: boolean } = {}): Promise<MealsOnboardingCalibrationRecord> {
+    const [preferences, inventory, mealMemory, planHistory, currentPlan] = await Promise.all([
+      this.getPreferences(),
+      this.getInventory(),
+      this.getMealMemory(),
+      this.listPlanHistory(12),
+      this.getCurrentPlan(),
+    ]);
+    const currentGroceryList =
+      input.includeCurrentGroceryList === false ? null : await this.getCurrentGroceryList({ skipCalibrationContext: true });
+
+    return buildMealsOnboardingCalibration({
+      currentGroceryList,
+      currentPlan,
+      inventory,
+      mealMemory,
+      planHistory,
+      preferences,
+    });
+  }
+
+  async recordCalibrationResponse(input: {
+    response: MealsCalibrationResponseInput;
+    provenance: MutationProvenance;
+  }): Promise<MealPreferencesRecord> {
+    const preferences = await this.getPreferences();
+    const nextRaw = applyMealsCalibrationResponse({
+      preferences,
+      response: input.response,
+    });
+    const updated = await this.updatePreferences({
+      preferences: nextRaw,
+      provenance: input.provenance,
+      sourceSnapshot: {
+        responseKinds: {
+          pantryItemCount: input.response.pantryItems?.length ?? 0,
+          preferencePatch: Boolean(input.response.preferencePatch),
+          signalCount: input.response.signals?.length ?? 0,
+          starterPreferenceText: Boolean(input.response.starterPreferenceText?.trim()),
+        },
+        tool: 'meals_record_calibration_response',
+      },
+    });
+
+    await this.recordDomainEvent({
+      entityType: 'meal_calibration',
+      entityId: `${updated.tenantId}:${updated.profileId}`,
+      eventType: 'calibration_response.recorded',
+      before: preferences.raw.calibration ?? null,
+      after: updated.raw.calibration ?? null,
+      patch: {
+        pantry_item_count: input.response.pantryItems?.length ?? 0,
+        signal_count: input.response.signals?.length ?? 0,
+      },
+      provenance: input.provenance,
+    });
+
+    return updated;
   }
 
   async getInventory(): Promise<InventoryRecord[]> {
@@ -1536,7 +1626,9 @@ export class MealsService {
     return this.applyGroceryPlanActions(basePlan, await this.listGroceryPlanActions(weekStart));
   }
 
-  async getCurrentGroceryList(input: { weekStart?: string | null; today?: string | null } = {}): Promise<CurrentGroceryListRecord> {
+  async getCurrentGroceryList(
+    input: { weekStart?: string | null; today?: string | null; skipCalibrationContext?: boolean } = {},
+  ): Promise<CurrentGroceryListRecord> {
     const today = input.today?.trim() || (await this.currentDateString());
     const explicitWeekStart = input.weekStart?.trim() || null;
     const anchor = await this.resolveCurrentGroceryListAnchor({ explicitWeekStart, today });
@@ -1605,25 +1697,18 @@ export class MealsService {
     });
     const trustLabel = this.currentGroceryListTrustLabel(trustState);
     const updatedAt = this.latestGroceryListTimestamp(groceryPlan, actions, relevantIntents);
-    const version = await hashStableJson({
-      actions: actions.map((action) => [action.itemKey, action.actionStatus, action.updatedAt, action.metadata]),
-      groceryPlanGeneratedAt: groceryPlan?.generatedAt ?? null,
-      intents: relevantIntents.map((intent) => [intent.id, intent.status, intent.updatedAt]),
-      trustState,
-      weekRelation,
-      weekStart,
-    });
-
-    return {
-      counts: {
-        checkAtHomeCount: preparedOrder?.unresolvedItems.length ?? 0,
-        inCartCount: preparedOrder?.alreadyInRetailerCart.length ?? 0,
-        manualIntentCount: relevantIntents.length,
-        planItemCount: groceryPlan?.raw.items.length ?? 0,
-        resolvedCount: groceryPlan?.raw.resolvedItems.length ?? 0,
-        toBuyCount: preparedOrder?.remainingToBuy.length ?? groceryPlan?.raw.items.length ?? 0,
-        unresolvedCount: preparedOrder?.unresolvedItems.length ?? 0,
-      },
+    const counts: CurrentGroceryListRecord['counts'] = {
+      checkAtHomeCount: preparedOrder?.unresolvedItems.length ?? 0,
+      inCartCount: preparedOrder?.alreadyInRetailerCart.length ?? 0,
+      manualIntentCount: relevantIntents.length,
+      planItemCount: groceryPlan?.raw.items.length ?? 0,
+      resolvedCount: groceryPlan?.raw.resolvedItems.length ?? 0,
+      toBuyCount: preparedOrder?.remainingToBuy.length ?? groceryPlan?.raw.items.length ?? 0,
+      unresolvedCount: preparedOrder?.unresolvedItems.length ?? 0,
+    };
+    const currentListBase: CurrentGroceryListRecord = {
+      calibrationContext: undefined,
+      counts,
       generatedAt: groceryPlan?.generatedAt ?? null,
       groceryPlan,
       intents: relevantIntents,
@@ -1644,9 +1729,37 @@ export class MealsService {
       trustLabel,
       trustState,
       updatedAt,
-      version,
+      version: 'pending',
       weekRelation,
       weekStart,
+    };
+    const calibrationContext =
+      input.skipCalibrationContext === true
+        ? undefined
+        : buildMealsCalibrationContext(
+            buildMealsOnboardingCalibration({
+              currentGroceryList: currentListBase,
+              currentPlan: await this.getCurrentPlan(),
+              inventory: await this.getInventory(),
+              mealMemory: await this.getMealMemory(),
+              planHistory: await this.listPlanHistory(12),
+              preferences: await this.getPreferences(),
+            }),
+          );
+    const version = await hashStableJson({
+      actions: actions.map((action) => [action.itemKey, action.actionStatus, action.updatedAt, action.metadata]),
+      calibrationContext,
+      groceryPlanGeneratedAt: groceryPlan?.generatedAt ?? null,
+      intents: relevantIntents.map((intent) => [intent.id, intent.status, intent.updatedAt]),
+      trustState,
+      weekRelation,
+      weekStart,
+    });
+
+    return {
+      ...currentListBase,
+      calibrationContext,
+      version,
     };
   }
 
@@ -1923,13 +2036,27 @@ export class MealsService {
       recipesById,
       weekStart: plan.weekStart,
     });
+    const calibration = buildMealsOnboardingCalibration({
+      currentGroceryList: null,
+      currentPlan: plan,
+      inventory,
+      mealMemory: await this.getMealMemory(),
+      planHistory: await this.listPlanHistory(12),
+      preferences,
+    });
+    const calibrationContext = buildMealsCalibrationContext(calibration);
 
     const generatedAt = new Date().toISOString();
     const raw = {
       generatedAt,
       items: aggregation.items,
-      notes: aggregation.notes,
+      notes: [
+        ...aggregation.notes,
+        ...calibration.groceryReadiness.notes,
+        calibration.groceryReadiness.label,
+      ],
       actionsAppliedCount: 0,
+      calibrationContext,
       preferencesVersion: preferences.version,
       profileOwner: preferences.profileOwner,
       resolvedItems: aggregation.resolvedItems,

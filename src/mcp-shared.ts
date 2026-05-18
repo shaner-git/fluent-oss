@@ -13,6 +13,11 @@ export const writeResponseModeSchema = z.enum(['ack', 'full']).optional();
 
 export const iconFor = (origin: string) => [
   {
+    src: `${origin}/icon.png`,
+    mimeType: 'image/png',
+    sizes: ['128x128'],
+  },
+  {
     src: `${origin}/icon.svg`,
     mimeType: 'image/svg+xml',
     sizes: ['any'],
