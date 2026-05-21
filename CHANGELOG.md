@@ -19,7 +19,7 @@ First public Fluent open-source runtime release.
 - minimum supported contract version: `2026-05-17.fluent-core-v1.84`
 - frozen contract artifact: [contracts/fluent-contract.v1.json](./contracts/fluent-contract.v1.json)
 - contract notes: [docs/fluent-contract-v1.md](./docs/fluent-contract-v1.md)
-- contract change: current app-surface contract is v1.84, with full-MCP Meals setup calibration, full-MCP Style setup calibration, Grocery v71 as the living-list render surface, Recipe v11, Home v21, Style purchase-analysis v22, and older widget resources retained only for compatibility. v1.84 keeps the new Meals onboarding tools out of the submitted ChatGPT profile while adding evidence-first setup and calibration semantics for full MCP.
+- contract change: current app-surface contract is v1.84, with broader MCP Meals setup calibration, broader MCP Style setup calibration, Grocery v71 as the living-list render surface, Recipe v11, Home v21, Style purchase-analysis v22, and older widget resources retained only for compatibility. v1.84 keeps ChatGPT focused on the current Home, recipe, grocery, Style, Health, and account-status paths while adding evidence-first setup and calibration semantics for broader MCP hosts.
 
 ### Supported Setup Matrix
 

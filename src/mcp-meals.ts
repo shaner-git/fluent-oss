@@ -1232,7 +1232,7 @@ export function registerMealsMcpSurface(
       withAppsSecurity({
         title: 'Show Grocery List',
         description:
-          'Show the user\'s current Fluent grocery list as the primary rich checklist surface for normal asks like "show me my grocery list", "what do I need to buy?", "open my shopping list", or "pull up my grocery list". In ChatGPT / MCP Apps-style hosts, and in full-MCP clients such as Claude.ai when they expose MCP Apps UI-resource mounting, prefer this tool for ordinary grocery-list display because it returns the official Fluent `ui://` resource plus structured fallback data. The surface shows the living list with source provenance, trust state, To buy, Check amount, Check at home, and Done sections. If the active host cannot mount the returned MCP Apps UI resource, fall back to the canonical living-list data in the tool result or call meals_get_current_grocery_list and answer in text. Use meals_get_grocery_plan only for explicit week-scoped/raw plan detail.',
+          'Show the user\'s current Fluent grocery list as the primary rich checklist surface for normal asks like "show me my grocery list", "what do I need to buy?", "open my shopping list", or "pull up my grocery list". In ChatGPT / MCP Apps-style hosts, and in broader MCP clients such as Claude.ai when they expose MCP Apps UI-resource mounting, prefer this tool for ordinary grocery-list display because it returns the official Fluent `ui://` resource plus structured fallback data. The surface shows the living list with source provenance, trust state, To buy, Check amount, Check at home, and Done sections. If the active host cannot mount the returned MCP Apps UI resource, fall back to the canonical living-list data in the tool result or call meals_get_current_grocery_list and answer in text. Use meals_get_grocery_plan only for explicit week-scoped/raw plan detail.',
         inputSchema: {
           week_start: z.string().optional(),
           weekStart: z.string().optional(),
@@ -2520,7 +2520,7 @@ export function registerMealsMcpSurface(
     {
       title: 'Get Current Grocery List',
       description:
-        'Fetch the canonical current living grocery list data for text answers, calculations, reconciliation, or hosts that cannot mount a rich grocery-list resource. This host-neutral read model distinguishes the living grocery list from weekly meal plans, derived grocery needs, shopping sessions, purchases, and kitchen memory. In ChatGPT / MCP Apps-style hosts, and in full-MCP clients such as Claude.ai when they expose MCP Apps UI-resource mounting, prefer meals_render_grocery_list_v2 for ordinary display asks like "show me my grocery list" or "what do I need to buy?". In Codex, OpenClaw, generic plain MCP clients, or render-fallback turns, use this tool and answer in text.',
+        'Fetch the canonical current living grocery list data for text answers, calculations, reconciliation, or hosts that cannot mount a rich grocery-list resource. This host-neutral read model distinguishes the living grocery list from weekly meal plans, derived grocery needs, shopping sessions, purchases, and kitchen memory. In ChatGPT / MCP Apps-style hosts, and in broader MCP clients such as Claude.ai when they expose MCP Apps UI-resource mounting, prefer meals_render_grocery_list_v2 for ordinary display asks like "show me my grocery list" or "what do I need to buy?". In Codex, OpenClaw, generic plain MCP clients, or render-fallback turns, use this tool and answer in text.',
       inputSchema: {
         week_start: z.string().optional(),
         today: z.string().optional(),
@@ -2547,7 +2547,7 @@ export function registerMealsMcpSurface(
     {
       title: 'Get Grocery Plan',
       description:
-        'Fetch the underlying grocery-plan document for a specific meal-plan week, including buy-list items, pantry checks, substitutions, and resolved grocery actions. Prefer this for audit/debugging, when the user explicitly asks for a week-scoped grocery plan, or when a tool needs raw plan data. For ordinary "show my grocery list" asks in ChatGPT / MCP Apps-style hosts or full-MCP clients with MCP Apps UI-resource support, prefer meals_render_grocery_list_v2. In Codex, OpenClaw, generic plain MCP clients, or render-fallback turns, prefer meals_get_current_grocery_list.',
+        'Fetch the underlying grocery-plan document for a specific meal-plan week, including buy-list items, pantry checks, substitutions, and resolved grocery actions. Prefer this for audit/debugging, when the user explicitly asks for a week-scoped grocery plan, or when a tool needs raw plan data. For ordinary "show my grocery list" asks in ChatGPT / MCP Apps-style hosts or broader MCP clients with MCP Apps UI-resource support, prefer meals_render_grocery_list_v2. In Codex, OpenClaw, generic plain MCP clients, or render-fallback turns, prefer meals_get_current_grocery_list.',
       inputSchema: {
         week_start: z.string(),
         view: readViewSchema,

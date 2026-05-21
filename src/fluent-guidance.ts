@@ -164,7 +164,7 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     defaultFlow: [
       'Call style_prepare_purchase_analysis with the candidate, even when the candidate is text-only or has no image yet.',
       'If preparation returns hostResponseMode=request_candidate_image, ask for or obtain a direct candidate product image before final judgment.',
-      'Call style_extract_purchase_page_evidence only when the current host exposes it and the user supplied a product URL; in the first submitted ChatGPT app, ask for user-provided item details plus a direct image or upload instead.',
+      'Call style_extract_purchase_page_evidence only when the current host exposes it and the user supplied a product URL; in ChatGPT, ask for user-provided item details plus a direct image or upload instead.',
       'Call style_get_purchase_vision_packet for candidate and closet comparator images.',
       'Inspect the vision packet images and use each asset itemContext and comparisonContext to make the stylist comparison.',
       'Call style_submit_purchase_visual_observations with concrete inspected-image facts plus stylist_judgment containing verdict, headline, rationale, decisionBasis, wardrobeImpact, whatItAdds, whereItOverlaps, caveats, pairingOpportunities, and referencedComparatorIds.',
