@@ -395,6 +395,7 @@ function inferSignalsFromCloset(
   storedSignals: StyleCalibrationSignalRecord[],
 ): StyleCalibrationSignalRecord[] {
   const suppressedSignalKeys = new Set<string>();
+  const suppressedSignalKinds = new Set<StyleCalibrationSignalKind>();
   for (const entry of storedSignals) {
     if (entry.source !== 'user_confirmed') continue;
     if (entry.status !== 'confirmed' && entry.status !== 'corrected' && entry.status !== 'rejected') continue;
@@ -402,17 +403,21 @@ function inferSignalsFromCloset(
     if (entry.correctedValue) {
       suppressedSignalKeys.add(signalKey(entry.kind, entry.correctedValue));
     }
+    if (entry.status === 'confirmed' || entry.status === 'corrected') {
+      suppressedSignalKinds.add(entry.kind);
+    }
   }
   const storedInferred = storedSignals.filter(
     (entry) =>
       entry.status === 'inferred' &&
       entry.source !== 'user_confirmed' &&
+      !suppressedSignalKinds.has(entry.kind) &&
       !suppressedSignalKeys.has(signalKey(entry.kind, entry.value)),
   );
   const colorSignals = topCounts(items.map((item) => item.colorFamily).filter(isString), 'color');
   const silhouetteSignals = topCounts(items.map((item) => item.profile?.raw.silhouette).filter(isString), 'silhouette');
   const generatedSignals = [...colorSignals, ...silhouetteSignals].filter(
-    (entry) => !suppressedSignalKeys.has(signalKey(entry.kind, entry.value)),
+    (entry) => !suppressedSignalKinds.has(entry.kind) && !suppressedSignalKeys.has(signalKey(entry.kind, entry.value)),
   );
   return mergeStyleCalibrationSignals(storedInferred, generatedSignals).slice(0, 10);
 }

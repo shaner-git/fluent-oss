@@ -363,11 +363,14 @@ export interface StyleItemRecord {
 }
 
 export interface StyleContextRecord {
+  activeItemCount: number;
   categoryBreakdown: Array<{ category: string; count: number }>;
   deliverablePhotoCoverage: number;
   descriptorCoverage: number;
   evidenceGapCount: number;
   colorBreakdown: Array<{ colorFamily: string; count: number }>;
+  inactiveItemCount: number;
+  inactiveStatusBreakdown: Array<{ status: StyleItemStatus; count: number }>;
   itemCount: number;
   onboardingMode: StyleOnboardingMode;
   photoCount: number;
@@ -377,6 +380,9 @@ export interface StyleContextRecord {
   representativeItems: StyleItemSummaryRecord[];
   seededClosetPresent: boolean;
   stylistDescriptorCoverage: number;
+  totalCategoryBreakdown: Array<{ category: string; count: number }>;
+  totalColorBreakdown: Array<{ colorFamily: string; count: number }>;
+  totalItemCount: number;
   typedProfileCoverage: number;
   usableProfileCoverage: number;
 }

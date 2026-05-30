@@ -29,7 +29,9 @@ main()
 async function main() {
   await preservesProfileMerges();
   await preservesRichStyleProfilePreferences();
+  await ignoresAcceptanceTestCalibrationSignals();
   await projectsCalibrationSignalsIntoStructuredProfileFields();
+  await suppressesSameKindInferredPromptsAfterConfirmedTaste();
   await storesProvenanceOutsideCanonicalItemReads();
   await preservesPartialItemUpdatesWithoutDroppingExistingFields();
   await summarizesOnboardingReadyState();
@@ -444,6 +446,108 @@ async function projectsCalibrationSignalsIntoStructuredProfileFields() {
     assert.equal(profile.raw.colorPreferences.some((entry) => entry.value === 'black'), true);
     assert.equal(profile.raw.preferredSilhouettes.includes('regular straight'), true);
     assert.equal(profile.raw.silhouettePreferences.some((entry) => entry.value === 'regular straight'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function ignoresAcceptanceTestCalibrationSignals() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const acceptanceTestProvenance = {
+      ...testProvenance(),
+      sessionId: 'style-acceptance-test',
+      sourceType: 'acceptance_test',
+    };
+
+    const calibration = await service.recordCalibrationResponse({
+      provenance: acceptanceTestProvenance,
+      signals: [
+        {
+          kind: 'hard_avoid',
+          source: 'user_confirmed',
+          status: 'confirmed',
+          value: 'full-mcp verifier shiny logo',
+        },
+      ],
+    });
+
+    const afterAcceptanceTest = await service.getProfile();
+    assert.equal(calibration.confirmedStyleSignals.some((entry) => entry.value === 'full-mcp verifier shiny logo'), false);
+    assert.equal(afterAcceptanceTest.raw.calibrationSignals.some((entry) => entry.value === 'full-mcp verifier shiny logo'), false);
+    assert.equal(afterAcceptanceTest.raw.hardAvoids.includes('full-mcp verifier shiny logo'), false);
+
+    await service.recordCalibrationResponse({
+      provenance: testProvenance(),
+      signals: [
+        {
+          kind: 'hard_avoid',
+          source: 'user_confirmed',
+          status: 'confirmed',
+          value: 'scratchy synthetics',
+        },
+      ],
+    });
+
+    const afterUserWrite = await service.getProfile();
+    assert.equal(afterUserWrite.raw.calibrationSignals.some((entry) => entry.value === 'scratchy synthetics'), true);
+    assert.equal(afterUserWrite.raw.hardAvoids.includes('scratchy synthetics'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function suppressesSameKindInferredPromptsAfterConfirmedTaste() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    for (const [index, silhouette] of ['slim', 'slim', 'slim tapered', 'slim tapered'].entries()) {
+      const itemId = `style-item:silhouette-reprompt-${index + 1}`;
+      await service.upsertItem({
+        item: {
+          id: itemId,
+          category: 'TOP',
+          color_family: 'black',
+          name: `Silhouette Prompt Fixture ${index + 1}`,
+        },
+        provenance,
+      });
+      await service.upsertItemProfile({
+        itemId,
+        profile: {
+          silhouette,
+        },
+        provenance,
+      });
+    }
+
+    await service.recordCalibrationResponse({
+      provenance,
+      signals: [
+        {
+          kind: 'silhouette',
+          source: 'user_confirmed',
+          status: 'confirmed',
+          value: 'regular',
+        },
+      ],
+    });
+
+    const calibration = await service.getOnboardingCalibration();
+    assert.equal(calibration.inferredStyleSignals.some((entry) => entry.kind === 'silhouette'), false);
+    assert.equal(
+      calibration.calibrationPrompts.some((entry) => entry.kind === 'confirm_signal' && entry.signal?.kind === 'silhouette'),
+      false,
+      'confirmed silhouette taste should suppress same-kind inferred silhouette re-prompts',
+    );
+    assert.equal(
+      calibration.inferredStyleSignals.some((entry) => entry.kind === 'color' && entry.value === 'black'),
+      true,
+      'same-kind suppression should not hide legitimately new inferred color signals',
+    );
   } finally {
     runtime.sqliteDb.close();
   }
@@ -952,10 +1056,23 @@ async function surfacesInactiveItemsAcrossContextEvidenceAndProvenanceReads() {
     assert.equal(listedItems.find((item) => item.id === 'style-item:inactive-surface-loafer')?.status, 'archived');
 
     const context = await service.getContext();
-    assert.equal(context.itemCount, 3);
-    assert.equal(context.categoryBreakdown.find((entry) => entry.category === 'SHOE')?.count, 2);
-    assert.equal(context.categoryBreakdown.find((entry) => entry.category === 'BOTTOM')?.count, 1);
-    assert.equal(context.colorBreakdown.find((entry) => entry.colorFamily === 'brown')?.count, 2);
+    assert.equal(context.itemCount, 1);
+    assert.equal(context.activeItemCount, 1);
+    assert.equal(context.totalItemCount, 3);
+    assert.equal(context.inactiveItemCount, 2);
+    assert.deepEqual(context.inactiveStatusBreakdown, [
+      { status: 'archived', count: 1 },
+      { status: 'retired', count: 1 },
+    ]);
+    assert.equal(context.categoryBreakdown.find((entry) => entry.category === 'shoe')?.count, undefined);
+    assert.equal(context.categoryBreakdown.find((entry) => entry.category === 'bottom')?.count, 1);
+    assert.equal(context.colorBreakdown.find((entry) => entry.colorFamily === 'brown')?.count, undefined);
+    assert.equal(context.totalCategoryBreakdown.find((entry) => entry.category === 'shoe')?.count, 2);
+    assert.equal(context.totalCategoryBreakdown.find((entry) => entry.category === 'bottom')?.count, 1);
+    assert.equal(context.totalColorBreakdown.find((entry) => entry.colorFamily === 'brown')?.count, 2);
+    const calibration = await service.getOnboardingCalibration();
+    assert.equal(calibration.activeItemCount, context.activeItemCount);
+    assert.deepEqual(calibration.categoryCoverage, context.categoryBreakdown);
 
     const gaps = await service.listEvidenceGaps({ priorityFilter: 'all' });
     assert.equal(gaps.items.some((entry) => entry.itemId === 'style-item:inactive-surface-trouser'), true);

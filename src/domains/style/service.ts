@@ -372,6 +372,10 @@ function normalizeCalibrationSignalForWrite(input: {
   });
 }
 
+function isAcceptanceTestCalibrationWrite(provenance: MutationProvenance): boolean {
+  return new Set(['acceptance_test', 'acceptance-test', 'verifier_acceptance_test']).has(provenance.sourceType.trim().toLowerCase());
+}
+
 export class StyleService {
   private readonly repository: StyleRepository;
 
@@ -417,8 +421,13 @@ export class StyleService {
 
   async getContext(): Promise<StyleContextRecord> {
     const [profile, items] = await Promise.all([this.getProfile(), this.listItems()]);
+    const activeItems = items.filter((item) => item.status === 'active');
+    const inactiveItems = items.filter((item) => item.status !== 'active');
     const categoryMap = new Map<string, number>();
     const colorMap = new Map<string, number>();
+    const totalCategoryMap = new Map<string, number>();
+    const totalColorMap = new Map<string, number>();
+    const inactiveStatusMap = new Map<string, number>();
     let photoCount = 0;
     let profileCount = 0;
     let primaryPhotoCount = 0;
@@ -428,7 +437,21 @@ export class StyleService {
 
     for (const item of items) {
       if (item.category) {
-        categoryMap.set(item.category, (categoryMap.get(item.category) ?? 0) + 1);
+        const category = item.category.toLowerCase();
+        totalCategoryMap.set(category, (totalCategoryMap.get(category) ?? 0) + 1);
+      }
+      if (item.colorFamily) {
+        totalColorMap.set(item.colorFamily, (totalColorMap.get(item.colorFamily) ?? 0) + 1);
+      }
+      if (item.status !== 'active') {
+        inactiveStatusMap.set(item.status, (inactiveStatusMap.get(item.status) ?? 0) + 1);
+      }
+    }
+
+    for (const item of activeItems) {
+      if (item.category) {
+        const category = item.category.toLowerCase();
+        categoryMap.set(category, (categoryMap.get(category) ?? 0) + 1);
       }
       if (item.colorFamily) {
         colorMap.set(item.colorFamily, (colorMap.get(item.colorFamily) ?? 0) + 1);
@@ -441,13 +464,14 @@ export class StyleService {
       stylistDescriptorCount += hasStyleDescriptors(item.profile?.raw ?? null) ? 1 : 0;
     }
 
-    const typedProfileCoverage = items.length > 0 ? Number((profileCount / items.length).toFixed(2)) : 0;
-    const deliverablePhotoCoverage = items.length > 0 ? Number((deliverablePhotoCount / items.length).toFixed(2)) : 0;
-    const usableProfileCoverage = items.length > 0 ? Number((usableProfileCount / items.length).toFixed(2)) : 0;
-    const stylistDescriptorCoverage = items.length > 0 ? Number((stylistDescriptorCount / items.length).toFixed(2)) : 0;
+    const typedProfileCoverage = activeItems.length > 0 ? Number((profileCount / activeItems.length).toFixed(2)) : 0;
+    const deliverablePhotoCoverage = activeItems.length > 0 ? Number((deliverablePhotoCount / activeItems.length).toFixed(2)) : 0;
+    const usableProfileCoverage = activeItems.length > 0 ? Number((usableProfileCount / activeItems.length).toFixed(2)) : 0;
+    const stylistDescriptorCoverage = activeItems.length > 0 ? Number((stylistDescriptorCount / activeItems.length).toFixed(2)) : 0;
     const evidenceGapCount = (await this.listEvidenceGaps({ priorityFilter: 'actionable' })).items.length;
 
     return {
+      activeItemCount: activeItems.length,
       categoryBreakdown: [...categoryMap.entries()]
         .map(([category, count]) => ({ category, count }))
         .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category)),
@@ -457,19 +481,30 @@ export class StyleService {
       colorBreakdown: [...colorMap.entries()]
         .map(([colorFamily, count]) => ({ colorFamily, count }))
         .sort((left, right) => right.count - left.count || left.colorFamily.localeCompare(right.colorFamily)),
-      itemCount: items.length,
-      onboardingMode: inferStyleOnboardingMode(items.length),
+      inactiveItemCount: inactiveItems.length,
+      inactiveStatusBreakdown: [...inactiveStatusMap.entries()]
+        .map(([status, count]) => ({ status: status as StyleItemRecord['status'], count }))
+        .sort((left, right) => right.count - left.count || left.status.localeCompare(right.status)),
+      itemCount: activeItems.length,
+      onboardingMode: inferStyleOnboardingMode(activeItems.length),
       photoCount,
       profile,
       profileCount,
       purchaseEvalReady: isStylePurchaseEvalReady(profile.raw, {
-        itemCount: items.length,
+        itemCount: activeItems.length,
         itemProfileCount: profileCount,
         primaryPhotoCount,
       }),
-      representativeItems: pickRepresentativeItems(items),
-      seededClosetPresent: items.length > 0,
+      representativeItems: pickRepresentativeItems(activeItems),
+      seededClosetPresent: activeItems.length > 0,
       stylistDescriptorCoverage,
+      totalCategoryBreakdown: [...totalCategoryMap.entries()]
+        .map(([category, count]) => ({ category, count }))
+        .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category)),
+      totalColorBreakdown: [...totalColorMap.entries()]
+        .map(([colorFamily, count]) => ({ colorFamily, count }))
+        .sort((left, right) => right.count - left.count || left.colorFamily.localeCompare(right.colorFamily)),
+      totalItemCount: items.length,
       typedProfileCoverage,
       usableProfileCoverage,
     };
@@ -518,9 +553,10 @@ export class StyleService {
         value: signal.value,
       }),
     );
+    const durableSignals = isAcceptanceTestCalibrationWrite(input.provenance) ? [] : nextSignals;
     const calibrationSignals = mergeStyleCalibrationSignals(
       before.raw.calibrationSignals,
-      nextSignals,
+      durableSignals,
     );
     const itemCalibration = mergeStyleItemCalibration(
       before.raw.itemCalibration,

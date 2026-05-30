@@ -58,11 +58,14 @@ export function summarizeStyleItem(item: StyleItemRecord) {
 
 export function summarizeStyleContext(context: StyleContextRecord) {
   return {
+    activeItemCount: context.activeItemCount,
     categoryBreakdown: context.categoryBreakdown,
     colorBreakdown: context.colorBreakdown,
     deliverablePhotoCoverage: context.deliverablePhotoCoverage,
     descriptorCoverage: context.descriptorCoverage,
     evidenceGapCount: context.evidenceGapCount,
+    inactiveItemCount: context.inactiveItemCount,
+    inactiveStatusBreakdown: context.inactiveStatusBreakdown,
     itemCount: context.itemCount,
     onboardingMode: context.onboardingMode,
     photoCount: context.photoCount,
@@ -72,6 +75,9 @@ export function summarizeStyleContext(context: StyleContextRecord) {
     representativeItems: context.representativeItems,
     seededClosetPresent: context.seededClosetPresent,
     stylistDescriptorCoverage: context.stylistDescriptorCoverage,
+    totalCategoryBreakdown: context.totalCategoryBreakdown,
+    totalColorBreakdown: context.totalColorBreakdown,
+    totalItemCount: context.totalItemCount,
     typedProfileCoverage: context.typedProfileCoverage,
     usableProfileCoverage: context.usableProfileCoverage,
   };
