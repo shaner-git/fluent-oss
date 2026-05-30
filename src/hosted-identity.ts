@@ -3,7 +3,11 @@ import {
   type HostedCloudProvisioningSource,
   markFluentCloudAccountOnboarding,
 } from './cloud-invites';
-import { markFluentCloudAccountCreated, markFluentCloudInviteAccepted } from './cloud-onboarding';
+import {
+  applyFluentCloudOperatorAction,
+  markFluentCloudAccountCreated,
+  markFluentCloudInviteAccepted,
+} from './cloud-onboarding';
 import type { FluentDatabase } from './storage';
 
 const DEFAULT_PROFILE_ID = 'owner';
@@ -68,6 +72,7 @@ export async function ensureHostedUserProvisioned(
       tenantId: existing.tenantId,
       userId: user.id,
     });
+    await maybeMarkSelfServeAccountActive(db, user, options.cloudAccess?.accessSource);
     return {
       created: false,
       inviteId: null,
@@ -216,6 +221,7 @@ export async function ensureHostedUserProvisioned(
     tenantId,
     userId: user.id,
   });
+  await maybeMarkSelfServeAccountActive(db, user, options.cloudAccess?.accessSource);
 
   return {
     created: true,
@@ -224,6 +230,28 @@ export async function ensureHostedUserProvisioned(
     tenantId,
     waitlistEntryId: inviteAcceptance?.waitlistEntry.id ?? null,
   };
+}
+
+async function maybeMarkSelfServeAccountActive(
+  db: FluentDatabase,
+  user: HostedAuthUser,
+  accessSource: HostedCloudProvisioningSource['accessSource'] | null | undefined,
+): Promise<void> {
+  if (accessSource !== 'self_serve' || !user.email) {
+    return;
+  }
+
+  await applyFluentCloudOperatorAction(db, {
+    action: 'mark_active',
+    actorId: 'hosted-self-serve',
+    actorLabel: 'hosted-self-serve',
+    actorType: 'system',
+    email: user.email,
+    metadata: {
+      accessSource: 'self_serve',
+    },
+    note: 'Self-serve early-access account activated after hosted provisioning.',
+  });
 }
 
 export async function getHostedUserMembership(

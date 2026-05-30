@@ -432,10 +432,6 @@ function buildStylePurchaseFinalHostInstruction(input: {
   return `${notReadyPrefix}${stateAuthorityRule}Native purchase-analysis card data is ready. In MCP Apps-style hosts, especially Claude.ai MCP Apps-capable runs, call style_show_purchase_analysis_widget next with renderInput if a native card is not already mounted. Do not treat style_render_purchase_analysis as the final visual step in those hosts. In visualizer-only or plain text hosts, answer from this structured result.`;
 }
 
-function buildClaudeWidgetDomain(origin: string) {
-  return `${createHash('sha256').update(origin).digest('hex').slice(0, 32)}.claudemcpcontent.com`;
-}
-
 function buildWidgetMeta(description: string, origin: string) {
   const resourceDomains = [origin];
   return {
@@ -451,7 +447,7 @@ function buildWidgetMeta(description: string, origin: string) {
         connectDomains: [],
         resourceDomains,
       },
-      domain: buildClaudeWidgetDomain(origin),
+      domain: origin,
       prefersBorder: true,
     },
   } as const;
@@ -635,7 +631,7 @@ function buildStylePurchasePreparation(input: {
               {
                 tool: 'style_prepare_purchase_analysis',
                 reason:
-                  'Re-run purchase preparation with the enriched candidate returned by style_extract_purchase_page_evidence so the hostVisionTask includes candidate image references before requesting the visual bundle.',
+                  'Re-run purchase preparation with the enriched candidate returned by style_extract_purchase_page_evidence so the hostVisionTask includes candidate image references before requesting the purchase vision packet.',
                 input: { candidate: 'use candidate from style_extract_purchase_page_evidence' },
               },
               {
@@ -3028,7 +3024,7 @@ export function registerStyleMcpSurface(
           resourceUri: STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
         },
         'openai/outputTemplate': STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
-        'openai/toolInvocation/invoked': 'Style setup payload returned; render proof still required.',
+        'openai/toolInvocation/invoked': 'Style setup calibration ready.',
         'openai/toolInvocation/invoking': 'Requesting Style setup payload…',
         'openai/widgetAccessible': true,
       },
@@ -3506,8 +3502,8 @@ export function registerStyleMcpSurface(
     {
       title: 'Prepare Style Purchase Analysis',
       description: allowPurchasePageExtraction
-        ? 'Required first step for every Style purchase decision, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what product-page or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. If only a product URL was provided and no candidate image references exist yet, use style_extract_purchase_page_evidence next. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.'
-        : 'Required first step for every Style purchase decision, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what item details or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. In ChatGPT, product links should be supported by user-provided item details plus a direct product image or uploaded photo before the final buy/wait/skip call. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.',
+        ? 'Use for Style purchase-analysis requests, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what product-page or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. If only a product URL was provided and no candidate image references exist yet, use style_extract_purchase_page_evidence next. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.'
+        : 'Use for Style purchase-analysis requests, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what item details or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. In ChatGPT, product links should be supported by user-provided item details plus a direct product image or uploaded photo before the final buy/wait/skip call. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.',
       inputSchema: {
         candidate: stylePurchaseCandidateInputSchema,
         evidence: z.any().optional(),
@@ -3564,7 +3560,7 @@ export function registerStyleMcpSurface(
     {
       title: 'Style Get Purchase Vision Packet',
       description:
-        'Primary Fluent Style purchase-analysis visual step. Use this instead of style_get_visual_bundle for staged purchase decisions; it returns model-visible inline candidate and closet-comparator images plus compact comparison context. Use after style_prepare_purchase_analysis for image-bearing candidates, inspect the returned image content, then call style_submit_purchase_visual_observations before rendering the widget or giving the final buy/wait/skip recommendation.',
+        'Primary Fluent Style purchase-analysis visual step for staged purchase decisions. Returns model-visible inline candidate and closet-comparator images plus compact comparison context. Use after style_prepare_purchase_analysis for image-bearing candidates, inspect the returned image content, then call style_submit_purchase_visual_observations before rendering the widget or giving the final buy/wait/skip recommendation.',
       inputSchema: {
         candidate: stylePurchaseCandidateInputSchema,
         comparator_item_ids: z.array(z.string()).optional(),
@@ -3574,10 +3570,12 @@ export function registerStyleMcpSurface(
     },
     async ({ candidate, comparator_item_ids, max_inline_images }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
-      const enrichedCandidate = await enrichStyleVisualBundleCandidateFromProductPage({
-        candidate,
-        maxImages: 8,
-      });
+      const enrichedCandidate = allowPurchasePageExtraction
+        ? await enrichStyleVisualBundleCandidateFromProductPage({
+            candidate,
+            maxImages: 8,
+          })
+        : candidate;
       const analysis = await style.analyzePurchase({ candidate: enrichedCandidate });
       const preparation = buildStylePurchasePreparation({
         allowPurchasePageExtraction,
@@ -3621,9 +3619,9 @@ export function registerStyleMcpSurface(
     withAppsSecurity({
       title: 'Style Submit Purchase Visual Observations',
       description:
-        'Submit concrete host-model observations from an inspected candidate product image plus the host agent stylist_judgment. The judgment is the agent-owned buy/skip/wait call; Fluent validates evidence and returns renderInput for the native v22 purchase-analysis card. In MCP Apps hosts, the next required presentation step is style_show_purchase_analysis_widget with the returned renderInput; do not stop with only a prose answer after this succeeds. Claude visualizer-only, plain MCP, or text-first clients may use style_render_purchase_analysis instead.',
+        'Submit concrete host-model observations from an inspected candidate product image plus the host agent stylist_judgment. The judgment is the agent-owned buy/skip/wait call; Fluent validates the evidence, stores a short-lived private receipt for the current purchase analysis, and returns renderInput for the native v22 purchase-analysis card. When the host supports MCP Apps and the user request calls for the rich card, pass the returned renderInput to style_show_purchase_analysis_widget. Claude visualizer-only, plain MCP, or text-first clients may use style_render_purchase_analysis instead.',
       inputSchema: styleSubmitPurchaseVisualObservationsInputSchema.shape,
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false, readOnlyHint: false },
       _meta: {},
     }, styleReadSecuritySchemes),
     async (args) => {
@@ -3951,7 +3949,7 @@ export function registerStyleMcpSurface(
     withAppsSecurity({
       title: 'Show Purchase Analysis Widget',
       description:
-        'Open the rich Fluent Style purchase-analysis widget in ChatGPT / MCP Apps-style hosts only after style_prepare_purchase_analysis has run and the host has actually inspected candidate images. Pass stylist_judgment with the host agent buy/skip/wait call so the card renders the agent-owned stylist decision. Do not call this with only a product URL, text metadata, image references, or uninspected visual-bundle assets. Requires visual_evidence with candidateInspected true and concrete candidateObservations.',
+        'Open the rich Fluent Style purchase-analysis widget in ChatGPT / MCP Apps-style hosts only after style_prepare_purchase_analysis has run and the host has actually inspected candidate images. Pass stylist_judgment with the host agent buy/skip/wait call so the card renders the agent-owned stylist decision. Do not call this with only a product URL, text metadata, image references, or uninspected visual evidence. Requires visual_evidence with candidateInspected true and concrete candidateObservations.',
       inputSchema: {
         candidate: stylePurchaseCandidateInputSchema,
         visual_evidence: stylePurchaseVisualEvidenceInputSchema,
@@ -4123,13 +4121,8 @@ export function registerStyleMcpSurface(
     },
   );
 
-  server.registerTool(
-    'style_get_visual_bundle',
-    {
-      title: 'Get Style Visual Bundle',
-      description:
-        'Return a curated visual packet for broad stylist tasks outside the canonical staged purchase flow, including authenticated image routes, optional short-lived signed fallbacks, opt-in inline MCP image content, and compact closet comparator context. For purchase decisions, prefer style_get_purchase_vision_packet followed by style_submit_purchase_visual_observations.',
-      inputSchema: {
+  const visualBundleInputSchema: Record<string, z.ZodTypeAny> = allowPurchasePageExtraction
+    ? {
         candidate: z.any().optional(),
         delivery_mode: styleVisualBundleDeliveryModeSchema,
         include_inline_images: z.boolean().optional(),
@@ -4137,19 +4130,43 @@ export function registerStyleMcpSurface(
         item_ids: z.array(z.string()).optional(),
         max_inline_images: z.number().int().positive().max(STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES).optional(),
         max_images: z.number().int().positive().max(12).optional(),
-      },
+      }
+    : {
+        include_inline_images: z.boolean().optional(),
+        include_comparators: z.boolean().optional(),
+      };
+  type StyleVisualBundleToolArgs = {
+    candidate?: unknown;
+    delivery_mode?: z.infer<typeof styleVisualBundleDeliveryModeSchema>;
+    include_inline_images?: boolean;
+    include_comparators?: boolean;
+    item_ids?: string[];
+    max_images?: number;
+    max_inline_images?: number;
+  };
+
+  server.registerTool(
+    'style_get_visual_bundle',
+    {
+      title: 'Get Style Visual Bundle',
+      description: allowPurchasePageExtraction
+        ? 'Return a curated visual packet for broad stylist tasks outside the canonical staged purchase flow, including authenticated image routes, optional short-lived signed fallbacks, opt-in inline MCP image content, and compact closet comparator context. This tool does not extract arbitrary product pages; for product-link purchase decisions, use style_extract_purchase_page_evidence where exposed, then style_get_purchase_vision_packet followed by style_submit_purchase_visual_observations.'
+        : 'Return a curated visual packet for broad stylist tasks outside the canonical staged purchase flow, including authenticated image routes, optional short-lived signed fallbacks, opt-in inline MCP image content, and compact closet comparator context. This full-MCP helper is not part of the curated ChatGPT submitted profile. It does not extract arbitrary product pages; purchase decisions should use style_prepare_purchase_analysis, direct product images or uploaded photos, style_get_purchase_vision_packet, and style_submit_purchase_visual_observations.',
+      inputSchema: visualBundleInputSchema,
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    async ({ candidate, delivery_mode, include_inline_images, include_comparators, item_ids, max_images, max_inline_images }) => {
+    async ({
+      candidate,
+      delivery_mode,
+      include_inline_images,
+      include_comparators,
+      item_ids,
+      max_images,
+      max_inline_images,
+    }: StyleVisualBundleToolArgs) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
-      const enrichedCandidate = include_inline_images
-        ? await enrichStyleVisualBundleCandidateFromProductPage({
-            candidate,
-            maxImages: max_images,
-          })
-        : candidate;
       const bundle = await style.getVisualBundle({
-        candidate: enrichedCandidate,
+        candidate,
         deliveryMode: delivery_mode,
         includeComparators: include_comparators,
         itemIds: item_ids,

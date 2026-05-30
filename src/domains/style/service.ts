@@ -25,6 +25,7 @@ import {
   normalizeStylePhotoView,
   normalizeStylePurchaseCandidate,
   parseJsonLike,
+  projectStyleCalibrationSignalsToProfile,
   safeParseJson,
   stringifyJson,
 } from './helpers';
@@ -463,6 +464,7 @@ export class StyleService {
       profileCount,
       purchaseEvalReady: isStylePurchaseEvalReady(profile.raw, {
         itemCount: items.length,
+        itemProfileCount: profileCount,
         primaryPhotoCount,
       }),
       representativeItems: pickRepresentativeItems(items),
@@ -531,16 +533,28 @@ export class StyleService {
         }),
       ),
     );
+    const inferredPracticalConfirmed = calibrationSignals.some(
+      (signal) =>
+        (signal.status === 'confirmed' || signal.status === 'corrected') &&
+        signal.source === 'user_confirmed' &&
+        ['budget', 'fit', 'hard_avoid', 'occasion'].includes(signal.kind),
+    );
     const inferredTasteConfirmed = calibrationSignals.some(
-      (signal) => (signal.status === 'confirmed' || signal.status === 'corrected') && signal.source === 'user_confirmed',
+      (signal) =>
+        (signal.status === 'confirmed' || signal.status === 'corrected') &&
+        signal.source === 'user_confirmed' &&
+        ['aesthetic', 'color', 'formality', 'silhouette'].includes(signal.kind),
     );
     const beforeCalibration = buildStyleOnboardingCalibration({ profile: before, items });
-    const merged = mergeStyleProfile(before.raw, {
+    const merged = projectStyleCalibrationSignalsToProfile(mergeStyleProfile(before.raw, {
       ...profilePatch,
       calibrationSignals,
       itemCalibration,
-      tasteCalibrationConfirmed: inferredTasteConfirmed,
-    });
+      practicalCalibrationConfirmed:
+        profilePatch.practicalCalibrationConfirmed ?? (before.raw.practicalCalibrationConfirmed || inferredPracticalConfirmed),
+      tasteCalibrationConfirmed:
+        profilePatch.tasteCalibrationConfirmed ?? (before.raw.tasteCalibrationConfirmed || inferredTasteConfirmed),
+    }));
 
     await this.repository.upsertProfile(JSON.stringify(merged));
     const after = await this.getProfile();
@@ -1711,7 +1725,9 @@ export class StyleService {
         evidenceNotes.push('submitted visual observations were not accepted as final grounding because the candidate has no image reference');
       }
     } else {
-      evidenceNotes.push('candidate image reference is present, but purchase analysis has not inspected pixels; use style_get_visual_bundle and direct image reading before making color or material claims');
+      evidenceNotes.push(
+        'candidate image reference is present, but purchase analysis has not inspected pixels; use style_get_purchase_vision_packet and direct image reading before making color or material claims. Reserve style_get_visual_bundle for broad closet visual context outside the staged purchase path.',
+      );
     }
     for (const observation of visualEvidence.candidateObservations.slice(0, 4)) {
       evidenceNotes.push(`candidate visual observation: ${observation}`);
@@ -2036,10 +2052,10 @@ export class StyleService {
     const fetchableAssetCount = assets.filter((asset) => asset.fallbackSignedOriginalUrl || asset.authenticatedOriginalUrl || asset.sourceUrl).length;
     const missingCandidateImage = Boolean(analysis) && !assets.some((asset) => asset.role === 'candidate');
     const visualInspectionState =
-      assets.length === 0
-        ? 'no_images_available'
-        : missingCandidateImage
-          ? 'missing_candidate_image'
+      missingCandidateImage
+        ? 'missing_candidate_image'
+        : assets.length === 0
+          ? 'no_images_available'
           : 'image_references_returned';
 
     return {
@@ -2052,11 +2068,11 @@ export class StyleService {
         assetCount: assets.length,
         fetchableAssetCount,
         note:
-          assets.length === 0
-            ? 'No image references were returned; answer from metadata only.'
-            : missingCandidateImage
-              ? 'Comparator image references plus compact closet item and comparator context were returned, but no candidate image was available. Ask for or use a direct product image before making color, texture, condition, fit, or fine visual-overlap claims about the candidate.'
-            : 'This bundle returns image references plus compact closet item and comparator context. Use host vision on the images before making color, texture, condition, or visual-overlap claims; a separate style_get_item call is only needed for correction, provenance, or unusually deep item detail.',
+          missingCandidateImage
+            ? 'Comparator image references plus compact closet item and comparator context may be returned, but no candidate image was available. Ask for or use a direct product image before making color, texture, condition, fit, or fine visual-overlap claims about the candidate.'
+            : assets.length === 0
+              ? 'No image references were returned; answer from metadata only.'
+              : 'This bundle returns image references plus compact closet item and comparator context. Use host vision on the images before making color, texture, condition, or visual-overlap claims; a separate style_get_item call is only needed for correction, provenance, or unusually deep item detail.',
         state: visualInspectionState,
       },
     };

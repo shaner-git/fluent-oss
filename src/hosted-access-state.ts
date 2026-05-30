@@ -9,7 +9,12 @@ import {
 } from './cloud-early-access';
 import { getFluentCloudOnboardingRecord } from './cloud-onboarding';
 import { evaluateSubscriptionLifecycle, type FluentSubscriptionLifecycleAccess } from './subscription-lifecycle';
-import { parseAllowedEmails, type CloudRuntimeEnv } from './config';
+import {
+  parseAllowedEmails,
+  parseSelfServeAllowedDomains,
+  parseSelfServeAllowedEmails,
+  type CloudRuntimeEnv,
+} from './config';
 import type { FluentDatabase } from './storage';
 
 type HostedAccessInput = {
@@ -59,7 +64,13 @@ export async function resolveHostedCloudAccess(
   db: FluentDatabase,
   env: Pick<
     CloudRuntimeEnv,
-    'ALLOW_ALL_CLOUD_EMAILS_FOR_DEV' | 'ALLOWED_EMAIL' | 'ALLOWED_EMAILS' | 'FLUENT_CLOUD_ACCESS_MODE' | 'FLUENT_CLOUD_ENVIRONMENT'
+    | 'ALLOW_ALL_CLOUD_EMAILS_FOR_DEV'
+    | 'ALLOWED_EMAIL'
+    | 'ALLOWED_EMAILS'
+    | 'FLUENT_CLOUD_ACCESS_MODE'
+    | 'FLUENT_CLOUD_ENVIRONMENT'
+    | 'FLUENT_CLOUD_SELF_SERVE_DOMAINS'
+    | 'FLUENT_CLOUD_SELF_SERVE_EMAILS'
   >,
   input: HostedAccessInput,
 ): Promise<HostedCloudAccessDecision> {
@@ -70,6 +81,8 @@ export async function resolveHostedCloudAccess(
     allowedEmails: parseAllowedEmails(env as CloudRuntimeEnv),
     deploymentEnvironment: env.FLUENT_CLOUD_ENVIRONMENT,
     email,
+    selfServeAllowedDomains: parseSelfServeAllowedDomains(env),
+    selfServeAllowedEmails: parseSelfServeAllowedEmails(env),
   });
   const onboardingRecord = await getFluentCloudOnboardingRecord(db, {
     email,
@@ -90,6 +103,16 @@ export async function resolveHostedCloudAccess(
     membership?.tenant_status ??
       readMetadataValue(membership?.tenant_metadata_json ?? null, ['cloudAccessState', 'fluentCloudAccessState', 'fluent.cloudAccessState']),
   );
+  const evaluateInviteAccess = () => evaluateHostedCloudInviteAccess(db, {
+    accessMode: env.FLUENT_CLOUD_ACCESS_MODE,
+    allowAllCloudEmailsForDev: env.ALLOW_ALL_CLOUD_EMAILS_FOR_DEV,
+    allowedEmails: parseAllowedEmails(env as CloudRuntimeEnv),
+    deploymentEnvironment: env.FLUENT_CLOUD_ENVIRONMENT,
+    email,
+    selfServeAllowedDomains: parseSelfServeAllowedDomains(env),
+    selfServeAllowedEmails: parseSelfServeAllowedEmails(env),
+    userId: input.userId ?? null,
+  });
 
   if (onboardingRecord?.currentState === 'deleted') {
     return deny('account_deleted', membership, onboardingRecord);
@@ -103,7 +126,7 @@ export async function resolveHostedCloudAccess(
   if (membershipState === 'account_disabled' || tenantState === 'account_disabled' || identityState === 'account_disabled') {
     return deny('account_disabled', membership);
   }
-  if (allowlist.denialReason === 'missing_allowlist') {
+  if (allowlist.denialReason === 'missing_allowlist' && onboardingRecord?.accountKind !== 'reviewer_demo') {
     return deny('temporarily_unavailable', membership);
   }
   if (membership && membershipState === 'active') {
@@ -122,6 +145,19 @@ export async function resolveHostedCloudAccess(
   if (onboardingRecord) {
     const lifecycle = evaluateSubscriptionLifecycle(onboardingRecord);
     if (onboardingRecord.currentState === 'waitlisted') {
+      const inviteDecision = await evaluateInviteAccess();
+      if (inviteDecision.allowed && inviteDecision.provisioningSource?.accessSource === 'self_serve') {
+        return {
+          allowed: true,
+          code: null,
+          lifecycleAccessMode: 'full_access',
+          lifecycleMessage: null,
+          needsProvisioning: true,
+          profileId: membership?.profile_id ?? null,
+          provisioningSource: inviteDecision.provisioningSource,
+          tenantId: membership?.tenant_id ?? onboardingRecord.tenantId ?? inviteDecision.accountTenantId,
+        };
+      }
       return deny('waitlisted_not_invited', membership, onboardingRecord);
     }
     if (onboardingRecord.currentState === 'invited') {
@@ -154,14 +190,7 @@ export async function resolveHostedCloudAccess(
     };
   }
 
-  const inviteDecision = await evaluateHostedCloudInviteAccess(db, {
-    accessMode: env.FLUENT_CLOUD_ACCESS_MODE,
-    allowAllCloudEmailsForDev: env.ALLOW_ALL_CLOUD_EMAILS_FOR_DEV,
-    allowedEmails: parseAllowedEmails(env as CloudRuntimeEnv),
-    deploymentEnvironment: env.FLUENT_CLOUD_ENVIRONMENT,
-    email,
-    userId: input.userId ?? null,
-  });
+  const inviteDecision = await evaluateInviteAccess();
   if (inviteDecision.allowed) {
     return {
       allowed: true,

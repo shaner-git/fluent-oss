@@ -10,6 +10,7 @@ import {
   summarizeMealPlan,
   summarizeMealPreferences,
 } from '../src/domains/meals/service';
+import { deriveMealsPlanningPreferenceProfile, shouldAvoidLeftovers } from '../src/domains/meals/preference-model';
 
 const tempRoots: string[] = [];
 const TEST_ACTOR_EMAIL = 'planner@example.com';
@@ -31,6 +32,12 @@ async function main() {
     await rejectsInvalidCalendarContextPayloads();
     await appliesCalendarAwareSlotConstraints();
     await surfacesOptionalCalendarWarnings();
+    await includesTextFirstPlanningBriefAndReview();
+    await classifiesHouseholdSizesForPlanning();
+    await appliesConfirmedPreferenceSignalsToPlanning();
+    await appliesStructuredOnboardingSignalsToPlanning();
+    await appliesMealParticipationSignalsToServingTargets();
+    await enforcesDietaryConstraintsDuringPlanning();
     await scalesRepeatedWeekdayMealPrepToDailyServes();
     await appliesTrainingAwarePlanningBiases();
     await acceptsCandidateAfterUnrelatedHistoryChanges();
@@ -46,6 +53,614 @@ async function main() {
         rmSync(root, { force: true, recursive: true });
       }
     }
+  }
+}
+
+async function classifiesHouseholdSizesForPlanning() {
+  const examples = [
+    ['solo', 'just me, single serving, fresh each night', 'solo', 1],
+    ['two', 'couple dinners for two adults', 'two', 2],
+    ['three', 'family of 3 with school-night dinners', 'three', 3],
+    ['multi', 'household serves 4 with batch-friendly weeknight dinners', 'multi', 4],
+  ] as const;
+
+  for (const [name, shape, segment, serveTarget] of examples) {
+    const profile = deriveMealsPlanningPreferenceProfile({
+      household: { shape },
+      planning: { meal_routine: shape },
+    });
+
+    assert.equal(profile.householdSizeSegment, segment, name);
+    assert.equal(profile.householdServeTarget, serveTarget, name);
+  }
+
+  const soloProfile = deriveMealsPlanningPreferenceProfile({
+    household: { shape: 'solo' },
+    planning: { meal_routine: 'fresh each night' },
+  });
+  assert.equal(shouldAvoidLeftovers(soloProfile), true);
+
+  const ambiguousFamilyProfile = deriveMealsPlanningPreferenceProfile({
+    household: { shape: 'family dinners with kids' },
+    planning: { meal_routine: 'family dinners with kids' },
+  });
+  assert.equal(ambiguousFamilyProfile.householdSizeSegment, 'unknown');
+  assert.equal(ambiguousFamilyProfile.householdServeTarget, null);
+}
+
+async function appliesConfirmedPreferenceSignalsToPlanning() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const provenance = {
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
+    confidence: 1,
+    scopes: ['meals:write'],
+    sessionId: 'planner-brain-preference-signal-test',
+    sourceAgent: 'codex-test',
+    sourceSkill: 'fluent-meals',
+    sourceType: 'test',
+  };
+
+  try {
+    await service.recordCalibrationResponse({
+      response: {
+        preferencePatch: {
+          budgetSensitivity: 'budget conscious',
+          cleanupTolerance: 'low cleanup on weeknights',
+          cookingCadence: '1 weeknight dinner',
+          favoriteFoods: ['chicken'],
+          groceryExpectation: 'pantry-aware grocery lists',
+          householdShape: 'family of 3',
+          leftoverPreference: 'planned leftovers for lunch',
+          mealRoutine: 'family of 3 with batch-friendly weeknight dinners',
+          preferredCuisines: ['mediterranean'],
+          weeknightTimeLimitMinutes: 30,
+        },
+      },
+      provenance,
+    });
+
+    await service.createRecipe({
+      recipe: {
+        id: 'planner-brain-preference-mediterranean-chicken',
+        name: 'Mediterranean Chicken Bowls',
+        meal_type: 'dinner',
+        servings: 2,
+        total_time: 30,
+        active_time: 20,
+        cost_per_serving_cad: 5.5,
+        macros: {
+          calories: 580,
+          fiber_g: 6,
+          protein_g: 38,
+          sodium_mg: 520,
+        },
+        family_fit: true,
+        batch_fit: true,
+        cleanup_level: 'low',
+        tags: ['mediterranean', 'weeknight', 'leftovers'],
+        ingredients: [{ item: 'chicken', quantity: 500, unit: 'g', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Cook the bowls.' }],
+      },
+      provenance,
+    });
+    await service.createRecipe({
+      recipe: {
+        id: 'planner-brain-preference-expensive-long-dinner',
+        name: 'Expensive Long Steak Dinner',
+        meal_type: 'dinner',
+        servings: 3,
+        total_time: 85,
+        active_time: 55,
+        cost_per_serving_cad: 18,
+        macros: {
+          calories: 820,
+          fiber_g: 2,
+          protein_g: 42,
+          sodium_mg: 680,
+        },
+        cleanup_level: 'high',
+        tags: ['special occasion'],
+        ingredients: [{ item: 'steak', quantity: 3, unit: 'count', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Cook the steak dinner.' }],
+      },
+      provenance,
+    });
+
+    const generation = await service.generatePlan({
+      weekStart: '2026-06-08',
+      overrides: {
+        breakfastCount: 0,
+        lunchCount: 0,
+        familyDinnerCount: 1,
+        snackCount: 0,
+      },
+      provenance,
+    });
+    const candidate = generation.candidates[0];
+
+    assert.ok(candidate);
+    assert.equal(candidate.entries.length, 1);
+    assert.equal(candidate.entries[0]?.recipeId, 'planner-brain-preference-mediterranean-chicken');
+    assert.equal(candidate.entries[0]?.serves, 3);
+    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.householdSizeSegment, 'three');
+    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.householdServeTarget, 3);
+    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.weeknightTimeLimitMinutes, 30);
+    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.preferredCuisineCount, 1);
+    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.targetWeeknightDinnerCount, 1);
+    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.likedFoodCount, 1);
+    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.budgetSensitive, true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function appliesStructuredOnboardingSignalsToPlanning() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const provenance = {
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
+    confidence: 1,
+    scopes: ['meals:write'],
+    sessionId: 'planner-brain-structured-onboarding-test',
+    sourceAgent: 'codex-test',
+    sourceSkill: 'fluent-meals',
+    sourceType: 'test',
+  };
+
+  try {
+    await service.recordCalibrationResponse({
+      response: {
+        preferencePatch: {
+          householdAdultCount: 2,
+          householdChildCount: 2,
+          householdChildrenEatSameMeals: true,
+          householdDefaultServeTarget: 4,
+          householdLeftoverTargetServings: 2,
+          householdSizeSegment: 'multi',
+          planningFamilyDinnerCount: 2,
+          planningTargetBreakfastCount: 0,
+          planningTargetDinnerCount: 2,
+          planningTargetLunchCount: 1,
+          planningTargetSnackCount: 0,
+          shoppingPantryCheckPolicy: 'check pantry before buying duplicates',
+          shoppingPreferredStores: ['No Frills'],
+          shoppingSubstitutionTolerance: 'flexible store-brand substitutions',
+          weeknightTimeLimitMinutes: 35,
+        },
+      },
+      provenance,
+    });
+
+    for (const recipe of [
+      {
+        id: 'planner-brain-structured-family-chili',
+        name: 'Family Bean Chili',
+        meal_type: 'dinner',
+        servings: 4,
+        total_time: 35,
+        active_time: 20,
+        cost_per_serving_cad: 3.5,
+        macros: {
+          calories: 520,
+          fiber_g: 12,
+          protein_g: 20,
+          sodium_mg: 640,
+        },
+        tags: ['family', 'weeknight'],
+        ingredients: [{ item: 'beans', quantity: 2, unit: 'can', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Cook the chili.' }],
+      },
+      {
+        id: 'planner-brain-structured-chicken-rice',
+        name: 'Chicken Rice Tray',
+        meal_type: 'dinner',
+        servings: 4,
+        total_time: 30,
+        active_time: 15,
+        cost_per_serving_cad: 4.25,
+        macros: {
+          calories: 610,
+          fiber_g: 4,
+          protein_g: 42,
+          sodium_mg: 580,
+        },
+        tags: ['family', 'quick'],
+        ingredients: [{ item: 'chicken', quantity: 600, unit: 'g', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Bake the tray.' }],
+      },
+      {
+        id: 'planner-brain-structured-leftover-lunch',
+        name: 'Lunch Grain Bowl',
+        meal_type: 'lunch',
+        servings: 2,
+        total_time: 10,
+        active_time: 10,
+        cost_per_serving_cad: 2.75,
+        macros: {
+          calories: 430,
+          fiber_g: 8,
+          protein_g: 14,
+          sodium_mg: 420,
+        },
+        tags: ['lunch'],
+        ingredients: [{ item: 'farro', quantity: 1, unit: 'cup', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Assemble the bowl.' }],
+      },
+    ]) {
+      await service.createRecipe({ recipe, provenance });
+    }
+
+    const generation = await service.generatePlan({
+      weekStart: '2026-06-15',
+      overrides: {
+        maxTrialMeals: 0,
+      },
+      provenance,
+    });
+    const candidate = generation.candidates[0];
+    assert.ok(candidate);
+
+    const dinnerEntries = candidate.entries.filter((entry) => entry.mealType === 'dinner');
+    const lunchEntries = candidate.entries.filter((entry) => entry.mealType === 'lunch');
+    assert.equal(candidate.entries.length, 3);
+    assert.equal(dinnerEntries.length, 2);
+    assert.equal(lunchEntries.length, 1);
+    assert.equal(dinnerEntries.every((entry) => entry.serves === 4), true);
+    assert.equal(candidate.planReview.strengths.some((entry) => entry.includes('Includes 2 family dinner slot(s).')), true);
+
+    const signals = candidate.planningBrief.contextSignals.preferenceSignals;
+    assert.equal(signals.householdSizeSegment, 'multi');
+    assert.equal(signals.householdServeTarget, 4);
+    assert.equal(signals.targetBreakfastCount, 0);
+    assert.equal(signals.targetLunchCount, 1);
+    assert.equal(signals.targetWeeknightDinnerCount, 2);
+    assert.equal(signals.targetSnackCount, 0);
+    assert.equal(signals.targetFamilyDinnerCount, 2);
+    assert.equal(signals.pantryCheckPolicy, 'check pantry before buying duplicates');
+    assert.equal(signals.shoppingSubstitutionTolerance, 'flexible store-brand substitutions');
+    assert.equal(signals.preferredGroceryStoreCount, 1);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function appliesMealParticipationSignalsToServingTargets() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const provenance = {
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
+    confidence: 1,
+    scopes: ['meals:write'],
+    sessionId: 'planner-brain-meal-participation-test',
+    sourceAgent: 'codex-test',
+    sourceSkill: 'fluent-meals',
+    sourceType: 'test',
+  };
+
+  try {
+    await service.recordCalibrationResponse({
+      response: {
+        preferencePatch: {
+          householdAdultCount: 1,
+          householdChildCount: 3,
+          householdChildrenEatSameMeals: false,
+          householdDefaultServeTarget: 4,
+          householdMealParticipation: {
+            breakfast: ['adults'],
+            dinner: ['everyone'],
+            lunch: ['children'],
+          },
+          householdSizeSegment: 'multi',
+          planningFamilyDinnerCount: 1,
+          planningTargetBreakfastCount: 2,
+          planningTargetDinnerCount: 1,
+          planningTargetLunchCount: 2,
+          planningTargetSnackCount: 0,
+        },
+      },
+      provenance,
+    });
+
+    for (const recipe of [
+      {
+        id: 'planner-brain-participation-oats',
+        name: 'Adult Prep Oats',
+        meal_type: 'breakfast',
+        servings: 6,
+        total_time: 5,
+        active_time: 5,
+        cost_per_serving_cad: 1.75,
+        macros: {
+          calories: 360,
+          fiber_g: 8,
+          protein_g: 14,
+          sodium_mg: 120,
+        },
+        tags: ['repeatable', 'breakfast'],
+        ingredients: [{ item: 'oats', quantity: 1, unit: 'cup', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Prepare oats.' }],
+      },
+      {
+        id: 'planner-brain-participation-kid-lunch',
+        name: 'Kid Lunch Box',
+        meal_type: 'lunch',
+        servings: 6,
+        total_time: 10,
+        active_time: 10,
+        cost_per_serving_cad: 2.25,
+        macros: {
+          calories: 420,
+          fiber_g: 5,
+          protein_g: 18,
+          sodium_mg: 390,
+        },
+        tags: ['lunch', 'kids'],
+        ingredients: [{ item: 'pita', quantity: 3, unit: 'count', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Pack lunches.' }],
+      },
+      {
+        id: 'planner-brain-participation-family-pasta',
+        name: 'Family Pasta',
+        meal_type: 'dinner',
+        servings: 2,
+        total_time: 25,
+        active_time: 15,
+        cost_per_serving_cad: 3.5,
+        macros: {
+          calories: 560,
+          fiber_g: 6,
+          protein_g: 24,
+          sodium_mg: 520,
+        },
+        tags: ['family', 'weeknight'],
+        ingredients: [{ item: 'pasta', quantity: 450, unit: 'g', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Cook pasta.' }],
+      },
+    ]) {
+      await service.createRecipe({ recipe, provenance });
+    }
+
+    const generation = await service.generatePlan({
+      weekStart: '2026-06-22',
+      overrides: {
+        maxTrialMeals: 0,
+      },
+      provenance,
+    });
+    const candidate = generation.candidates[0];
+    assert.ok(candidate);
+
+    const breakfastEntries = candidate.entries.filter((entry) => entry.mealType === 'breakfast');
+    const lunchEntries = candidate.entries.filter((entry) => entry.mealType === 'lunch');
+    const dinnerEntries = candidate.entries.filter((entry) => entry.mealType === 'dinner');
+    assert.equal(candidate.entries.length, 5);
+    assert.equal(breakfastEntries.length, 2);
+    assert.equal(lunchEntries.length, 2);
+    assert.equal(dinnerEntries.length, 1);
+    assert.equal(breakfastEntries.every((entry) => entry.serves === 1), true);
+    assert.equal(lunchEntries.every((entry) => entry.serves === 3), true);
+    assert.equal(dinnerEntries.every((entry) => entry.serves === 4), true);
+
+    const signals = candidate.planningBrief.contextSignals.preferenceSignals;
+    assert.equal(signals.householdAdultCount, 1);
+    assert.equal(signals.householdChildCount, 3);
+    assert.equal(signals.householdChildrenEatSameMeals, false);
+    assert.deepEqual(signals.householdMealParticipationTypes, ['breakfast', 'dinner', 'lunch']);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function enforcesDietaryConstraintsDuringPlanning() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const provenance = {
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
+    confidence: 1,
+    scopes: ['meals:write'],
+    sessionId: 'planner-brain-dietary-constraint-test',
+    sourceAgent: 'codex-test',
+    sourceSkill: 'fluent-meals',
+    sourceType: 'test',
+  };
+
+  try {
+    await service.recordCalibrationResponse({
+      response: {
+        preferencePatch: {
+          cookingCadence: '1 weeknight dinner',
+          dietaryConstraints: ['vegetarian', 'gluten-free', 'dairy-free'],
+          householdShape: 'solo',
+          mealRoutine: 'solo weeknight dinners',
+          weeknightTimeLimitMinutes: 30,
+        },
+      },
+      provenance,
+    });
+
+    await service.createRecipe({
+      recipe: {
+        id: 'planner-brain-dietary-chicken-pasta',
+        name: 'Chicken Pasta',
+        meal_type: 'dinner',
+        servings: 1,
+        total_time: 25,
+        active_time: 20,
+        cost_per_serving_cad: 6,
+        macros: {
+          calories: 620,
+          fiber_g: 4,
+          protein_g: 38,
+          sodium_mg: 520,
+        },
+        tags: ['vegetarian'],
+        ingredients: [
+          { item: 'chicken breast', quantity: 1, unit: 'count', ordering_policy: 'flexible_match' },
+          { item: 'wheat pasta', quantity: 100, unit: 'g', ordering_policy: 'flexible_match' },
+        ],
+        instructions: [{ step_number: 1, detail: 'Cook chicken pasta.' }],
+      },
+      provenance,
+    });
+    await service.createRecipe({
+      recipe: {
+        id: 'planner-brain-dietary-cheesy-rice',
+        name: 'Cheesy Rice Bowl',
+        meal_type: 'dinner',
+        servings: 1,
+        total_time: 25,
+        active_time: 15,
+        cost_per_serving_cad: 4,
+        macros: {
+          calories: 480,
+          fiber_g: 5,
+          protein_g: 18,
+          sodium_mg: 360,
+        },
+        tags: ['vegetarian', 'gluten-free'],
+        ingredients: [
+          { item: 'rice', quantity: 120, unit: 'g', ordering_policy: 'flexible_match' },
+          { item: 'cheese', quantity: 60, unit: 'g', ordering_policy: 'flexible_match' },
+        ],
+        instructions: [{ step_number: 1, detail: 'Cook cheesy rice.' }],
+      },
+      provenance,
+    });
+    await service.createRecipe({
+      recipe: {
+        id: 'planner-brain-dietary-tofu-rice',
+        name: 'Tofu Rice Bowl',
+        meal_type: 'dinner',
+        servings: 1,
+        total_time: 25,
+        active_time: 15,
+        cost_per_serving_cad: 4,
+        macros: {
+          calories: 460,
+          fiber_g: 7,
+          protein_g: 24,
+          sodium_mg: 320,
+        },
+        tags: ['vegetarian', 'gluten-free', 'dairy-free', 'weeknight'],
+        ingredients: [
+          { item: 'tofu', quantity: 150, unit: 'g', ordering_policy: 'flexible_match' },
+          { item: 'rice', quantity: 120, unit: 'g', ordering_policy: 'flexible_match' },
+        ],
+        instructions: [{ step_number: 1, detail: 'Cook tofu rice.' }],
+      },
+      provenance,
+    });
+
+    const generation = await service.generatePlan({
+      weekStart: '2026-06-15',
+      overrides: {
+        breakfastCount: 0,
+        lunchCount: 0,
+        dinnerCount: 1,
+        snackCount: 0,
+      },
+      provenance,
+    });
+    const candidate = generation.candidates[0];
+
+    assert.ok(candidate);
+    assert.equal(candidate.entries.length, 1);
+    assert.equal(candidate.entries[0]?.recipeId, 'planner-brain-dietary-tofu-rice');
+    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.dietaryConstraintCount, 3);
+    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.householdSizeSegment, 'solo');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function includesTextFirstPlanningBriefAndReview() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const provenance = {
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
+    confidence: 1,
+    scopes: ['meals:write'],
+    sessionId: 'planner-brain-brief-review-test',
+    sourceAgent: 'codex-test',
+    sourceSkill: 'fluent-meals',
+    sourceType: 'test',
+  };
+
+  try {
+    await service.createRecipe({
+      recipe: {
+        id: 'planner-brain-brief-only-dinner',
+        name: 'Planner Brain Brief Only Dinner',
+        meal_type: 'dinner',
+        servings: 2,
+        total_time: 30,
+        active_time: 20,
+        macros: {
+          calories: 520,
+          fiber_g: 6,
+          protein_g: 31,
+          sodium_mg: 420,
+        },
+        cost_per_serving_cad: 6,
+        ingredients: [{ item: 'chicken thighs', quantity: 500, unit: 'g', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Cook dinner.' }],
+      },
+      provenance,
+    });
+
+    const generation = await service.generatePlan({
+      weekStart: '2026-06-01',
+      overrides: {
+        breakfastCount: 0,
+        lunchCount: 0,
+        dinnerCount: 3,
+        snackCount: 0,
+      },
+      provenance,
+    });
+    const candidate = generation.candidates[0];
+
+    assert.ok(candidate);
+    assert.equal(candidate.planningBrief.weekStart, '2026-06-01');
+    assert.equal(candidate.planningBrief.recipeCoverage.requestedSlotCount, 3);
+    assert.equal(candidate.planningBrief.recipeCoverage.missingSlotCount, 2);
+    assert.deepEqual(candidate.planningBrief.recipeCoverage.thinMealTypes, ['dinner']);
+    assert.equal(candidate.planningBrief.recipeCatalog.gapCount > 0, true);
+    assert.equal(
+      candidate.planningBrief.recipeCatalog.gaps.some((gap) => gap.id === 'thin-weeknight-dinners'),
+      true,
+    );
+    assert.equal(candidate.planningBrief.readiness?.readinessLevel !== undefined, true);
+    assert.equal(candidate.planningBrief.confidenceBreakdown?.planningDecisionConfidence !== undefined, true);
+    assert.equal(
+      candidate.planningBrief.evidenceNotes.some((note) => /Recipe coverage is thin for: dinner/i.test(note)),
+      true,
+    );
+    assert.equal(candidate.planReview.headline.includes('planned meal slot'), true);
+    assert.equal(
+      candidate.planReview.watchouts.some((note) => note.includes('requested meal slot')),
+      true,
+    );
+    assert.equal(
+      candidate.planReview.suggestedSwaps.some((note) => /more dinner recipes/i.test(note)),
+      true,
+    );
+    assert.equal(
+      candidate.planReview.suggestedSwaps.some((note) => /active time, cleanup, and family-fit metadata/i.test(note)),
+      true,
+    );
+    assert.equal(
+      candidate.planReview.acceptanceChecklist.some((note) => /canonical weekly meal plan/i.test(note)),
+      true,
+    );
+  } finally {
+    runtime.sqliteDb.close();
   }
 }
 

@@ -20,7 +20,7 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
       'Call fluent_get_capabilities or fluent_get_next_actions when domain readiness or first tool choice is unclear.',
       'Treat readyDomains as the primary readiness signal.',
       'Use writes only when the user clearly intends to change Fluent state.',
-      'In ChatGPT or MCP Apps-style hosts, render tools may be the primary end-user surface for recipe, grocery, pantry, and purchase-analysis views.',
+      'In ChatGPT or MCP Apps-style hosts, render tools may be the primary end-user surface for Meals setup/onboarding, Grocery List v2, Style setup/calibration, and Style purchase analysis. Pantry Dashboard is legacy compatibility only and not for new flows.',
       'In Claude, OpenClaw, Codex, and generic MCP clients, prefer canonical data tools plus text unless the host explicitly supports compatible Fluent widgets.',
       'ToolDiscovery and this guidance are routing aids; MCP tools/list remains the authoritative registry for the current connection.',
     ],
@@ -109,19 +109,19 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
   'fluent://guidance/meals-shopping': {
     title: 'Meals Shopping Runtime Flow',
     summary:
-      'Use this for grocery-list views, pantry checks, substitutions, grocery intents, and order preflight.',
+      'Use this for grocery-list views, at-home checks, substitutions, grocery intents, and order preflight.',
     rules: [
       'Treat the grocery plan as planning state, not the final retailer order.',
       'For ordinary ChatGPT grocery-list asks, meals_render_grocery_list_v2 is the preferred rich surface when available.',
       'For Claude, Codex, OpenClaw, and generic clients, use meals_get_current_grocery_list and answer in text or host-native visuals.',
       'Use meals_get_grocery_plan only when the user asks for a specific week-scoped grocery plan or raw planning/audit data.',
       'Use meals_prepare_order before retailer execution or order handoff.',
-      'Use pantry sufficiency confirmations for low-risk pantry blockers; avoid them for fresh proteins, dairy, eggs, bread, or produce that needs quantity-aware review.',
+      'Use already-have confirmations for low-risk at-home item blockers; avoid them for fresh proteins, dairy, eggs, bread, or produce that needs quantity-aware review.',
     ],
     defaultFlow: [
       'For a user asking to see the grocery list, use the host-appropriate grocery-list read or render tool.',
       'For ordering or preflight, call meals_prepare_order against the relevant week_start.',
-      'If pantry uncertainty blocks preflight, resolve with meals_upsert_grocery_plan_action where appropriate.',
+      'If at-home item uncertainty blocks preflight, resolve with meals_upsert_grocery_plan_action where appropriate.',
       'If the user manually wants something added, use meals_upsert_grocery_intent.',
       'Keep retailer automation outside the public Meals MCP contract.',
     ],
@@ -137,7 +137,7 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     avoidByDefault: [
       'Do not jump to retailer/cart execution from the raw grocery plan.',
       'Do not mark items purchased unless the user or receipt/order evidence supports it.',
-      'Do not invent exact inventory quantities from pantry sufficiency confirmations.',
+      'Do not invent exact inventory quantities from already-have confirmations.',
     ],
   },
   'fluent://guidance/style-purchase-analysis': {

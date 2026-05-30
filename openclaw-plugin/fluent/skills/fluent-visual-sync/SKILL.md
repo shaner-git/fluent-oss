@@ -31,7 +31,7 @@ Do **not** use this skill when:
 - The user only wants a text summary.
 - The host is known to support Fluent MCP widget payloads directly, such as ChatGPT app surfaces where `meals_render_grocery_list_v2` is the correct path.
 - The current OpenClaw host does not expose an operator-confirmed visual surface.
-- The current turn needs raw grocery-plan detail, order reconciliation, or intent debugging more than the checklist UI itself.
+- The current turn needs raw grocery-plan detail, order reconciliation, or intent reconciliation more than the checklist UI itself.
 
 ## Core pattern: visualizer + sendPrompt round-trip
 

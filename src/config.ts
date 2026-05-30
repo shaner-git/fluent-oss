@@ -50,6 +50,8 @@ export interface CloudRuntimeEnv {
   COOKIE_ENCRYPTION_KEY?: string;
   FLUENT_CLOUD_ACCESS_MODE?: string;
   FLUENT_CLOUD_ENVIRONMENT?: string;
+  FLUENT_CLOUD_SELF_SERVE_DOMAINS?: string;
+  FLUENT_CLOUD_SELF_SERVE_EMAILS?: string;
   FLUENT_USER_EXPORT_SELF_SERVE_DISABLED?: string;
   FLUENT_ACCOUNT_API_TOKEN?: string;
   FLUENT_BILLING_PORTAL_URL?: string;
@@ -110,12 +112,29 @@ export function coreBindingsFromCloudEnv(env: CloudRuntimeEnv): CoreRuntimeBindi
 }
 
 export function parseAllowedEmails(env: CloudRuntimeEnv): string[] {
-  const values = [env.ALLOWED_EMAILS, env.ALLOWED_EMAIL]
+  return parseEmailList([env.ALLOWED_EMAILS, env.ALLOWED_EMAIL]);
+}
+
+export function parseSelfServeAllowedEmails(env: Pick<CloudRuntimeEnv, 'FLUENT_CLOUD_SELF_SERVE_EMAILS'>): string[] {
+  return parseEmailList([env.FLUENT_CLOUD_SELF_SERVE_EMAILS]);
+}
+
+export function parseSelfServeAllowedDomains(env: Pick<CloudRuntimeEnv, 'FLUENT_CLOUD_SELF_SERVE_DOMAINS'>): string[] {
+  const values = (env.FLUENT_CLOUD_SELF_SERVE_DOMAINS ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase().replace(/^@/, ''))
+    .filter(Boolean);
+
+  return Array.from(new Set(values));
+}
+
+function parseEmailList(values: Array<string | undefined>): string[] {
+  const parsed = values
     .flatMap((value) => (value ?? '').split(','))
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
 
-  return Array.from(new Set(values));
+  return Array.from(new Set(parsed));
 }
 
 function hasAccessOAuthConfig(env: CloudRuntimeEnv): boolean {

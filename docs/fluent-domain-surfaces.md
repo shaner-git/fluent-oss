@@ -6,7 +6,9 @@ Current contract version: `2026-05-17.fluent-core-v1.84`
 
 ## Meals
 
-Meals currently ships a broad canonical planning and execution surface, plus a narrow set of widget-style render tools for hosts that support MCP output templates.
+Meals currently ships a broad canonical planning and execution surface, plus active widget-style render tools for hosts that support MCP output templates. Retired render tools may remain in the frozen contract only for legacy compatibility.
+
+Contract-current tools describe source and frozen-contract truth. Hosted production may lag until `npm run verify:contract-parity` passes after deployment; check the dated surface reports before treating newly added tools as live hosted availability.
 
 <!-- current-tools:start -->
 ### Current Canonical Meals Tools
@@ -21,6 +23,8 @@ Meals currently ships a broad canonical planning and execution surface, plus a n
 - `meals_list_recipes`
 - `meals_get_onboarding_calibration`
 - `meals_record_calibration_response`
+- `meals_get_recipe_book`
+- `meals_apply_recipe_book_action`
 - `meals_get_preferences`
 - `meals_update_preferences`
 - `meals_upsert_plan`
@@ -49,16 +53,20 @@ Meals currently ships a broad canonical planning and execution surface, plus a n
 - `meals_delete_grocery_intent`
 - `meals_apply_pantry_dashboard_action`
 
-### Current Meals Render Tools
+### Current Active Meals Render Tools
 
 - `meals_render_recipe_card`
-- `meals_render_pantry_dashboard`
 - `meals_render_grocery_list_v2`
+
+### Legacy Meals Compatibility Render Tools
+
+- `meals_render_pantry_dashboard`
 <!-- current-tools:end -->
 
 Current host guidance:
 
-- ChatGPT/App-SDK-style hosts can use the current Meals render tools.
+- ChatGPT/App-SDK-style hosts can use Recipe Card and Grocery List v2. Pantry Dashboard is contract-current only for legacy compatibility and should not be routed for new flows.
+- Grocery delete tools are legacy/admin cleanup only. For restart or reset-style product flows, start a new meal or grocery plan instead of deleting plan state.
 - Claude visualizer-only runs should prefer `meals_get_recipe`, `meals_get_current_grocery_list`, and inventory reads, then render host-native visuals. Claude MCP Apps-capable runs may use proven Fluent `ui://` render resources such as Recipe Card and Grocery List v2. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail.
 - OpenClaw should use the plain-MCP Meals data tools rather than depending on Fluent widget rendering.
 
@@ -143,7 +151,7 @@ Style currently ships canonical closet and purchase-analysis data tools, plus on
 
 Current host guidance:
 
-- ChatGPT/MCP Apps-style hosts should use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations`, then `style_show_purchase_analysis_widget`; `style_render_purchase_analysis` returns structured data without opening a widget.
+- ChatGPT v2 should use `style_prepare_purchase_analysis`, direct product images or uploaded photos when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations`, then `style_show_purchase_analysis_widget`; full-MCP Apps-capable hosts may use `style_extract_purchase_page_evidence` where that tool is exposed before requesting the vision packet.
 - Claude MCP Apps-capable runs may use the same staged evidence flow and `style_show_purchase_analysis_widget` as the native Fluent purchase-analysis surface after real image inspection. Claude visualizer-only or text-only runs should answer from `style_render_purchase_analysis` or host-native visuals instead.
 - OpenClaw and generic MCP clients should use the plain-MCP Style data tools, `style_get_purchase_vision_packet` when the host can inspect images, and `style_render_purchase_analysis` after concrete `host_vision` evidence.
 
@@ -152,7 +160,9 @@ Preview only: none right now.
 
 ## Render Host Summary
 
-- Current ChatGPT/App-SDK-style render tools: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `style_show_setup_calibration_widget`, `style_show_purchase_analysis_widget`
+- Active contract-current MCP Apps render tools: `meals_render_recipe_card`, `meals_render_grocery_list_v2`, `style_show_setup_calibration_widget`, `style_show_purchase_analysis_widget`.
+- Legacy compatibility render tools, not active product surfaces: `meals_render_pantry_dashboard`
+- All contract-current render tools, including legacy compatibility: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `style_show_setup_calibration_widget`, `style_show_purchase_analysis_widget`.
 - Current Claude-specific render tools: none.
 - Current OpenClaw-specific render tools: none.
 - Plain-MCP fallbacks remain the canonical cross-host path for every domain.

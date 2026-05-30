@@ -29,9 +29,11 @@ main()
 async function main() {
   await preservesProfileMerges();
   await preservesRichStyleProfilePreferences();
+  await projectsCalibrationSignalsIntoStructuredProfileFields();
   await storesProvenanceOutsideCanonicalItemReads();
   await preservesPartialItemUpdatesWithoutDroppingExistingFields();
   await summarizesOnboardingReadyState();
+  await treatsMatureSeededClosetAsPurchaseReadyFromConfirmedSignals();
   await tracksEvidenceGapCoverage();
   await treatsLegacyProfilesAsUsableEvidence();
   await filtersActionableEvidenceGaps();
@@ -390,6 +392,140 @@ async function summarizesOnboardingReadyState() {
     assert.equal(context.profile.raw.onboardingPath, 'seeded');
     assert.equal(context.profile.raw.practicalCalibrationConfirmed, true);
     assert.equal(context.profile.raw.tasteCalibrationConfirmed, true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function projectsCalibrationSignalsIntoStructuredProfileFields() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await service.recordCalibrationResponse({
+      provenance,
+      signals: [
+        {
+          kind: 'hard_avoid',
+          source: 'user_confirmed',
+          status: 'confirmed',
+          value: 'synthetic shine',
+        },
+        {
+          kind: 'fit',
+          source: 'user_confirmed',
+          status: 'confirmed',
+          value: 'relaxed regular fit',
+        },
+        {
+          kind: 'color',
+          source: 'user_confirmed',
+          status: 'confirmed',
+          value: 'black',
+        },
+        {
+          correctedValue: 'regular straight',
+          kind: 'silhouette',
+          source: 'user_confirmed',
+          status: 'corrected',
+          value: 'slim',
+        },
+      ],
+    });
+
+    const profile = await service.getProfile();
+    assert.equal(profile.raw.practicalCalibrationConfirmed, true);
+    assert.equal(profile.raw.tasteCalibrationConfirmed, true);
+    assert.equal(profile.raw.hardAvoids.includes('synthetic shine'), true);
+    assert.equal(profile.raw.fitNotes.includes('relaxed regular fit'), true);
+    assert.equal(profile.raw.sizingPreferences.includes('relaxed regular fit'), true);
+    assert.equal(profile.raw.colorDirections.includes('black'), true);
+    assert.equal(profile.raw.colorPreferences.some((entry) => entry.value === 'black'), true);
+    assert.equal(profile.raw.preferredSilhouettes.includes('regular straight'), true);
+    assert.equal(profile.raw.silhouettePreferences.some((entry) => entry.value === 'regular straight'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function treatsMatureSeededClosetAsPurchaseReadyFromConfirmedSignals() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    await seedMatureStyleCloset(service, provenance);
+    await service.updateProfile({
+      profile: {
+        calibrationSignals: [
+          {
+            kind: 'hard_avoid',
+            source: 'user_confirmed',
+            status: 'confirmed',
+            value: 'synthetics',
+          },
+          {
+            kind: 'silhouette',
+            source: 'user_confirmed',
+            status: 'confirmed',
+            value: 'relaxed straight',
+          },
+        ],
+        importedClosetConfirmed: false,
+        // onboardingPath intentionally null to reproduce the live seeded-closet shape:
+        // production seeded closets carry onboardingPath=null (seeding is tracked via
+        // context.onboardingMode), so purchase-eval readiness must NOT depend on it.
+        onboardingPath: null,
+      },
+      provenance,
+    });
+
+    const matureContext = await service.getContext();
+    assert.equal(matureContext.itemCount, 24);
+    assert.equal(matureContext.photoCount, 12);
+    assert.equal(matureContext.profileCount, 24);
+    assert.equal(matureContext.profile.raw.importedClosetConfirmed, false);
+    assert.equal(matureContext.purchaseEvalReady, true);
+
+    const sparseRuntime = createTempRuntime();
+    try {
+      const sparseService = createStyleService(sparseRuntime);
+      await sparseService.upsertItem({
+        item: {
+          id: 'style-item:sparse',
+          category: 'TOP',
+          color_family: 'black',
+          name: 'Sparse Tee',
+        },
+        provenance,
+      });
+      await sparseService.updateProfile({
+        profile: {
+          calibrationSignals: [
+            {
+              kind: 'hard_avoid',
+              source: 'user_confirmed',
+              status: 'confirmed',
+              value: 'synthetics',
+            },
+            {
+              kind: 'silhouette',
+              source: 'user_confirmed',
+              status: 'confirmed',
+              value: 'relaxed straight',
+            },
+          ],
+          importedClosetConfirmed: false,
+          onboardingPath: null,
+        },
+        provenance,
+      });
+      const sparseContext = await sparseService.getContext();
+      assert.equal(sparseContext.purchaseEvalReady, false);
+    } finally {
+      sparseRuntime.sqliteDb.close();
+    }
   } finally {
     runtime.sqliteDb.close();
   }
@@ -2047,7 +2183,7 @@ async function acceptsCandidateImageUrlsInPurchaseAnalysis() {
       false,
     );
     assert.equal(
-      analysis.evidenceQuality.notes.includes('candidate image reference is present, but purchase analysis has not inspected pixels; use style_get_visual_bundle and direct image reading before making color or material claims'),
+      analysis.evidenceQuality.notes.includes('candidate image reference is present, but purchase analysis has not inspected pixels; use style_get_purchase_vision_packet and direct image reading before making color or material claims. Reserve style_get_visual_bundle for broad closet visual context outside the staged purchase path.'),
       true,
     );
 
@@ -3144,4 +3280,46 @@ function testProvenance() {
 
 async function countItems(service: StyleService) {
   return (await service.listItems()).length;
+}
+
+async function seedMatureStyleCloset(service: StyleService, provenance: ReturnType<typeof testProvenance>) {
+  for (let index = 0; index < 24; index += 1) {
+    const itemId = `style-item:mature-seeded-${index + 1}`;
+    await service.upsertItem({
+      item: {
+        id: itemId,
+        category: index % 4 === 0 ? 'TOP' : index % 4 === 1 ? 'BOTTOM' : index % 4 === 2 ? 'SHOE' : 'OUTERWEAR',
+        color_family: index % 2 === 0 ? 'black' : 'blue',
+        name: `Mature Seeded Item ${index + 1}`,
+      },
+      provenance,
+    });
+    if (index < 12) {
+      await service.upsertItemPhotos({
+        itemId,
+        photos: [
+          {
+            data_url:
+              'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+            id: `style-photo:mature-seeded-${index + 1}`,
+            is_primary: true,
+            view: 'front',
+          },
+        ],
+        provenance,
+      });
+    }
+    await service.upsertItemProfile({
+      itemId,
+      profile: {
+        descriptorConfidence: 0.9,
+        itemType: 'closet anchor',
+        silhouette: index % 2 === 0 ? 'relaxed straight' : 'regular',
+        styleRole: 'anchor',
+        tags: ['seeded', 'mature'],
+      },
+      provenance,
+      source: 'test:mature-seeded',
+    });
+  }
 }

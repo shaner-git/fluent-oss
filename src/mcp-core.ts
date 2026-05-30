@@ -22,6 +22,7 @@ import {
   buildFluentHomeViewModel,
   buildFluentHomeWidgetMeta,
   FLUENT_HOME_ACTIONS_PREVIOUS_TEMPLATE_URI,
+  FLUENT_HOME_AT_HOME_PREVIOUS_TEMPLATE_URI,
   FLUENT_HOME_CACHED_TEMPLATE_URI,
   FLUENT_HOME_CANARY_TEMPLATE_URI,
   FLUENT_HOME_COMPAT_TEMPLATE_URI,
@@ -173,6 +174,7 @@ export function registerCoreMcpSurface(
 
   for (const [name, uri] of [
     ['fluent-home-widget', FLUENT_HOME_TEMPLATE_URI],
+    ['fluent-home-widget-v21', FLUENT_HOME_AT_HOME_PREVIOUS_TEMPLATE_URI],
     ['fluent-home-widget-v20', FLUENT_HOME_MODAL_PREVIOUS_TEMPLATE_URI],
     ['fluent-home-widget-v19', FLUENT_HOME_DIRECT_ACTIONS_PREVIOUS_TEMPLATE_URI],
     ['fluent-home-widget-v18', FLUENT_HOME_ACTIONS_PREVIOUS_TEMPLATE_URI],
@@ -385,7 +387,7 @@ export function registerCoreMcpSurface(
     {
       title: 'Get Fluent Account Status',
       description:
-        'Fetch the ChatGPT-safe Fluent account/status surface when the user asks about account status, access status, billing boundary, subscription state, export, deletion, reactivation, support, or whether Fluent is ready for their account. Prefer this over fluent_get_home for account/access asks. Returns access state, enabled domains, public entitlement state, manage-account link, export and deletion links or instructions, and support email. When summarizing the result, include the support line as plain text instead of a blank heading, for example: "Support: email hello@meetfluent.app." Does not expose billing internals or internal IDs.',
+        'Fetch the ChatGPT-safe Fluent account/status surface when the user asks about account status, access status, paid-access boundary, export, deletion, reactivation, support, or whether Fluent is ready for their account. Prefer this over fluent_get_home for account/access asks. Returns access state, enabled domains, public entitlement state, account/support links, export and deletion links or instructions, and support email. When summarizing the result, include the support line as plain text instead of a blank heading, for example: "Support: email hello@meetfluent.app." Does not start, sell, upgrade, cancel, or manage paid access inside ChatGPT, and does not expose billing internals or internal IDs.',
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     async () => {

@@ -2,7 +2,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  ACTIVE_CURRENT_RENDER_TOOL_HOST_GUIDE,
   CURRENT_RENDER_TOOL_HOST_GUIDE,
+  LEGACY_CURRENT_RENDER_TOOL_HOST_GUIDE,
   PREVIEW_RICH_TOOL_GUIDE,
   formatCodeList,
   normalizeNewlines,
@@ -37,7 +39,8 @@ export function renderToolsReferenceMarkdown(): string {
     '## How To Read This Page',
     '',
     '- Canonical data tools are the durable plain-MCP tools that carry Fluent state and work across hosts.',
-    '- Host-specific render tools are current contract tools that rely on MCP output-template or widget support.',
+    '- Active host-specific render tools are current contract tools that rely on MCP output-template or widget support and are still product-routed.',
+    '- Legacy render tools can still appear in the frozen contract for compatibility, but they are not active product surfaces.',
     '- Preview or planned surfaces may exist in probes or design work, but they are not part of the current public contract.',
     '',
     '## Current Contract Tools',
@@ -51,9 +54,15 @@ export function renderToolsReferenceMarkdown(): string {
     '',
     ...formatCodeList(groups.mealsCanonical),
     '',
-    '### Meals Host-Specific Render Tools',
+    '### Meals Active Host-Specific Render Tools',
     '',
     ...formatCodeList(groups.mealsRender),
+    '',
+    '### Meals Legacy Compatibility Render Tools',
+    '',
+    ...formatCodeList(groups.mealsLegacyRender),
+    '',
+    'Note: legacy compatibility render tools are retained only because they remain in the full contract. They are retired as product surfaces and are not exposed in the curated ChatGPT app profile.',
     '',
     '### Health Canonical Data Tools',
     '',
@@ -70,9 +79,15 @@ export function renderToolsReferenceMarkdown(): string {
     '',
     '## Current Render Host Classification',
     '',
-    `- ChatGPT/MCP-Apps-style current render tools: ${renderToolSetLine(
+    `- Active contract-current MCP Apps render tools: ${renderToolSetLine(
+      ACTIVE_CURRENT_RENDER_TOOL_HOST_GUIDE.map((guide) => guide.name),
+    )}.`,
+    `- Legacy compatibility render tools, not active product surfaces: ${renderToolSetLine(
+      LEGACY_CURRENT_RENDER_TOOL_HOST_GUIDE.map((guide) => guide.name),
+    )}.`,
+    `- All contract-current render tools, including legacy compatibility: ${renderToolSetLine(
       CURRENT_RENDER_TOOL_HOST_GUIDE.map((guide) => guide.name),
-    )}`,
+    )}.`,
     '- Claude-specific visualizer tools are separate from Fluent MCP Apps resources. Claude visualizer-only runs should prefer canonical data plus host-native visuals; Claude MCP Apps-capable runs may use proven Fluent `ui://` render resources.',
     '- OpenClaw-compatible current render tools: none as dedicated Fluent rich widgets. OpenClaw should use the plain-MCP fallbacks.',
     '- Plain-MCP fallback tools stay canonical even when a render tool exists.',

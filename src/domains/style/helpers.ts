@@ -234,6 +234,151 @@ export function mergeStyleProfile(previous: StyleProfileDocument, patch: Partial
   });
 }
 
+const STYLE_PRACTICAL_CALIBRATION_SIGNAL_KINDS = new Set<StyleCalibrationSignalKind>([
+  'budget',
+  'fit',
+  'hard_avoid',
+  'occasion',
+]);
+
+const STYLE_TASTE_CALIBRATION_SIGNAL_KINDS = new Set<StyleCalibrationSignalKind>([
+  'aesthetic',
+  'color',
+  'formality',
+  'silhouette',
+]);
+
+function calibrationSignalWriteValue(signal: StyleCalibrationSignalRecord): string {
+  return signal.status === 'corrected' && signal.correctedValue ? signal.correctedValue : signal.value;
+}
+
+function isConfirmedStyleCalibrationSignal(signal: StyleCalibrationSignalRecord): boolean {
+  return signal.source === 'user_confirmed' && (signal.status === 'confirmed' || signal.status === 'corrected');
+}
+
+function hasConfirmedCalibrationSignalKind(
+  profile: StyleProfileDocument,
+  kinds: ReadonlySet<StyleCalibrationSignalKind>,
+): boolean {
+  return profile.calibrationSignals.some((signal) => isConfirmedStyleCalibrationSignal(signal) && kinds.has(signal.kind));
+}
+
+function appendUniqueStrings(existing: string[], additions: string[]): string[] {
+  const result = [...existing];
+  const seen = new Set(existing.map((entry) => entry.toLowerCase()));
+  for (const addition of additions) {
+    const value = asNullableString(addition);
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
+function appendUniqueWeightedPreferences(
+  existing: StyleWeightedPreferenceRecord[],
+  additions: Array<{ note: string | null; value: string }>,
+): StyleWeightedPreferenceRecord[] {
+  const result = [...existing];
+  const seen = new Set(existing.map((entry) => entry.value.toLowerCase()));
+  for (const addition of additions) {
+    const value = asNullableString(addition.value);
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({
+      note: addition.note,
+      value,
+      weight: 'medium',
+    });
+  }
+  return result;
+}
+
+export function projectStyleCalibrationSignalsToProfile(profile: StyleProfileDocument): StyleProfileDocument {
+  const confirmedSignals = profile.calibrationSignals.filter(isConfirmedStyleCalibrationSignal);
+  const hardAvoids: string[] = [];
+  const fitNotes: string[] = [];
+  const sizingPreferences: string[] = [];
+  const contextRules: string[] = [];
+  const colorDirections: string[] = [];
+  const colorPreferences: Array<{ note: string | null; value: string }> = [];
+  const preferredSilhouettes: string[] = [];
+  const silhouettePreferences: Array<{ note: string | null; value: string }> = [];
+  const aestheticKeywords: string[] = [];
+  const occasionRules: StyleOccasionRuleRecord[] = [];
+  let formalityTendency = profile.formalityTendency;
+
+  for (const signal of confirmedSignals) {
+    const value = calibrationSignalWriteValue(signal);
+    const note = signal.note ?? 'Projected from confirmed Style calibration signal.';
+    switch (signal.kind) {
+      case 'hard_avoid':
+        hardAvoids.push(value);
+        break;
+      case 'fit':
+        fitNotes.push(value);
+        sizingPreferences.push(value);
+        break;
+      case 'budget':
+        contextRules.push(`Budget: ${value}`);
+        break;
+      case 'occasion':
+        contextRules.push(`Occasion: ${value}`);
+        occasionRules.push({
+          avoidLanes: [],
+          note,
+          occasion: value,
+          preferredLanes: [],
+        });
+        break;
+      case 'color':
+        colorDirections.push(value);
+        colorPreferences.push({ note, value });
+        break;
+      case 'silhouette':
+        preferredSilhouettes.push(value);
+        silhouettePreferences.push({ note, value });
+        break;
+      case 'aesthetic':
+        aestheticKeywords.push(value);
+        break;
+      case 'formality':
+        formalityTendency = formalityTendency ?? value;
+        break;
+    }
+  }
+
+  return mergeStyleProfile(profile, {
+    aestheticKeywords: appendUniqueStrings(profile.aestheticKeywords, aestheticKeywords),
+    colorDirections: appendUniqueStrings(profile.colorDirections, colorDirections),
+    colorPreferences: appendUniqueWeightedPreferences(profile.colorPreferences, colorPreferences),
+    contextRules: appendUniqueStrings(profile.contextRules, contextRules),
+    fitNotes: appendUniqueStrings(profile.fitNotes, fitNotes),
+    formalityTendency,
+    hardAvoids: appendUniqueStrings(profile.hardAvoids, hardAvoids),
+    occasionRules: [
+      ...profile.occasionRules,
+      ...occasionRules.filter(
+        (addition) =>
+          !profile.occasionRules.some((existing) => existing.occasion.toLowerCase() === addition.occasion.toLowerCase()),
+      ),
+    ],
+    preferredSilhouettes: appendUniqueStrings(profile.preferredSilhouettes, preferredSilhouettes),
+    practicalCalibrationConfirmed:
+      profile.practicalCalibrationConfirmed ||
+      hasConfirmedCalibrationSignalKind(profile, STYLE_PRACTICAL_CALIBRATION_SIGNAL_KINDS),
+    silhouettePreferences: appendUniqueWeightedPreferences(profile.silhouettePreferences, silhouettePreferences),
+    sizingPreferences: appendUniqueStrings(profile.sizingPreferences, sizingPreferences),
+    tasteCalibrationConfirmed:
+      profile.tasteCalibrationConfirmed ||
+      hasConfirmedCalibrationSignalKind(profile, STYLE_TASTE_CALIBRATION_SIGNAL_KINDS),
+  });
+}
+
 function normalizeCalibrationSignals(value: unknown): StyleCalibrationSignalRecord[] {
   const parsed = parseJsonLike<unknown>(value);
   const entries = Array.isArray(parsed) ? parsed : [];
@@ -1008,7 +1153,10 @@ export function isStyleCalibrationPracticallyConfirmed(profile: StyleProfileDocu
     profile.fitNotes.length > 0 ||
     profile.sizingPreferences.length > 0 ||
     profile.hardAvoids.length > 0 ||
-    profile.contextRules.length > 0
+    profile.contextRules.length > 0 ||
+    profile.occasionRules.length > 0 ||
+    profile.budgetProfile !== null ||
+    hasConfirmedCalibrationSignalKind(profile, STYLE_PRACTICAL_CALIBRATION_SIGNAL_KINDS)
   );
 }
 
@@ -1017,8 +1165,12 @@ export function isStyleCalibrationTasteConfirmed(profile: StyleProfileDocument):
     profile.tasteCalibrationConfirmed ||
     profile.preferredSilhouettes.length > 0 ||
     profile.colorDirections.length > 0 ||
+    profile.colorPreferences.length > 0 ||
+    profile.silhouettePreferences.length > 0 ||
     profile.aestheticKeywords.length > 0 ||
-    profile.formalityTendency !== null
+    profile.formalityTendency !== null ||
+    profile.formalityPreferences.length > 0 ||
+    hasConfirmedCalibrationSignalKind(profile, STYLE_TASTE_CALIBRATION_SIGNAL_KINDS)
   );
 }
 
@@ -1026,13 +1178,22 @@ export function isStylePurchaseEvalReady(
   profile: StyleProfileDocument,
   input: {
     itemCount: number;
+    itemProfileCount?: number;
     primaryPhotoCount: number;
   },
 ): boolean {
   const practicalConfirmed = isStyleCalibrationPracticallyConfirmed(profile);
   const tasteConfirmed = isStyleCalibrationTasteConfirmed(profile);
   if (input.itemCount > 0) {
-    return profile.importedClosetConfirmed && practicalConfirmed && tasteConfirmed;
+    // A mature, well-photographed, profiled closet counts as closet-confirmed for purchase eval
+    // even without importedClosetConfirmed. Seeded closets carry onboardingPath=null in production
+    // (seeding is tracked via context.onboardingMode, not the profile field), so keying off
+    // onboardingPath wrongly blocked real calibrated accounts. Base it on actual closet maturity.
+    const matureCloset =
+      input.itemCount >= 24 &&
+      input.primaryPhotoCount >= 12 &&
+      (input.itemProfileCount ?? 0) >= 24;
+    return (profile.importedClosetConfirmed || matureCloset) && practicalConfirmed && tasteConfirmed;
   }
   return input.primaryPhotoCount > 0 && practicalConfirmed && tasteConfirmed;
 }

@@ -98,12 +98,19 @@ When the user says they are already cooking a planned meal or have started prep:
 - if the meal was planned for a later day in the same week, Fluent can pull it forward and shift the remaining same-type schedule automatically
 - after the write, refresh with `meals_get_today_context` or `meals_get_plan` only if the user still needs the updated view
 
-Use higher-detail or audit reads only when needed:
+Use higher-detail reads only when needed:
 
 - `meals_get_recipe`
 - `meals_get_today_context`
 - `meals_get_inventory`
-- `fluent_list_domain_events` for audit or debugging
+- `meals_get_recipe_book`
+
+Recipe-book setup and browsing:
+
+- use `meals_get_recipe_book` for shelves, why-shown reasons, catalog gaps, and safe recipe-specific actions
+- use `meals_apply_recipe_book_action` only after explicit user intent
+- treat Want to try, Favorite, and Not for us as recipe-specific evidence, not broad household preference, allergy, dietary restriction, or hard avoid
+- treat Pin to week as a week-scoped planning intent, not a durable preference
 
 Host presentation rule:
 
@@ -128,7 +135,7 @@ Grocery-list presentation pattern:
 
 - when the user is asking for the actionable grocery view itself, such as "What's on my grocery list?", "What do I still need to buy?", or "Show me this week's grocery list", prefer `meals_get_current_grocery_list` and answer in text
 - do not require a raw grocery-plan read first for those ordinary grocery-list asks when a summary read is enough
-- gather or reconcile extra grocery state first only when the turn specifically needs underlying plan detail, reconciliation detail, or intent debugging:
+- gather or reconcile extra grocery state first only when the turn specifically needs underlying plan detail, reconciliation detail, or intent reconciliation:
   - `meals_get_current_grocery_list`
   - `meals_get_grocery_plan`
   - `meals_prepare_order`
@@ -178,21 +185,13 @@ Do not run the full planning loop for ordinary chat unless the user is clearly p
 
 ## Ordering Execution Boundary
 
-- Fluent MCP owns canonical meal plans, preferences, grocery plans, inventory, recipes, feedback, and audit state.
+- Fluent MCP owns canonical meal plans, preferences, grocery plans, inventory, recipes, and feedback state.
 - Fluent Core owns lifecycle and onboarding truth.
 - This skill provides workflow guidance for first-use wording, planning orchestration, and the ordering handoff.
 - Keep retailer credentials out of Fluent MCP, D1, and hosted profile metadata.
-- For early-access Fluent, prefer the hosted purchase runner after the hosted grocery plan exists and `meals_prepare_order` returns a safe remaining-to-buy set.
-- The hosted purchase runner may use Cloudflare-managed secret material and internal Worker routes, but that execution subsystem remains outside the public Meals MCP contract.
-- The open-source runtime keeps the local export plus browser flow as the supported execution path.
-- After checkout succeeds and a real retailer order exists, sync the confirmed order details back into Fluent.
-- If the confirmed order includes a delivery slot, the local workflow may emit a delivery-event candidate keyed by the retailer order id for whatever calendar tooling the client actually has.
+- Before any retailer handoff, use `meals_prepare_order` to reconcile what still needs to be bought right now.
+- Do not complete checkout inside OpenClaw. Stop at a reconciled list, cart/preflight handoff, or explicit external runner boundary.
 - If the user says they already bought items and inventory may be stale, pause ordering until inventory is updated.
-- When a browser or local ordering flow adds a planned line to the live retailer cart, prefer persisting `in_cart` for that grocery line so later preflight reads show it as already in cart without claiming it was purchased.
-- When the user has a recent receipt for current-week grocery lines, prefer marking those lines `purchased` so future durable staples can stay covered across later runs.
 - Describe ordering state in these buckets when relevant: still need to buy, already have, already in cart, needs review.
 - Use pantry-first sufficiency confirmations only for low-risk pantry blockers. Do not use them for proteins, dairy, eggs, bread/wraps, fresh produce, or other items that still need quantity-aware review.
-- In the OpenClaw package, do not run bundled browser or retailer-execution scripts. This package intentionally excludes those local execution helpers so standard OpenClaw installs stay within the safe MCP-first surface.
-- If the user wants retailer execution from OpenClaw, stop at `meals_prepare_order`, explain that the OpenClaw package does not include the browser-ordering helpers, and hand off the reconciled remaining-to-buy state instead of attempting checkout.
-- If the user wants the hosted purchase lane, stop at plan and preflight state unless a separate operator-owned execution path is explicitly available outside this package.
 - Treat retailer order details as the post-checkout source of truth. Do not infer `skipped` from omission, and preserve confirmed ordered extras as inventory evidence instead of fabricating grocery-plan history.

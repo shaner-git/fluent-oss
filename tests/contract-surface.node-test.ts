@@ -194,11 +194,7 @@ for (const filePath of [
   );
 }
 
-for (const filePath of [
-  'plugins/fluent/.codex-plugin/plugin.json',
-  'claude-plugin/fluent/.claude-plugin/plugin.json',
-  'openclaw-plugin/fluent/package.json',
-]) {
+for (const filePath of ['plugins/fluent/.codex-plugin/plugin.json', 'openclaw-plugin/fluent/package.json']) {
   const json = JSON.parse(readRepoFile(filePath)) as {
     'x-fluent'?: {
       minimumContractVersion?: string;
@@ -210,6 +206,28 @@ for (const filePath of [
     `${filePath} must declare the canonical contract version as its minimum contract version.`,
   );
 }
+
+const claudeManifest = JSON.parse(readRepoFile('claude-plugin/fluent/.claude-plugin/plugin.json')) as Record<
+  string,
+  unknown
+>;
+const claudeSupportedTopLevelKeys = new Set([
+  'name',
+  'version',
+  'description',
+  'author',
+  'homepage',
+  'repository',
+  'license',
+  'keywords',
+  'skills',
+  'mcpServers',
+]);
+assert.deepEqual(
+  Object.keys(claudeManifest).filter((key) => !claudeSupportedTopLevelKeys.has(key)),
+  [],
+  'Claude plugin manifest must stay limited to Claude-supported top-level keys.',
+);
 
 if (repoFileExists('docs/fluent-hosted-client-testing.md')) {
   const hostedClientTestingDoc = readRepoFile('docs/fluent-hosted-client-testing.md');

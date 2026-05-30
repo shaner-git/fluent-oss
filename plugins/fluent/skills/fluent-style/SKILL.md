@@ -21,7 +21,7 @@ description: Use when the user wants Fluent Style purchase checks, Style setup o
 
 Confirm candidate evidence, use purchase-analysis tools, inspect available imagery, compare against the actual closet, give a clear point of view, and ask before logging or saving.
 
-For ordinary buy/skip prompts, use the staged path: prepare the purchase analysis, extract page evidence when needed, get the purchase vision packet, inspect images, make the stylist call yourself, submit visual observations with `stylist_judgment`, then render the purchase-analysis surface or structured fallback. Do not use `style_analyze_purchase` as the normal final path.
+For ordinary buy/skip prompts, use the staged path: prepare the purchase analysis, gather candidate image evidence only through tools exposed in the current host, get the purchase vision packet, inspect images, make the stylist call yourself, submit visual observations with `stylist_judgment`, then render the purchase-analysis surface or structured fallback. The curated ChatGPT v2 profile does not expose arbitrary product-page extraction; for product links there, ask for or use a direct product image/upload before making the final call. Do not use `style_analyze_purchase` as the normal final path.
 
 Purchase analysis should inherit the calibration state. If Fluent has no closet or a thin closet, judge the candidate only and ask for starter/import confirmation evidence before making wardrobe-fit claims. If Fluent has imported-but-unconfirmed evidence or inferred-but-unconfirmed preferences, say so plainly and keep the recommendation provisional.
 

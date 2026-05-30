@@ -611,7 +611,7 @@ export class FluentCoreService {
     const primaryPhotoCount = asCount(primaryPhotoCountRow?.count);
     const itemProfileCount = asCount(itemProfileCountRow?.count);
 
-    if (isStylePurchaseEvalReady(profile, { itemCount, primaryPhotoCount })) {
+    if (isStylePurchaseEvalReady(profile, { itemCount, itemProfileCount, primaryPhotoCount })) {
       return true;
     }
 
@@ -973,7 +973,6 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/meals-shopping'],
         toolPrefixes: ['meals_'],
         starterReadTools: [
-          'meals_render_pantry_dashboard',
           'meals_render_grocery_list_v2',
           'meals_get_current_grocery_list',
           'meals_get_grocery_plan',
@@ -983,7 +982,7 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         ],
         starterWriteTools: ['meals_upsert_grocery_plan_action', 'meals_update_inventory_batch', 'meals_upsert_grocery_intent'],
         whenToUse:
-          'Shopping, pantry checks, substitutions, receipt reconciliation, or the primary living grocery-list view. In ChatGPT / MCP Apps-style hosts and Claude MCP Apps-capable runs, start from meals_render_grocery_list_v2 for the richer Fluent surface; in Claude visualizer-only hosts, start from meals_get_current_grocery_list before host-native visuals; in Codex, OpenClaw, and generic plain MCP clients, default to canonical grocery data plus text.',
+          'Shopping, at-home checks, substitutions, receipt reconciliation, or the primary living grocery-list view. In ChatGPT / MCP Apps-style hosts and Claude MCP Apps-capable runs, start from meals_render_grocery_list_v2 for the richer Fluent surface; in Claude visualizer-only hosts, start from meals_get_current_grocery_list before host-native visuals; in Codex, OpenClaw, and generic plain MCP clients, default to canonical grocery data plus text. Pantry Dashboard is retired and should not be used for new flows.',
         domainReady: isReady('meals'),
       },
       {
@@ -1152,6 +1151,28 @@ function readyDomainActions(input: {
   }
 
   if (input.domain === 'meals') {
+    if (isMealsSetupGoal(goal) || input.intent === 'onboard') {
+      return [
+        {
+          kind: 'read',
+          reason:
+            'Start Meals setup/calibration from the compact read model so evidence, inferred signals, confirmed preferences, and decision readiness stay separate.',
+          tool: 'meals_get_onboarding_calibration',
+        },
+        {
+          kind: 'read',
+          reason:
+            'Use recipe-book learning for lightweight recipe discovery without turning one recipe reaction into a permanent household rule.',
+          tool: 'meals_get_recipe_book',
+        },
+        {
+          kind: 'write',
+          reason:
+            'Record only explicit household, safety, planning, grocery, or recipe-learning responses after the user confirms them.',
+          tool: 'meals_record_calibration_response',
+        },
+      ];
+    }
     if (/grocery|shopping|shop|buy|pantry|cart|order|receipt|ingredient/i.test(goal)) {
       return [
         chatgpt
@@ -1175,7 +1196,7 @@ function readyDomainActions(input: {
         },
         {
           kind: 'read',
-          reason: 'Check current pantry/inventory state before resolving uncertain grocery lines.',
+          reason: 'Check current at-home grocery state before resolving uncertain grocery lines.',
           tool: 'meals_get_inventory_summary',
         },
       ];
@@ -1220,6 +1241,35 @@ function readyDomainActions(input: {
   }
 
   if (input.domain === 'style') {
+    if (isStyleSetupGoal(goal) || input.intent === 'onboard') {
+      return [
+        {
+          kind: 'read',
+          reason:
+            'Start Style setup/calibration from the compact read model before using broad closet context or wardrobe analysis.',
+          tool: 'style_get_onboarding_calibration',
+        },
+        chatgpt
+          ? {
+              kind: 'render',
+              reason:
+                'In ChatGPT/MCP Apps-style hosts, render the Style setup surface only after the calibration read model has run.',
+              tool: 'style_show_setup_calibration_widget',
+            }
+          : {
+              kind: 'read',
+              reason:
+                'For non-widget or text-first hosts, answer from the calibration read model instead of calling the setup widget.',
+              tool: 'style_get_onboarding_calibration',
+            },
+        {
+          kind: 'write',
+          reason:
+            'Record explicit setup corrections or starter closet evidence only after the user provides clear confirmation.',
+          tool: 'style_record_calibration_response',
+        },
+      ];
+    }
     if (/buy|purchase|link|product|return|keep|closet|wardrobe|style|shoe|shirt|pants|jacket|sweater/i.test(goal)) {
       const productPageEvidenceActions: FluentRecommendedAction[] = chatgpt
         ? []
@@ -1382,6 +1432,18 @@ function isGroceryShoppingGoal(text: string): boolean {
 function isAccountStatusGoal(text: string): boolean {
   return /\b(account|access|billing|subscription|export|deletion|delete|reactivat(?:e|ion)|support|ready|enabled)\b/.test(text)
     && /\b(fluent|account|access|billing|subscription|export|deletion|delete|reactivat(?:e|ion)|support)\b/.test(text);
+}
+
+function isMealsSetupGoal(text: string): boolean {
+  return /\b(set ?up|onboard(?:ing)?|calibrat(?:e|ion)|preferences?|household|allerg(?:y|ies)|dietary|recipe book|recipes? we'd actually try|starter meals?)\b/i.test(
+    text,
+  );
+}
+
+function isStyleSetupGoal(text: string): boolean {
+  return /\b(set ?up|onboard(?:ing)?|calibrat(?:e|ion)|style profile|taste|starter closet|closet setup|closet import|style preferences?)\b/i.test(
+    text,
+  );
 }
 
 function normalizeNextActionDomain(value: FluentNextActionDomain | null | undefined): FluentNextActionDomain | null {

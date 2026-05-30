@@ -1017,7 +1017,7 @@ async function rejectsSufficiencyConfirmationsForNonPantryItems() {
         actionStatus: 'have_enough',
         provenance,
       }),
-      /pantry sufficiency confirmation is not supported/i,
+      /at-home sufficiency confirmation is not supported/i,
     );
   } finally {
     runtime.sqliteDb.close();

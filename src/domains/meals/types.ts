@@ -78,6 +78,129 @@ export interface MealRecipeRecord {
   raw: unknown;
 }
 
+export type RecipePlanningLevel = 'low' | 'medium' | 'high' | 'unknown';
+export type RecipePlanningConfidence = 'proven' | 'trial' | 'untested' | 'retired';
+
+export interface RecipePlanningMetadataRecord {
+  activeMinutes: number | null;
+  batchFit: boolean;
+  cleanupLevel: RecipePlanningLevel;
+  confidence: RecipePlanningConfidence;
+  costLevel: RecipePlanningLevel;
+  familyFit: boolean;
+  freezerFit: boolean;
+  freshSensitive: boolean;
+  highProtein: boolean;
+  lunchFit: boolean;
+  mealJobs: string[];
+  pantryHeavy: boolean;
+  planningTags: string[];
+  repeatSoonFit: boolean;
+  totalMinutes: number | null;
+  weeknightFit: boolean;
+}
+
+export interface RecipeCatalogItemSummaryRecord {
+  id: string;
+  mealType: string;
+  name: string;
+  planning: RecipePlanningMetadataRecord;
+  slug: string | null;
+  status: string;
+}
+
+export interface RecipeCatalogGapRecord {
+  id: string;
+  label: string;
+  mealType: string | null;
+  rationale: string;
+  severity: 'info' | 'medium' | 'high';
+  suggestedAction: string;
+}
+
+export interface RecipeCatalogSummaryRecord {
+  byConfidence: Record<RecipePlanningConfidence, number>;
+  byMealType: Record<string, number>;
+  gapCount: number;
+  gaps: RecipeCatalogGapRecord[];
+  plannerReadyCount: number;
+  recipeCount: number;
+  status: string;
+  tagCounts: Record<string, number>;
+}
+
+export type RecipeBookActionId = 'want_to_try' | 'favorite' | 'not_for_us' | 'pin_to_week';
+
+export interface RecipeBookWhyShownRecord {
+  kind: 'confirmed_preference' | 'inferred_pattern' | 'catalog_gap' | 'pantry_opportunity' | 'new_trial' | 'planner_fit';
+  label: string;
+}
+
+export interface RecipeBookSuggestedActionRecord {
+  id: RecipeBookActionId;
+  label: string;
+  effect: string;
+  evidenceScope: 'recipe_evidence' | 'planning_intent' | 'confirmation_prompt';
+  toolName: 'meals_apply_recipe_book_action';
+}
+
+export interface RecipeBookItemRecord {
+  id: string;
+  householdFit: Array<'solo' | 'two' | 'three' | 'multi' | 'unknown'>;
+  learningStatus: RecipePlanningConfidence;
+  mealType: string;
+  name: string;
+  planning: RecipePlanningMetadataRecord;
+  shelfIds: string[];
+  suggestedActions: RecipeBookSuggestedActionRecord[];
+  whyShown: RecipeBookWhyShownRecord[];
+}
+
+export interface RecipeBookShelfRecord {
+  id: string;
+  label: string;
+  recipeIds: string[];
+}
+
+export interface RecipeBookOnboardingRecord {
+  actions: RecipeBookSuggestedActionRecord[];
+  catalog: RecipeCatalogSummaryRecord;
+  generatedAt: string;
+  hostGuidance: {
+    copyGuardrails: string[];
+    firstWriteTool: 'meals_apply_recipe_book_action';
+    renderMode: 'structured_text';
+  };
+  items: RecipeBookItemRecord[];
+  shelves: RecipeBookShelfRecord[];
+  summary: {
+    provenCount: number;
+    recipeCount: number;
+    shelfCount: number;
+    trialCount: number;
+    untestedCount: number;
+  };
+}
+
+export interface RecipeBookActionResultRecord {
+  action: RecipeBookActionId;
+  confirmationPrompt: string | null;
+  evidenceScope: 'recipe_evidence' | 'planning_intent' | 'confirmation_prompt';
+  memory: MealMemoryRecord | null;
+  planningIntent: {
+    args: {
+      overrides: {
+        includeRecipeIds: string[];
+      };
+      week_start?: string;
+    };
+    toolName: 'meals_generate_plan';
+  } | null;
+  recipeId: string;
+  recipeName: string;
+  safetyNote: string;
+}
+
 export interface MealMemoryRecord {
   recipeId: string;
   status: string;
@@ -265,6 +388,7 @@ export interface GroceryPlanRecord {
   weekStart: string;
   mealPlanId: string | null;
   generatedAt: string;
+  sourceSnapshot?: unknown;
   raw: {
     generatedAt: string;
     items: GroceryPlanItemRecord[];
@@ -560,6 +684,39 @@ export type MealsSetupState =
   | 'preferences_partially_confirmed'
   | 'meals_calibrated';
 
+export type MealsGuidedOnboardingIntent = 'plan_week' | 'recipe_book' | 'grocery' | 'preferences';
+
+export type MealsGuidedOnboardingStep =
+  | 'intent'
+  | 'household'
+  | 'safety'
+  | 'rhythm'
+  | 'cooking_reality'
+  | 'taste'
+  | 'groceries'
+  | 'recipe_book_seed'
+  | 'review'
+  | 'first_output';
+
+export type MealsGuidedOnboardingStepStatus = 'not_started' | 'answered' | 'skipped' | 'needs_confirmation';
+
+export interface MealsGuidedOnboardingRecord {
+  completedAt: string | null;
+  currentStep: MealsGuidedOnboardingStep;
+  entryIntent: MealsGuidedOnboardingIntent | null;
+  lastUpdatedAt: string | null;
+  needsConfirmation: Array<{
+    field: string;
+    reason: string;
+    value: string | number | boolean | null;
+  }>;
+  nextStepRationale: string;
+  skippedSteps: MealsGuidedOnboardingStep[];
+  startedAt: string | null;
+  steps: Record<MealsGuidedOnboardingStep, MealsGuidedOnboardingStepStatus>;
+  version: 'meals-guided-v1';
+}
+
 export type MealsCalibrationSignalSource =
   | 'user_confirmed'
   | 'meal_history_inferred'
@@ -576,11 +733,15 @@ export type MealsCalibrationSignalKind =
   | 'allergy'
   | 'dietary_constraint'
   | 'preferred_cuisine'
+  | 'favorite_food'
   | 'cooking_cadence'
+  | 'meal_routine'
   | 'weeknight_time_limit'
   | 'budget_sensitivity'
+  | 'cleanup_tolerance'
   | 'leftover_preference'
   | 'grocery_expectation'
+  | 'spice_preference'
   | 'meal_pattern'
   | 'pantry_pattern'
   | 'starter_preference';
@@ -645,6 +806,7 @@ export interface MealsOnboardingCalibrationRecord {
   confidenceBreakdown: MealsConfidenceBreakdown;
   confirmedPreferences: MealsCalibrationSignalRecord[];
   evidenceGaps: string[];
+  guidedOnboarding: MealsGuidedOnboardingRecord;
   groceryListReadiness: {
     currentListPresent: boolean;
     groceryExpectationConfirmed: boolean;
@@ -663,6 +825,8 @@ export interface MealsOnboardingCalibrationRecord {
     groceryExpectationsConfirmed: boolean;
     hardAvoidsExplicitlyConfirmed: boolean;
     householdShapeConfirmed: boolean;
+    mealRoutineConfirmed: boolean;
+    positiveTasteConfirmed: boolean;
     weeknightTimeLimitConfirmed: boolean;
   };
   inferredMealSignals: MealsCalibrationSignalRecord[];

@@ -15,11 +15,22 @@ import {
   normalizeText,
   upsertGroceryPlanItem,
 } from './helpers';
+import {
+  deriveMealsPlanningPreferenceProfile,
+  isBudgetSensitive,
+  isWeeknightQuickPreference,
+  shouldAvoidLeftovers,
+  shouldPlanForLeftovers,
+  type MealsPlanningPreferenceProfile,
+} from './preference-model';
+import { deriveRecipePlanningMetadata } from './recipe-catalog';
+import { summarizeRecipeCatalog } from './recipe-catalog';
 import type {
   GroceryIntentRecord,
   GroceryPlanItemRecord,
   InventoryRecord,
   MealMemoryRecord,
+  MealPlanHistoryRecord,
   MealsNutritionSupportMode,
   MealsSupportLevel,
   MealsTrainingAlignmentSummaryRecord,
@@ -66,7 +77,9 @@ type PlanningTrainingBias = {
 export interface PlanningSnapshot {
   calendarContext: NormalizedCalendarContext | null;
   groceryIntents: GroceryIntentRecord[];
+  history: MealPlanHistoryRecord[];
   inventory: InventoryRecord[];
+  mealMemory: MealMemoryRecord[];
   mealMemoryByRecipeId: Map<string, MealMemoryRecord>;
   planningConstraints: PlanningCalendarConstraints;
   preferences: MealPreferencesRecord;
@@ -93,6 +106,7 @@ export function chooseRecipeForPlanning(input: {
   mealMemoryByRecipeId: Map<string, MealMemoryRecord>;
   mealType: string;
   porkNeverForFamily: boolean;
+  preferenceProfile: MealsPlanningPreferenceProfile;
   recentRecipeIds: Set<string>;
   recipes: MealRecipeRecord[];
   remainingTrialMeals?: number;
@@ -109,7 +123,11 @@ export function chooseRecipeForPlanning(input: {
         .map((entry) => asNonEmptyString(asRecord(entry)?.item))
         .filter((value): value is string => Boolean(value))
         .map((value) => normalizeText(value));
-      if (ingredientNames.some((value) => input.hardAvoids.has(value))) {
+      const hardAvoidTerms = new Set([...input.hardAvoids, ...input.preferenceProfile.hardAvoids]);
+      if (ingredientNames.some((value) => termMatchesAny(value, hardAvoidTerms))) {
+        return false;
+      }
+      if (!recipeSatisfiesDietaryConstraints(ingredientNames, input.preferenceProfile.dietaryConstraints)) {
         return false;
       }
       if (input.familyDinner && input.porkNeverForFamily) {
@@ -195,6 +213,92 @@ function scoreRecipeForPlanning(
   score += proteinScore * trainingBias.proteinSupportBoost;
   score += repeatableScore * trainingBias.repeatableMealBoost;
   score += shoppingSubstitutionPenalty;
+  score += scoreRecipePreferenceFit(recipe, raw, memory, input.preferenceProfile, input.mealType, input.date, input.familyDinner);
+
+  return score;
+}
+
+function scoreRecipePreferenceFit(
+  recipe: MealRecipeRecord,
+  raw: Record<string, unknown>,
+  memory: MealMemoryRecord | null,
+  profile: MealsPlanningPreferenceProfile,
+  mealType: string,
+  date: string,
+  familyDinner: boolean,
+): number {
+  const planning = deriveRecipePlanningMetadata(recipe, memory);
+  const tags = asStringArray(raw.tags).map((tag) => normalizeText(tag));
+  const cuisine = [
+    ...asStringArray(raw.cuisines),
+    asNonEmptyString(raw.cuisine),
+  ].filter((value): value is string => Boolean(value)).map((value) => normalizeText(value));
+  const recipeText = normalizeText([
+    recipe.name,
+    ...tags,
+    ...cuisine,
+    asNonEmptyString(raw.description),
+    asNonEmptyString(raw.prep_notes),
+  ].filter(Boolean).join(' '));
+  const ingredientText = Array.isArray(raw.ingredients)
+    ? raw.ingredients
+        .map((entry) => asNonEmptyString(asRecord(entry)?.item))
+        .filter((value): value is string => Boolean(value))
+        .map((value) => normalizeText(value))
+        .join(' ')
+    : '';
+  let score = 0;
+
+  for (const cuisinePreference of profile.preferredCuisines) {
+    if (recipeText.includes(cuisinePreference) || cuisine.includes(cuisinePreference)) score += 8;
+  }
+  for (const likedFood of profile.likedFoods) {
+    if (recipeText.includes(likedFood) || ingredientText.includes(likedFood)) score += 5;
+  }
+  for (const dislikedFood of profile.dislikedFoods) {
+    if (recipeText.includes(dislikedFood) || ingredientText.includes(dislikedFood)) score -= 10;
+  }
+
+  const weekdayDinner = mealType === 'dinner' && isWeekdayDate(date);
+  if (weekdayDinner && isWeeknightQuickPreference(profile)) {
+    if (planning.weeknightFit) score += 8;
+    if (planning.cleanupLevel === 'low') score += 3;
+    if (planning.cleanupLevel === 'high') score -= 7;
+    if (profile.weeknightTimeLimitMinutes != null) {
+      const activeOver = planning.activeMinutes != null && planning.activeMinutes > profile.weeknightTimeLimitMinutes;
+      const totalOver = planning.totalMinutes != null && planning.totalMinutes > profile.weeknightTimeLimitMinutes + 15;
+      if (activeOver) score -= 12;
+      if (totalOver) score -= 8;
+    }
+  }
+
+  if (familyDinner) {
+    if (planning.familyFit) score += 8;
+    if (profile.householdSizeSegment === 'three' || profile.householdSizeSegment === 'multi') {
+      if (planning.batchFit) score += 4;
+      if ((asPositiveNumber(raw.servings) ?? 0) >= (profile.householdServeTarget ?? 4)) score += 3;
+    }
+  }
+
+  if (shouldPlanForLeftovers(profile)) {
+    if (planning.batchFit) score += 8;
+    if (planning.lunchFit) score += mealType === 'lunch' ? 4 : 2;
+    if (planning.freezerFit) score += 3;
+  } else if (shouldAvoidLeftovers(profile)) {
+    if (planning.batchFit) score -= 6;
+    if ((asPositiveNumber(raw.servings) ?? 0) > (profile.householdServeTarget ?? 2)) score -= 3;
+  }
+
+  if (isBudgetSensitive(profile)) {
+    if (planning.costLevel === 'low') score += 5;
+    if (planning.costLevel === 'high') score -= 8;
+    const cost = asNonNegativeNumber(raw.cost_per_serving_cad ?? raw.costPerServingCad);
+    if (profile.budgetCadPerMeal != null && cost != null && cost > profile.budgetCadPerMeal) score -= 10;
+  }
+
+  if (normalizeText(profile.groceryExpectation ?? '').includes('pantry') && planning.pantryHeavy) score += 2;
+  if (profile.householdSizeSegment === 'solo' && planning.freezerFit) score += 3;
+  if (profile.householdSizeSegment === 'multi' && planning.batchFit) score += 3;
 
   return score;
 }
@@ -687,6 +791,7 @@ export function buildPlanningSlots(
     date: string;
     dayLabel: string;
     familyEligible: boolean;
+    householdServeTarget: number | null;
     mealType: string;
     slotIndex: number;
   }> = [];
@@ -706,6 +811,10 @@ export function buildPlanningSlots(
         date,
         dayLabel: weekdayForDateInTimeZone(date, timeZone),
         familyEligible: false,
+        householdServeTarget: resolveExplicitHouseholdServeTarget(
+          planningConstraints?.householdAdultsHomeByDate[date],
+          planningConstraints?.householdChildrenHomeByDate[date],
+        ),
         mealType,
         slotIndex: added,
       });
@@ -732,6 +841,7 @@ export function buildPlanningSlots(
       date,
       dayLabel: weekdayForDateInTimeZone(date, timeZone),
       familyEligible,
+      householdServeTarget: resolveExplicitHouseholdServeTarget(explicitAdultCount, explicitChildrenCount),
       mealType: 'dinner',
       slotIndex: index,
     });
@@ -743,24 +853,77 @@ export function buildPlanningSlots(
   };
 }
 
+function resolveExplicitHouseholdServeTarget(adults?: number, children?: number): number | null {
+  const total = (adults ?? 0) + (children ?? 0);
+  return total > 0 ? Math.max(1, Math.round(total)) : null;
+}
+
 function resolvePlannedServes(input: {
+  householdServeTarget?: number | null;
   mealType: string;
   mealTypeCount: number;
+  preferenceProfile: MealsPlanningPreferenceProfile;
   recipeRaw: Record<string, unknown>;
 }) {
   const recipeServings = asPositiveNumber(input.recipeRaw.servings) ?? 1;
+  const participationTarget = resolveParticipationServeTarget(input.preferenceProfile, input.mealType);
+  const explicitOrParticipationTarget = input.householdServeTarget ?? participationTarget;
   if (input.mealType === 'dinner') {
-    return recipeServings;
+    const target = explicitOrParticipationTarget ?? input.preferenceProfile.householdServeTarget;
+    return target ? Math.max(recipeServings, target) : recipeServings;
+  }
+
+  if (explicitOrParticipationTarget != null) {
+    return Math.max(1, Math.round(explicitOrParticipationTarget));
   }
 
   // Repeatable weekday meals are planned as one serving consumed per slot.
   // This keeps grocery scaling aligned with the number of planned weekdays
   // instead of multiplying the full batch yield for every repeated entry.
   if (input.mealTypeCount > 1) {
-    return 1;
+    return input.preferenceProfile.householdSizeSegment === 'multi' ? 2 : 1;
   }
 
   return recipeServings;
+}
+
+function resolveParticipationServeTarget(
+  profile: MealsPlanningPreferenceProfile,
+  mealType: string,
+): number | null {
+  const participation = profile.householdMealParticipation[normalizeText(mealType)] ?? [];
+  if (participation.length === 0) return null;
+  const adultCount = profile.householdAdultCount ?? 0;
+  const childCount = profile.householdChildCount ?? 0;
+  const householdTarget = profile.householdServeTarget ?? (adultCount + childCount > 0 ? adultCount + childCount : null);
+  let target = 0;
+  let matched = false;
+
+  for (const participant of participation) {
+    if (/\b(everyone|all|household|family|both|all eaters)\b/.test(participant)) {
+      if (householdTarget != null) target = Math.max(target, householdTarget);
+      matched = true;
+      continue;
+    }
+    if (/\b(adult|adults|grownups|parents)\b/.test(participant)) {
+      target += adultCount || 1;
+      matched = true;
+      continue;
+    }
+    if (/\b(child|children|kid|kids)\b/.test(participant)) {
+      target += childCount || 1;
+      matched = true;
+      continue;
+    }
+    if (/\b(solo|me|one|single)\b/.test(participant)) {
+      target += 1;
+      matched = true;
+    }
+  }
+
+  if (!matched) return null;
+  if (target === 0 && householdTarget != null && profile.householdChildrenEatSameMeals === true) return householdTarget;
+  return Math.max(1, Math.min(12, Math.round(target)));
 }
 
 export function buildPrimaryPlanCandidate(input: {
@@ -768,10 +931,34 @@ export function buildPrimaryPlanCandidate(input: {
   overrides: GenerateMealPlanOverrides | null;
   weekStart: string;
 }): PersistedMealPlanCandidateRecord {
-  const planningCounts = resolvePlanningCounts(input.overrides);
+  const preferences = input.snapshot.preferences.raw;
+  const preferenceProfile = deriveMealsPlanningPreferenceProfile(preferences);
+  const basePlanningCounts = resolvePlanningCounts(input.overrides);
+  const planningCounts = {
+    ...basePlanningCounts,
+    breakfastCount:
+      input.overrides?.breakfastCount == null && preferenceProfile.targetBreakfastCount != null
+        ? preferenceProfile.targetBreakfastCount
+        : basePlanningCounts.breakfastCount,
+    lunchCount:
+      input.overrides?.lunchCount == null && preferenceProfile.targetLunchCount != null
+        ? preferenceProfile.targetLunchCount
+        : basePlanningCounts.lunchCount,
+    dinnerCount:
+      input.overrides?.dinnerCount == null && preferenceProfile.targetWeeknightDinnerCount != null
+        ? preferenceProfile.targetWeeknightDinnerCount
+        : basePlanningCounts.dinnerCount,
+    snackCount:
+      input.overrides?.snackCount == null && preferenceProfile.targetSnackCount != null
+        ? preferenceProfile.targetSnackCount
+        : basePlanningCounts.snackCount,
+    familyDinnerCount:
+      input.overrides?.familyDinnerCount == null && preferenceProfile.targetFamilyDinnerCount != null
+        ? preferenceProfile.targetFamilyDinnerCount
+        : basePlanningCounts.familyDinnerCount,
+  };
   const slotPlan = buildPlanningSlots(input.weekStart, planningCounts, input.snapshot.timeZone, input.snapshot.planningConstraints);
   const slots = slotPlan.slots;
-  const preferences = input.snapshot.preferences.raw;
   const hardAvoids = new Set(asStringArray(asRecord(preferences.core_rules)?.hard_avoids).map((value) => normalizeText(value)));
   const dinnerRules = asRecord(preferences.family_constraints);
   const familyDinnerCount = Math.min(
@@ -824,6 +1011,7 @@ export function buildPrimaryPlanCandidate(input: {
             mealMemoryByRecipeId: input.snapshot.mealMemoryByRecipeId,
             mealType: slot.mealType,
             porkNeverForFamily: dinnerRules?.pork_never_for_family === true,
+            preferenceProfile,
             recentRecipeIds: input.snapshot.recentRecipeIds,
             remainingTrialMeals,
             recipes: input.snapshot.recipes,
@@ -859,8 +1047,10 @@ export function buildPrimaryPlanCandidate(input: {
     const recipeRaw = input.snapshot.recipesById.get(chosen.id) ?? {};
     const prepNotes = asNullableString(asRecord(recipeRaw)?.prep_notes);
     const plannedServes = resolvePlannedServes({
+      householdServeTarget: slot.householdServeTarget,
       mealType: slot.mealType,
       mealTypeCount: planningCounts[`${slot.mealType}Count` as keyof typeof planningCounts] ?? 1,
+      preferenceProfile,
       recipeRaw: asRecord(recipeRaw) ?? {},
     });
     entries.push({
@@ -903,6 +1093,7 @@ export function buildPrimaryPlanCandidate(input: {
       `Applied training-aware meal bias for ${trainingAlignmentSummary.trainingDays.length} training day(s) with ${trainingAlignmentSummary.nutritionSupportMode ?? 'general'} support.`,
     );
   }
+  const requestedSlotCount = slots.length;
 
   const candidatePlan = buildCandidatePlanDocument({
     entries,
@@ -926,6 +1117,24 @@ export function buildPrimaryPlanCandidate(input: {
     preferences,
     recipesById: input.snapshot.recipesById,
   });
+  const planningBrief = buildMealPlanningBrief({
+    entries,
+    groceryDeltaSummary,
+    preferenceProfile,
+    requestedSlotCount,
+    snapshot: input.snapshot,
+    trainingAlignmentSummary,
+    warnings: Array.from(warnings),
+    weekStart: input.weekStart,
+  });
+  const planReview = buildMealPlanReview({
+    entries,
+    groceryDeltaSummary,
+    planningBrief,
+    rationale: Array.from(rationale),
+    trainingAlignmentSummary,
+    warnings: Array.from(warnings),
+  });
   const candidateId = `candidate:${crypto.randomUUID()}`;
 
   return {
@@ -941,6 +1150,8 @@ export function buildPrimaryPlanCandidate(input: {
       warnings: Array.from(warnings),
       rationale: Array.from(rationale),
       groceryDeltaSummary,
+      planningBrief,
+      planReview,
       entries: entries.map((entry) => ({
         date: String(entry.date),
         dayLabel: String(entry.day),
@@ -952,6 +1163,307 @@ export function buildPrimaryPlanCandidate(input: {
       })),
       summary: candidatePlan.summary,
     } as MealPlanCandidateSummaryRecord,
+  };
+}
+
+function buildMealPlanningBrief(input: {
+  entries: Array<Record<string, unknown>>;
+  groceryDeltaSummary: ReturnType<typeof summarizeCandidateGroceryDelta>;
+  preferenceProfile: MealsPlanningPreferenceProfile;
+  requestedSlotCount: number;
+  snapshot: PlanningSnapshot;
+  trainingAlignmentSummary: MealsTrainingAlignmentSummaryRecord;
+  warnings: string[];
+  weekStart: string;
+}) {
+  const activeRecipeCountByMealType = input.snapshot.recipes.reduce<Record<string, number>>((counts, recipe) => {
+    counts[recipe.mealType] = (counts[recipe.mealType] ?? 0) + 1;
+    return counts;
+  }, {});
+  const recipeCatalog = summarizeRecipeCatalog({
+    mealMemory: input.snapshot.mealMemory,
+    recipes: input.snapshot.recipes,
+    status: 'active',
+  }).summary;
+  const requestedMealTypes = new Set(input.entries.map((entry) => String(entry.meal_type)));
+  for (const warning of input.warnings) {
+    const match = /^No ([a-z]+) recipe matched/.exec(warning);
+    if (match?.[1]) requestedMealTypes.add(match[1]);
+  }
+  const thinMealTypes = Array.from(requestedMealTypes)
+    .filter((mealType) => (activeRecipeCountByMealType[mealType] ?? 0) < 2)
+    .sort();
+  const nearExpiryItemPreview = input.snapshot.inventory
+    .filter((item) => Boolean(item.estimatedExpiry && item.estimatedExpiry <= shiftDateString(input.weekStart, 5)))
+    .map((item) => item.name)
+    .slice(0, 5);
+  const evidenceNotes: string[] = [];
+
+  if (input.snapshot.planningConstraints.calendarAvailability === 'available') {
+    evidenceNotes.push('Calendar context was available for this planning week.');
+  } else {
+    evidenceNotes.push('Calendar context was not confirmed for this planning week.');
+  }
+  if (input.trainingAlignmentSummary.trainingContextUsed) {
+    evidenceNotes.push('Training context influenced meal complexity, repeatability, or protein support.');
+  }
+  if (nearExpiryItemPreview.length > 0) {
+    evidenceNotes.push(`Near-expiry at-home food evidence was considered: ${nearExpiryItemPreview.join(', ')}.`);
+  }
+  if (input.snapshot.mealMemory.length > 0) {
+    evidenceNotes.push(`${input.snapshot.mealMemory.length} recipe memory signal(s) were available.`);
+  } else {
+    evidenceNotes.push('No active recipe memory was available, so repeat confidence is lower.');
+  }
+  if (thinMealTypes.length > 0) {
+    evidenceNotes.push(`Recipe coverage is thin for: ${thinMealTypes.join(', ')}.`);
+  }
+  for (const gap of recipeCatalog.gaps.slice(0, 4)) {
+    evidenceNotes.push(`Recipe catalog gap: ${gap.label} - ${gap.rationale}`);
+  }
+
+  return {
+    weekStart: input.weekStart,
+    recipeCoverage: {
+      activeRecipeCount: input.snapshot.recipes.length,
+      activeRecipeCountByMealType,
+      activeRecipeMemoryCount: input.snapshot.mealMemory.filter((entry) => entry.status !== 'retired').length,
+      approvedPlanCount: input.snapshot.history.filter((entry) => entry.status === 'approved').length,
+      missingSlotCount: Math.max(0, input.requestedSlotCount - input.entries.length),
+      plannedRecipeCount: new Set(input.entries.map((entry) => String(entry.recipe_id))).size,
+      requestedSlotCount: input.requestedSlotCount,
+      thinMealTypes,
+    },
+    contextSignals: {
+      calendarAvailability: input.snapshot.planningConstraints.calendarAvailability,
+      calendarUsed: input.snapshot.planningConstraints.calendarUsed,
+      groceryIntentCount: input.snapshot.groceryIntents.length,
+      inventoryItemCount: input.snapshot.inventory.length,
+      nearExpiryItemPreview,
+      preferenceSignals: {
+        budgetSensitive: isBudgetSensitive(input.preferenceProfile),
+        dietaryConstraintCount: input.preferenceProfile.dietaryConstraints.length,
+        dislikedFoodCount: input.preferenceProfile.dislikedFoods.length,
+        householdAdultCount: input.preferenceProfile.householdAdultCount,
+        householdChildCount: input.preferenceProfile.householdChildCount,
+        householdChildrenEatSameMeals: input.preferenceProfile.householdChildrenEatSameMeals,
+        householdMealParticipationTypes: Object.keys(input.preferenceProfile.householdMealParticipation).sort(),
+        householdServeTarget: input.preferenceProfile.householdServeTarget,
+        householdSizeSegment: input.preferenceProfile.householdSizeSegment,
+        leftoverPreference: input.preferenceProfile.leftoverPreference,
+        likedFoodCount: input.preferenceProfile.likedFoods.length,
+        pantryCheckPolicy: input.preferenceProfile.pantryCheckPolicy,
+        preferredCuisineCount: input.preferenceProfile.preferredCuisines.length,
+        preferredGroceryBrandCount: input.preferenceProfile.preferredGroceryBrands.length,
+        preferredGroceryStoreCount: input.preferenceProfile.preferredGroceryStores.length,
+        shoppingSubstitutionTolerance: input.preferenceProfile.shoppingSubstitutionTolerance,
+        targetBreakfastCount: input.preferenceProfile.targetBreakfastCount,
+        targetFamilyDinnerCount: input.preferenceProfile.targetFamilyDinnerCount,
+        targetLunchCount: input.preferenceProfile.targetLunchCount,
+        targetSnackCount: input.preferenceProfile.targetSnackCount,
+        targetWeeknightDinnerCount: input.preferenceProfile.targetWeeknightDinnerCount,
+        weeknightTimeLimitMinutes: input.preferenceProfile.weeknightTimeLimitMinutes,
+      },
+      recentRecipeCount: input.snapshot.recentRecipeIds.size,
+      trainingContextUsed: input.trainingAlignmentSummary.trainingContextUsed,
+    },
+    evidenceNotes,
+    recipeCatalog,
+  };
+}
+
+function termMatchesAny(value: string, terms: Set<string> | string[]): boolean {
+  const normalized = normalizeText(value);
+  const candidates = Array.isArray(terms) ? terms : Array.from(terms);
+  return candidates.some((term) => {
+    const normalizedTerm = normalizeText(term);
+    return Boolean(normalizedTerm && (normalized === normalizedTerm || normalized.includes(normalizedTerm)));
+  });
+}
+
+function recipeSatisfiesDietaryConstraints(
+  normalizedIngredientNames: string[],
+  constraints: string[],
+): boolean {
+  for (const constraint of constraints) {
+    if (!recipeSatisfiesDietaryConstraint(normalizedIngredientNames, constraint)) return false;
+  }
+  return true;
+}
+
+function recipeSatisfiesDietaryConstraint(
+  normalizedIngredientNames: string[],
+  constraint: string,
+): boolean {
+  const normalized = normalizeText(constraint);
+  if (!normalized) return true;
+
+  if (normalized.includes('vegetarian')) {
+    return !hasAnyDietaryBlocker(normalizedIngredientNames, VEGETARIAN_BLOCKERS, PLANT_BASED_QUALIFIERS);
+  }
+  if (normalized.includes('vegan')) {
+    return !hasAnyDietaryBlocker(normalizedIngredientNames, VEGAN_BLOCKERS, [...PLANT_BASED_QUALIFIERS, ...DAIRY_FREE_QUALIFIERS]);
+  }
+  if (normalized.includes('pescatarian')) {
+    return !hasAnyDietaryBlocker(normalizedIngredientNames, PESCATARIAN_BLOCKERS, PLANT_BASED_QUALIFIERS);
+  }
+  if (normalized.includes('gluten')) {
+    return !hasAnyDietaryBlocker(normalizedIngredientNames, GLUTEN_BLOCKERS, GLUTEN_FREE_QUALIFIERS);
+  }
+  if (normalized.includes('dairy')) {
+    return !hasAnyDietaryBlocker(normalizedIngredientNames, DAIRY_BLOCKERS, DAIRY_FREE_QUALIFIERS);
+  }
+  if (normalized.includes('halal')) {
+    return !hasAnyDietaryBlocker(normalizedIngredientNames, HALAL_BLOCKERS);
+  }
+  if (normalized.includes('kosher')) {
+    return !hasAnyDietaryBlocker(normalizedIngredientNames, KOSHER_BLOCKERS);
+  }
+
+  return true;
+}
+
+function hasAnyDietaryBlocker(ingredients: string[], blockers: string[], allowedQualifiers: string[] = []): boolean {
+  return ingredients.some((ingredient) =>
+    blockers.some((blocker) =>
+      new RegExp(`\\b${escapeRegExp(blocker)}\\b`, 'i').test(ingredient) &&
+      !allowedQualifiers.some((qualifier) => ingredient.includes(qualifier)),
+    ),
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isWeekdayDate(date: string): boolean {
+  const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+  return day >= 1 && day <= 5;
+}
+
+const MEAT_BLOCKERS = [
+  'bacon',
+  'beef',
+  'chicken',
+  'duck',
+  'ham',
+  'lamb',
+  'pancetta',
+  'pork',
+  'prosciutto',
+  'sausage',
+  'steak',
+  'turkey',
+];
+const SEAFOOD_BLOCKERS = ['anchovy', 'cod', 'crab', 'fish', 'mussels', 'oyster', 'salmon', 'sardine', 'shellfish', 'shrimp', 'tuna'];
+const VEGETARIAN_BLOCKERS = [...MEAT_BLOCKERS, ...SEAFOOD_BLOCKERS];
+const VEGAN_BLOCKERS = [
+  ...VEGETARIAN_BLOCKERS,
+  'butter',
+  'cheese',
+  'cream',
+  'egg',
+  'eggs',
+  'ghee',
+  'honey',
+  'milk',
+  'whey',
+  'yogurt',
+];
+const PESCATARIAN_BLOCKERS = MEAT_BLOCKERS;
+const GLUTEN_BLOCKERS = ['barley', 'bread', 'breadcrumbs', 'couscous', 'farro', 'flour', 'noodles', 'pasta', 'rye', 'tortilla', 'tortillas', 'wheat'];
+const DAIRY_BLOCKERS = ['butter', 'cheese', 'cream', 'ghee', 'milk', 'whey', 'yogurt'];
+const HALAL_BLOCKERS = ['bacon', 'beer', 'ham', 'lard', 'pancetta', 'pork', 'prosciutto', 'rum', 'wine'];
+const KOSHER_BLOCKERS = ['bacon', 'crab', 'ham', 'lard', 'mussels', 'oyster', 'pork', 'shellfish', 'shrimp'];
+const PLANT_BASED_QUALIFIERS = ['meatless', 'plant based', 'plant-based', 'vegan', 'vegetarian'];
+const GLUTEN_FREE_QUALIFIERS = ['gluten free', 'gluten-free'];
+const DAIRY_FREE_QUALIFIERS = ['dairy free', 'dairy-free', 'vegan'];
+
+function buildMealPlanReview(input: {
+  entries: Array<Record<string, unknown>>;
+  groceryDeltaSummary: ReturnType<typeof summarizeCandidateGroceryDelta>;
+  planningBrief: ReturnType<typeof buildMealPlanningBrief>;
+  rationale: string[];
+  trainingAlignmentSummary: MealsTrainingAlignmentSummaryRecord;
+  warnings: string[];
+}) {
+  const dinnerCount = input.entries.filter((entry) => entry.meal_type === 'dinner').length;
+  const familyDinnerCount = input.entries.filter((entry) => asRecord(entry.metadata)?.family_dinner === true).length;
+  const repeatedMealTypes = Array.from(
+    input.entries.reduce<Map<string, Set<string>>>((mealTypes, entry) => {
+      const mealType = String(entry.meal_type);
+      const recipeId = String(entry.recipe_id);
+      const recipes = mealTypes.get(mealType) ?? new Set<string>();
+      recipes.add(recipeId);
+      mealTypes.set(mealType, recipes);
+      return mealTypes;
+    }, new Map()),
+  )
+    .filter(([mealType, recipeIds]) => mealType !== 'dinner' && recipeIds.size === 1)
+    .map(([mealType]) => mealType);
+
+  const strengths: string[] = [];
+  const tradeoffs: string[] = [];
+  const watchouts = [...input.warnings];
+  const suggestedSwaps: string[] = [];
+  const acceptanceChecklist = [
+    'Confirm the candidate before it becomes the canonical weekly meal plan.',
+    'Review any at-home checks before treating the grocery list as ready to shop.',
+    'After cooking, log taste, difficulty, time reality, repeat preference, and family acceptance so future plans improve.',
+  ];
+
+  if (input.entries.length > 0) {
+    strengths.push(`Plans ${input.entries.length} meal slot(s), including ${dinnerCount} dinner(s).`);
+  }
+  if (familyDinnerCount > 0) {
+    strengths.push(`Includes ${familyDinnerCount} family dinner slot(s).`);
+  }
+  if (input.trainingAlignmentSummary.trainingContextUsed) {
+    strengths.push('Uses training context to bias complexity, repeatability, or protein support.');
+  }
+  if (input.planningBrief.contextSignals.nearExpiryItemPreview.length > 0) {
+    strengths.push('Considers near-expiry at-home food inventory where possible.');
+  }
+
+  if (repeatedMealTypes.length > 0) {
+    tradeoffs.push(`Repeats ${repeatedMealTypes.join(', ')} by design to keep the week simpler.`);
+  }
+  if (input.groceryDeltaSummary.pantryCheckCount > 0) {
+    tradeoffs.push(`${input.groceryDeltaSummary.pantryCheckCount} grocery item(s) need an at-home check before shopping.`);
+  }
+  if (input.groceryDeltaSummary.missingItemCount > 0) {
+    tradeoffs.push(`${input.groceryDeltaSummary.missingItemCount} grocery item(s) look missing from current inventory.`);
+  }
+
+  if (input.planningBrief.recipeCoverage.missingSlotCount > 0) {
+    watchouts.push(`${input.planningBrief.recipeCoverage.missingSlotCount} requested meal slot(s) could not be filled from active recipes.`);
+  }
+  if (input.planningBrief.recipeCoverage.thinMealTypes.length > 0) {
+    suggestedSwaps.push(`Add or import more ${input.planningBrief.recipeCoverage.thinMealTypes.join(', ')} recipes to improve variety.`);
+  }
+  const gapSeverityRank = { high: 0, medium: 1, info: 2 };
+  const prioritizedCatalogGaps = [...input.planningBrief.recipeCatalog.gaps].sort(
+    (left, right) => gapSeverityRank[left.severity] - gapSeverityRank[right.severity],
+  );
+  for (const gap of prioritizedCatalogGaps.slice(0, 3)) {
+    suggestedSwaps.push(gap.suggestedAction);
+  }
+  if (input.planningBrief.contextSignals.calendarAvailability !== 'available') {
+    suggestedSwaps.push('Confirm calendar pressure or pin busy-night meals before accepting the plan.');
+  }
+  if (input.rationale.length === 0) {
+    suggestedSwaps.push('Ask for one constraint, pinned meal, or recipe preference if this needs a clearer planning reason.');
+  }
+
+  return {
+    headline: input.entries.length > 0
+      ? `${input.entries.length} planned meal slot(s) ready for review.`
+      : 'No meal slots could be planned from current inputs.',
+    strengths,
+    tradeoffs,
+    watchouts,
+    suggestedSwaps,
+    acceptanceChecklist,
   };
 }
 
@@ -1138,10 +1650,10 @@ export function buildGroceryAggregation(input: {
         normalized.orderingPolicy === 'pantry_item' &&
         (inventoryMatch.status === 'missing' || inventoryMatch.status === 'present_without_quantity');
       const inventoryStatus = pantryCheck ? 'check_pantry' : inventoryMatch.status;
-      const reasons = pantryCheck ? ['Pantry item; verify stock before buying'] : inventoryMatch.reasons;
+      const reasons = pantryCheck ? ['At-home item; verify stock before buying'] : inventoryMatch.reasons;
       const note =
         pantryCheck && !inventoryMatch.note
-          ? 'Marked as a pantry item, so verify what is on hand before adding it to the cart.'
+          ? 'Marked as an at-home item, so verify what is on hand before adding it to the cart.'
           : inventoryMatch.note;
       const uncertainty = pantryCheck ? null : inventoryMatch.uncertainty;
 

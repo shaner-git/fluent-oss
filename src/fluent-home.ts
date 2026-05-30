@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { summarizeHealthContext, summarizeHealthTodayContext, type HealthService } from './domains/health/service';
 import { MEALS_GROCERY_LIST_TEMPLATE_URI } from './domains/meals/grocery-list';
 import {
@@ -25,8 +24,9 @@ export const FLUENT_HOME_LIVE_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-home-v
 export const FLUENT_HOME_ACTIONS_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-home-v18.html';
 export const FLUENT_HOME_DIRECT_ACTIONS_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-home-v19.html';
 export const FLUENT_HOME_MODAL_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-home-v20.html';
-export const FLUENT_HOME_TEMPLATE_URI = 'ui://widget/fluent-home-v21.html';
-export const FLUENT_HOME_WIDGET_VERSION = 'v21';
+export const FLUENT_HOME_AT_HOME_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-home-v21.html';
+export const FLUENT_HOME_TEMPLATE_URI = 'ui://widget/fluent-home-v22.html';
+export const FLUENT_HOME_WIDGET_VERSION = 'v22';
 
 type HomeDomainId = 'meals' | 'style' | 'health';
 type HomeDomainStatus = 'ready' | 'available' | 'onboarding' | 'disabled';
@@ -152,19 +152,15 @@ export function buildFluentHomeWidgetMeta(origin: string) {
         connectDomains: [],
         resourceDomains: [],
       },
-      domain: `${createHash('sha256').update(origin).digest('hex').slice(0, 32)}.claudemcpcontent.com`,
+      domain: origin,
       prefersBorder: true,
     },
   } as const;
 }
 
 export function getFluentHomeWidgetHtml() {
-  return String.raw`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
+  return String.raw`<div id="app"></div>
+<style>
     :root {
       color-scheme: light;
       --home-surface: #ffffff;
@@ -308,10 +304,8 @@ export function getFluentHomeWidgetHtml() {
       .home-detail-head { display: grid; }
     }
   </style>
-</head>
-<body>
-  <main id="app"></main>
   <script>
+  (function () {
     const app = document.getElementById('app');
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const callableTools = new Set(['meals_render_grocery_list_v2', 'health_get_today_context']);
@@ -387,10 +381,54 @@ export function getFluentHomeWidgetHtml() {
       }
       return Promise.reject(new Error('Widget tool calls are not available in this host yet.'));
     }
+    function looksLikeHome(candidate) {
+      return Boolean(candidate && typeof candidate === 'object' && candidate.account && candidate.memory && Array.isArray(candidate.domains));
+    }
+    function findHome(candidate, seen) {
+      if (!candidate || typeof candidate !== 'object') return null;
+      seen = seen || [];
+      if (seen.indexOf(candidate) >= 0) return null;
+      seen.push(candidate);
+      if (candidate.home && typeof candidate.home === 'object') return candidate.home;
+      if (looksLikeHome(candidate)) return candidate;
+      if (candidate.experience === 'fluent_home' && candidate.home && typeof candidate.home === 'object') return candidate.home;
+      const keys = ['structuredContent', 'toolOutput', 'toolResponse', 'toolResponseMetadata', '_meta', 'output', 'result', 'data', 'value', 'params', 'requestParams', 'modalParams'];
+      for (let index = 0; index < keys.length; index += 1) {
+        const nested = findHome(candidate[keys[index]], seen);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    function fallbackHome() {
+      return {
+        account: { access: '', displayName: null, entitlement: null, timezone: '' },
+        domains: [],
+        memory: {
+          meals: { currentPlan: null, groceryReadiness: null, inventory: '', mealMemory: '' },
+          style: { closet: '', coverage: '', purchaseAnalysisReady: false, styleSignals: [] },
+          health: { activeBlock: null, today: null, trainingSupport: '' },
+        },
+        suggestedActions: [],
+        version: 'empty',
+      };
+    }
     function getHome() {
-      const data = getOpenAI().toolOutput ?? getOpenAI().toolResponse ?? {};
-      const structured = data.structuredContent ?? data;
-      return structured.home ?? data.home ?? structured;
+      const openai = getOpenAI();
+      const candidates = [
+        openai.toolResponseMetadata,
+        openai.toolOutput,
+        openai.toolResponse,
+        openai.structuredContent,
+        openai.params,
+        openai.requestParams,
+        openai.modalParams,
+        openai,
+      ];
+      for (let index = 0; index < candidates.length; index += 1) {
+        const home = findHome(candidates[index]);
+        if (home) return home;
+      }
+      return fallbackHome();
     }
     function canInvoke(action) {
       return action && callableTools.has(action.toolName);
@@ -507,7 +545,7 @@ export function getFluentHomeWidgetHtml() {
         '<div class="home-detail-head"><h2 class="home-detail-title">' + esc(list.title || 'Grocery list') + '</h2><div class="home-detail-meta">' + esc(summary.headline || list.subtitle || '') + '</div></div>' +
         (stale ? '<div class="home-warning">' + esc(stale) + '</div>' : '') +
         '<div class="home-list-section"><h3 class="home-list-title">To buy</h3>' + renderItems(buy && buy.items, 'Nothing left to buy.') + '</div>' +
-        '<div class="home-list-section"><h3 class="home-list-title">Check at home</h3>' + renderItems(verify && verify.items, 'No pantry checks right now.') + '</div>' +
+        '<div class="home-list-section"><h3 class="home-list-title">Check at home</h3>' + renderItems(verify && verify.items, 'No at-home checks right now.') + '</div>' +
         '</section>';
     }
     function renderTrainingDetail(payload) {
@@ -624,9 +662,9 @@ export function getFluentHomeWidgetHtml() {
     }
     window.addEventListener('openai:set_globals', render);
     render();
+  })();
   </script>
-</body>
-</html>`;
+`;
 }
 
 async function buildMealsMemorySnapshot(meals: MealsService): Promise<FluentHomeViewModel['memory']['meals']> {
@@ -646,7 +684,7 @@ async function buildMealsMemorySnapshot(meals: MealsService): Promise<FluentHome
   return {
     currentPlan: describeMealPlan(currentPlan),
     groceryReadiness: describeGroceryReadiness(currentGroceryList),
-    inventory: inventorySummary ? describeInventory(inventorySummary) : 'Pantry: could not refresh inventory just now.',
+    inventory: inventorySummary ? describeInventory(inventorySummary) : 'At home: could not refresh food inventory just now.',
     mealMemory: describeMealMemory(mealMemory),
   };
 }
@@ -790,7 +828,7 @@ function describeGroceryReadiness(list: CurrentGroceryListRecord | null): string
 
 function describeInventory(summary: InventorySummary): string {
   const expiringCount = summary.expiringSoon.length;
-  return `Pantry: ${formatCount(summary.totalItems, 'item')} tracked${expiringCount ? `; ${formatCount(expiringCount, 'item')} may need attention soon` : ''}.`;
+  return `At home: ${formatCount(summary.totalItems, 'item')} tracked${expiringCount ? `; ${formatCount(expiringCount, 'item')} may need attention soon` : ''}.`;
 }
 
 function describeMealMemory(memory: MealMemoryRecord[]): string {

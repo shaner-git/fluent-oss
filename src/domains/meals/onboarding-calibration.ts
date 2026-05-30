@@ -13,6 +13,10 @@ import type {
   MealsCalibrationSignalSource,
   MealsCalibrationSignalStatus,
   MealsConfidenceBreakdown,
+  MealsGuidedOnboardingIntent,
+  MealsGuidedOnboardingRecord,
+  MealsGuidedOnboardingStep,
+  MealsGuidedOnboardingStepStatus,
   MealsOnboardingCalibrationRecord,
   MealsPantryCalibrationRecord,
   MealsPantryCalibrationStatus,
@@ -29,14 +33,42 @@ export interface MealsCalibrationResponseInput {
   preferencePatch?: {
     allergies?: string[] | null;
     budgetSensitivity?: string | null;
+    cleanupTolerance?: string | null;
     cookingCadence?: string | null;
     dietaryConstraints?: string[] | null;
     dislikes?: string[] | null;
+    favoriteFoods?: string[] | null;
     groceryExpectation?: string | null;
     hardAvoids?: string[] | null;
+    householdAdultCount?: number | null;
+    householdChildCount?: number | null;
+    householdChildrenEatSameMeals?: boolean | null;
+    householdDefaultServeTarget?: number | null;
+    householdGuestFrequency?: string | null;
+    householdLeftoverTargetServings?: number | null;
+    householdMealParticipation?: Record<string, string[]> | null;
     householdShape?: string | null;
+    householdSizeSegment?: string | null;
     leftoverPreference?: string | null;
+    mealRoutine?: string | null;
+    planningBatchFreezerComfort?: string | null;
+    planningBusyNights?: string[] | null;
+    planningCalendarPolicy?: string | null;
+    planningEquipmentConstraints?: string[] | null;
+    planningFamilyDinnerCount?: number | null;
+    planningGroceryDay?: string | null;
+    planningPrepDay?: string | null;
+    planningTargetBreakfastCount?: number | null;
+    planningTargetDinnerCount?: number | null;
+    planningTargetLunchCount?: number | null;
+    planningTargetSnackCount?: number | null;
+    planningTotalTimeToleranceMinutes?: number | null;
     preferredCuisines?: string[] | null;
+    spicePreference?: string | null;
+    shoppingPantryCheckPolicy?: string | null;
+    shoppingPreferredBrands?: string[] | null;
+    shoppingPreferredStores?: string[] | null;
+    shoppingSubstitutionTolerance?: string | null;
     weeknightTimeLimitMinutes?: number | null;
   } | null;
   signals?: Array<{
@@ -48,6 +80,19 @@ export interface MealsCalibrationResponseInput {
   }> | null;
   starterPreferenceText?: string | null;
 }
+
+const GUIDED_ONBOARDING_STEPS: MealsGuidedOnboardingStep[] = [
+  'intent',
+  'household',
+  'safety',
+  'rhythm',
+  'cooking_reality',
+  'taste',
+  'groceries',
+  'recipe_book_seed',
+  'review',
+  'first_output',
+];
 
 export function buildMealsOnboardingCalibration(input: {
   currentGroceryList?: CurrentGroceryListRecord | null;
@@ -148,19 +193,29 @@ export function buildMealsOnboardingCalibration(input: {
     pantryInventoryCoverage,
     setupState,
   });
+  const guidedOnboarding = buildGuidedOnboarding({
+    calibrationRaw: calibration.raw,
+    confirmedPreferences,
+    currentPlanPresent: Boolean(input.currentPlan),
+    preferenceStatus,
+    recipePlanHistoryCoverage,
+    setupState,
+    preferences: input.preferences,
+  });
 
   return {
     calibrationPrompts,
     confidenceBreakdown,
     confirmedPreferences,
     evidenceGaps,
+    guidedOnboarding,
     groceryListReadiness,
     groceryReadiness,
     hostGuidance: {
       answerMode: 'text_first',
       copyGuardrails: [
         'Start Meals setup and confidence-sensitive planning with meals_get_onboarding_calibration.',
-        'Pantry ownership is evidence, not preference. Say "your pantry suggests" for pantry-derived patterns.',
+        'At-home food ownership is evidence, not preference. Say "your kitchen inventory suggests" for inventory-derived patterns.',
         'Meal history and accepted plans can suggest patterns, but do not say "you like" unless the user confirmed it.',
         'Allergies, medical restrictions, and hard avoids require explicit user confirmation.',
         'If evidence is thin, offer a starter plan or grocery list with lower confidence instead of forcing a quiz.',
@@ -190,6 +245,159 @@ export function buildMealsCalibrationContext(
     mealPlanningReadiness: calibration.mealPlanningReadiness,
     setupState: calibration.setupState,
   };
+}
+
+function buildGuidedOnboarding(input: {
+  calibrationRaw: Record<string, unknown>;
+  confirmedPreferences: MealsCalibrationSignalRecord[];
+  currentPlanPresent: boolean;
+  preferenceStatus: MealsOnboardingCalibrationRecord['householdPreferenceStatus'];
+  preferences: MealPreferencesRecord;
+  recipePlanHistoryCoverage: MealsOnboardingCalibrationRecord['recipePlanHistoryCoverage'];
+  setupState: MealsSetupState;
+}): MealsGuidedOnboardingRecord {
+  const stored = asRecord(input.calibrationRaw.guidedOnboarding ?? input.calibrationRaw.guided_onboarding) ?? {};
+  const entryIntent = normalizeGuidedIntent(asNonEmptyString(stored.entryIntent ?? stored.entry_intent));
+  const skippedSteps = normalizeGuidedSteps(stored.skippedSteps ?? stored.skipped_steps);
+  const needsConfirmation = buildGuidedNeedsConfirmation(input.preferences);
+  const steps = buildGuidedStepStatuses({
+    confirmedPreferences: input.confirmedPreferences,
+    currentPlanPresent: input.currentPlanPresent,
+    entryIntent,
+    needsConfirmation,
+    preferenceStatus: input.preferenceStatus,
+    recipePlanHistoryCoverage: input.recipePlanHistoryCoverage,
+    setupState: input.setupState,
+    skippedSteps,
+  });
+  const currentStep = resolveGuidedCurrentStep(steps);
+
+  return {
+    completedAt: asNonEmptyString(stored.completedAt ?? stored.completed_at),
+    currentStep,
+    entryIntent,
+    lastUpdatedAt: asNonEmptyString(stored.lastUpdatedAt ?? stored.last_updated_at),
+    needsConfirmation,
+    nextStepRationale: guidedStepRationale(currentStep),
+    skippedSteps,
+    startedAt: asNonEmptyString(stored.startedAt ?? stored.started_at),
+    steps,
+    version: 'meals-guided-v1',
+  };
+}
+
+function buildGuidedStepStatuses(input: {
+  confirmedPreferences: MealsCalibrationSignalRecord[];
+  currentPlanPresent: boolean;
+  entryIntent: MealsGuidedOnboardingIntent | null;
+  needsConfirmation: MealsGuidedOnboardingRecord['needsConfirmation'];
+  preferenceStatus: MealsOnboardingCalibrationRecord['householdPreferenceStatus'];
+  recipePlanHistoryCoverage: MealsOnboardingCalibrationRecord['recipePlanHistoryCoverage'];
+  setupState: MealsSetupState;
+  skippedSteps: MealsGuidedOnboardingStep[];
+}): Record<MealsGuidedOnboardingStep, MealsGuidedOnboardingStepStatus> {
+  const statuses = GUIDED_ONBOARDING_STEPS.reduce<Record<MealsGuidedOnboardingStep, MealsGuidedOnboardingStepStatus>>((accumulator, step) => {
+    accumulator[step] = input.skippedSteps.includes(step) ? 'skipped' : 'not_started';
+    return accumulator;
+  }, {} as Record<MealsGuidedOnboardingStep, MealsGuidedOnboardingStepStatus>);
+  const hasSignal = (kind: MealsCalibrationSignalKind) =>
+    input.confirmedPreferences.some((entry) => entry.kind === kind && entry.status !== 'rejected');
+
+  if (input.entryIntent || input.setupState !== 'no_meals_state') statuses.intent = 'answered';
+  if (input.preferenceStatus.householdShapeConfirmed) statuses.household = 'answered';
+  if (input.needsConfirmation.some((entry) => entry.field.startsWith('household.'))) statuses.household = 'needs_confirmation';
+  if (input.preferenceStatus.allergiesExplicitlyConfirmed && input.preferenceStatus.hardAvoidsExplicitlyConfirmed) statuses.safety = 'answered';
+  if (input.preferenceStatus.mealRoutineConfirmed) statuses.rhythm = 'answered';
+  if (input.preferenceStatus.weeknightTimeLimitConfirmed || hasSignal('cleanup_tolerance')) statuses.cooking_reality = 'answered';
+  if (input.preferenceStatus.positiveTasteConfirmed) statuses.taste = 'answered';
+  if (input.preferenceStatus.groceryExpectationsConfirmed) statuses.groceries = 'answered';
+  if (input.recipePlanHistoryCoverage.activeRecipeMemoryCount > 0) statuses.recipe_book_seed = 'answered';
+  if (input.setupState === 'preferences_partially_confirmed' || input.setupState === 'meals_calibrated') statuses.review = 'answered';
+  if (input.currentPlanPresent) statuses.first_output = 'answered';
+
+  return statuses;
+}
+
+function buildGuidedNeedsConfirmation(preferences: MealPreferencesRecord): MealsGuidedOnboardingRecord['needsConfirmation'] {
+  const raw = preferences.raw;
+  const household = asRecord(raw.household) ?? {};
+  const householdShape = asNonEmptyString(household.shape ?? raw.household_shape);
+  if (!householdShape || hasStructuredHouseholdFields(household) || isSpecificHouseholdShape(householdShape)) {
+    return [];
+  }
+  return [
+    {
+      field: 'household.defaultServeTarget',
+      reason: 'Household was captured as starter text; confirm structured eaters before using it for high-confidence serving math.',
+      value: householdShape,
+    },
+  ];
+}
+
+function hasStructuredHouseholdFields(household: Record<string, unknown>): boolean {
+  const defaultServeTarget = asNonNegativeNumber(household.defaultServeTarget ?? household.default_serve_target);
+  const adultCount = asNonNegativeNumber(household.adultCount ?? household.adult_count);
+  const childCount = asNonNegativeNumber(household.childCount ?? household.child_count);
+  return Boolean(
+    asNonEmptyString(household.sizeSegment ?? household.size_segment) ||
+      (defaultServeTarget != null && defaultServeTarget > 0) ||
+      (adultCount ?? 0) + (childCount ?? 0) > 0,
+  );
+}
+
+function isSpecificHouseholdShape(value: string): boolean {
+  const normalized = normalizeText(value);
+  return Boolean(
+    normalized.match(/\b(?:household|family|home|serves?|servings?)\s+(?:of|for)?\s*\d+\b/) ||
+      normalized.match(/\b\d+\s+(?:people|persons|adults?|kids?|children|diners|eaters)\b/) ||
+      /\b(solo|one person|just me|single adult|couple|two people|two adults|2 adults|family of three|three people|3 people|3 diners)\b/.test(
+        normalized,
+      ),
+  );
+}
+
+function resolveGuidedCurrentStep(
+  steps: Record<MealsGuidedOnboardingStep, MealsGuidedOnboardingStepStatus>,
+): MealsGuidedOnboardingStep {
+  return GUIDED_ONBOARDING_STEPS.find((step) => steps[step] === 'not_started' || steps[step] === 'needs_confirmation') ?? 'first_output';
+}
+
+function guidedStepRationale(step: MealsGuidedOnboardingStep): string {
+  switch (step) {
+    case 'intent':
+      return 'Choose whether Meals should plan a week, seed recipes, improve groceries, or just save preferences first.';
+    case 'household':
+      return 'Household shape drives serving math, family-fit recipes, leftovers, and repeated meal scaling.';
+    case 'safety':
+      return 'Allergies and hard avoids require explicit confirmation before Fluent suggests food.';
+    case 'rhythm':
+      return 'Weekly rhythm determines meal counts, grocery timing, prep timing, and calendar needs.';
+    case 'cooking_reality':
+      return 'Time, cleanup, equipment, and batch tolerance keep plans realistic.';
+    case 'taste':
+      return 'Positive taste signals let Fluent plan toward food the household actually welcomes.';
+    case 'groceries':
+      return 'Grocery expectations decide whether lists should be exact, at-home-check based, budget-sensitive, or flexible.';
+    case 'recipe_book_seed':
+      return 'Recipe choices turn onboarding into concrete food evidence without forcing a questionnaire wall.';
+    case 'review':
+      return 'Review separates confirmed preferences from inferred at-home food, history, and recipe-book evidence.';
+    case 'first_output':
+      return 'End setup with a useful plan, grocery list, recipe book, or small set of recipes to try.';
+  }
+}
+
+function normalizeGuidedIntent(value: string | null): MealsGuidedOnboardingIntent | null {
+  return value === 'plan_week' || value === 'recipe_book' || value === 'grocery' || value === 'preferences' ? value : null;
+}
+
+function normalizeGuidedSteps(value: unknown): MealsGuidedOnboardingStep[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is MealsGuidedOnboardingStep => typeof entry === 'string' && isGuidedStep(entry));
+}
+
+function isGuidedStep(value: string): value is MealsGuidedOnboardingStep {
+  return (GUIDED_ONBOARDING_STEPS as string[]).includes(value);
 }
 
 export function applyMealsCalibrationResponse(input: {
@@ -234,7 +442,7 @@ export function applyMealsCalibrationResponse(input: {
   for (const entry of input.response.pantryItems ?? []) {
     const itemName = entry.itemName.trim();
     if (!itemName) {
-      throw new Error('pantry_items.item_name is required when marking pantry evidence.');
+      throw new Error('pantry_items.item_name is required when marking at-home food evidence.');
     }
     pantryReviewed = true;
     nextPantry.push({
@@ -340,13 +548,17 @@ function confirmedSignalsFromPreferences(preferences: MealPreferencesRecord): Me
   pushValues(signals, 'disliked_food', asStringArray(coreRules.hard_avoids), updatedAt, 'Saved hard avoid in Meals preferences.');
   pushValues(signals, 'disliked_food', asStringArray(coreRules.dislikes), updatedAt, 'Saved dislike in Meals preferences.');
   pushValues(signals, 'preferred_cuisine', asStringArray(coreRules.preferred_cuisines), updatedAt, 'Saved cuisine preference in Meals preferences.');
-  pushSingle(signals, 'household_shape', asNonEmptyString(household.shape ?? raw.household_shape), updatedAt);
+  pushValues(signals, 'favorite_food', asStringArray(coreRules.favorite_foods), updatedAt, 'Saved favorite food in Meals preferences.');
+  pushSingle(signals, 'household_shape', summarizeHouseholdShape(household, raw), updatedAt);
   pushSingle(signals, 'cooking_cadence', asNonEmptyString(planning.cooking_cadence), updatedAt);
+  pushSingle(signals, 'meal_routine', asNonEmptyString(planning.meal_routine), updatedAt);
   const weeknightLimit = asNonNegativeNumber(planning.weeknight_time_limit_minutes);
   if (weeknightLimit != null) pushSingle(signals, 'weeknight_time_limit', `${weeknightLimit} minutes`, updatedAt);
   pushSingle(signals, 'budget_sensitivity', asNonEmptyString(shopping.budget_sensitivity), updatedAt);
+  pushSingle(signals, 'cleanup_tolerance', asNonEmptyString(planning.cleanup_tolerance), updatedAt);
   pushSingle(signals, 'leftover_preference', asNonEmptyString(planning.leftover_preference), updatedAt);
   pushSingle(signals, 'grocery_expectation', asNonEmptyString(shopping.grocery_expectation), updatedAt);
+  pushSingle(signals, 'spice_preference', asNonEmptyString(coreRules.spice_preference ?? planning.spice_preference), updatedAt);
 
   return signals;
 }
@@ -479,14 +691,36 @@ function buildHouseholdPreferenceStatus(confirmed: MealsCalibrationSignalRecord[
   const has = (kind: MealsCalibrationSignalKind) => confirmed.some((entry) => entry.kind === kind && entry.status !== 'rejected');
   const raw = preferences.raw;
   const coreRules = asRecord(raw.core_rules) ?? {};
+  const household = asRecord(raw.household) ?? {};
   return {
     allergiesExplicitlyConfirmed: has('allergy') || Boolean(coreRules.allergies_confirmed_at),
     constraintsExplicitlyConfirmed: has('dietary_constraint') || Boolean(coreRules.dietary_constraints_confirmed_at),
     groceryExpectationsConfirmed: has('grocery_expectation'),
     hardAvoidsExplicitlyConfirmed: has('disliked_food') || Boolean(coreRules.hard_avoids_confirmed_at),
-    householdShapeConfirmed: has('household_shape'),
+    householdShapeConfirmed: has('household_shape') || hasStructuredHouseholdFields(household),
+    mealRoutineConfirmed: has('meal_routine') || has('cooking_cadence'),
+    positiveTasteConfirmed: has('favorite_food') || has('preferred_cuisine'),
     weeknightTimeLimitConfirmed: has('weeknight_time_limit'),
   };
+}
+
+function summarizeHouseholdShape(household: Record<string, unknown>, raw: Record<string, unknown>): string | null {
+  const explicit = asNonEmptyString(household.shape ?? raw.household_shape);
+  if (explicit) return explicit;
+  const defaultServeTarget = asNonNegativeNumber(household.default_serve_target ?? household.defaultServeTarget);
+  if (defaultServeTarget != null) return `serves ${Math.max(1, Math.round(defaultServeTarget))}`;
+  const adultCount = asNonNegativeNumber(household.adult_count ?? household.adultCount);
+  const childCount = asNonNegativeNumber(household.child_count ?? household.childCount);
+  if (adultCount != null || childCount != null) {
+    const parts = [
+      adultCount != null ? `${Math.round(adultCount)} adult${Math.round(adultCount) === 1 ? '' : 's'}` : null,
+      childCount != null ? `${Math.round(childCount)} child${Math.round(childCount) === 1 ? '' : 'ren'}` : null,
+    ].filter(Boolean);
+    return parts.join(', ');
+  }
+  const segment = asNonEmptyString(household.size_segment ?? household.sizeSegment);
+  if (segment) return segment;
+  return null;
 }
 
 function buildConfidenceBreakdown(input: {
@@ -509,6 +743,8 @@ function buildConfidenceBreakdown(input: {
   );
   const requiredSignals = [
     input.preferenceStatus.householdShapeConfirmed,
+    input.preferenceStatus.positiveTasteConfirmed,
+    input.preferenceStatus.mealRoutineConfirmed,
     input.preferenceStatus.hardAvoidsExplicitlyConfirmed || input.preferenceStatus.allergiesExplicitlyConfirmed,
     input.preferenceStatus.weeknightTimeLimitConfirmed,
     input.preferenceStatus.groceryExpectationsConfirmed,
@@ -622,18 +858,18 @@ function buildGroceryReadiness(input: {
 }): MealsReadinessRecord {
   const notes: string[] = [];
   if (input.pantryInventoryCoverage.excludedCalibrationCount > 0) {
-    notes.push(`${input.pantryInventoryCoverage.excludedCalibrationCount} pantry item(s) marked stale, accidental, or not representative are excluded from confidence.`);
+    notes.push(`${input.pantryInventoryCoverage.excludedCalibrationCount} at-home item(s) marked stale, accidental, or not representative are excluded from confidence.`);
   }
   if (!input.groceryListReadiness.groceryExpectationConfirmed) {
     notes.push('Grocery-list expectations are not confirmed.');
   }
   if (input.groceryListReadiness.pantryCheckCount > 0) {
-    notes.push(`${input.groceryListReadiness.pantryCheckCount} item(s) still need a pantry check before shopping.`);
+    notes.push(`${input.groceryListReadiness.pantryCheckCount} item(s) still need an at-home check before shopping.`);
   }
   if (input.confidenceBreakdown.groceryDecisionConfidence >= 0.62) {
     return {
       basis: 'pantry_and_grocery_expectation',
-      label: 'Grocery list generation is ready with pantry confidence visible.',
+      label: 'Grocery list generation is ready with at-home food confidence visible.',
       notes,
       ready: true,
       readinessLevel: 'ready',
@@ -643,8 +879,8 @@ function buildGroceryReadiness(input: {
     basis: input.pantryInventoryCoverage.activeInventoryCount > 0 ? 'pantry_evidence_unconfirmed' : 'no_pantry_evidence',
     label:
       input.pantryInventoryCoverage.activeInventoryCount > 0
-        ? 'Grocery lists can use pantry evidence, but should ask the user to verify uncertain items.'
-        : 'Grocery lists can be generated from a plan, but pantry coverage is unknown.',
+        ? 'Grocery lists can use at-home food evidence, but should ask the user to verify uncertain items.'
+        : 'Grocery lists can be generated from a plan, but at-home food coverage is unknown.',
     notes,
     ready: input.setupState !== 'no_meals_state',
     readinessLevel: 'provisional',
@@ -663,10 +899,40 @@ function buildCalibrationPrompts(input: {
       id: 'starter-meals-signals',
       kind: 'starter_signal',
       label: 'Add starter meal signals',
-      question: 'Tell me household shape, hard avoids or allergies, cooking cadence, weeknight time, and grocery expectation in one short answer.',
+      question: 'Tell me household size, favorite foods or cuisines, hard avoids or allergies, normal meal routine, weeknight time, and grocery expectation in one short answer.',
       rationale: 'A few real signals make the first plan useful without a quiz wall.',
       responseOptions: [
         { label: 'Save starter signals', requiresFreeText: 'starter_preference_text', source: 'user_confirmed', status: 'confirmed', value: null },
+        { label: 'Skip for now', requiresFreeText: null, source: null, status: null, value: null },
+      ],
+      signal: null,
+      toolName: 'meals_record_calibration_response',
+    });
+  }
+  if (!input.preferenceStatus.positiveTasteConfirmed) {
+    prompts.push({
+      id: 'positive-taste-signals',
+      kind: 'starter_signal',
+      label: 'Add favorite foods',
+      question: 'What are two or three foods, cuisines, or meals this household usually welcomes?',
+      rationale: 'Positive taste signals help Fluent plan toward something instead of only avoiding mistakes.',
+      responseOptions: [
+        { label: 'Save favorites', requiresFreeText: 'favorite_foods', source: 'user_confirmed', status: 'confirmed', value: null },
+        { label: 'Skip for now', requiresFreeText: null, source: null, status: null, value: null },
+      ],
+      signal: null,
+      toolName: 'meals_record_calibration_response',
+    });
+  }
+  if (!input.preferenceStatus.mealRoutineConfirmed) {
+    prompts.push({
+      id: 'meal-routine',
+      kind: 'starter_signal',
+      label: 'Set meal routine',
+      question: 'What is the normal weekly routine: solo meals, two-person dinners, family dinners, leftovers, batch cooking, or fresh each night?',
+      rationale: 'Routine and household size change servings, repeatability, and leftover planning.',
+      responseOptions: [
+        { label: 'Save routine', requiresFreeText: 'meal_routine', source: 'user_confirmed', status: 'confirmed', value: null },
         { label: 'Skip for now', requiresFreeText: null, source: null, status: null, value: null },
       ],
       signal: null,
@@ -678,7 +944,7 @@ function buildCalibrationPrompts(input: {
       id: `confirm-${signal.id.replace(/[^a-z0-9:-]+/gi, '-')}`,
       kind: 'confirm_signal',
       label: `Confirm ${signal.kind.replace(/_/g, ' ')}`,
-      question: `${signal.source === 'pantry_inferred' ? 'Your pantry suggests' : 'Your meal history suggests'} ${signal.value}. Is that useful, wrong, or just incidental?`,
+      question: `${signal.source === 'pantry_inferred' ? 'Your kitchen inventory suggests' : 'Your meal history suggests'} ${signal.value}. Is that useful, wrong, or just incidental?`,
       rationale: 'Confirming or correcting a Meals pattern turns evidence into calibrated preference.',
       responseOptions: [
         { label: 'Confirm', requiresFreeText: null, source: 'user_confirmed', status: 'confirmed', value: signal.value },
@@ -714,7 +980,7 @@ function buildCalibrationPrompts(input: {
       id: 'grocery-expectation',
       kind: 'grocery_expectation',
       label: 'Set grocery expectation',
-      question: 'Should grocery lists assume pantry verification, exact shopping lists, budget sensitivity, or a quick weeknight restock?',
+      question: 'Should grocery lists assume at-home verification, exact shopping lists, budget sensitivity, or a quick weeknight restock?',
       rationale: 'Grocery-list confidence depends on knowing how strict the list should be.',
       responseOptions: [
         { label: 'Save expectation', requiresFreeText: 'grocery_expectation', source: 'user_confirmed', status: 'confirmed', value: null },
@@ -728,11 +994,11 @@ function buildCalibrationPrompts(input: {
     prompts.push({
       id: 'pantry-review',
       kind: 'pantry_review',
-      label: 'Review pantry evidence',
-      question: 'Anything in the pantry list stale, accidental, or not representative of how you eat?',
+      label: 'Review at-home food evidence',
+      question: 'Anything in the at-home food list stale, accidental, or not representative of how you eat?',
       rationale: 'Pantry evidence improves grocery planning, but ownership is not preference.',
       responseOptions: [
-        { label: 'Mark pantry item', requiresFreeText: 'pantry_item', source: 'user_confirmed', status: 'confirmed', value: null },
+        { label: 'Mark at-home item', requiresFreeText: 'pantry_item', source: 'user_confirmed', status: 'confirmed', value: null },
         { label: 'Skip for now', requiresFreeText: null, source: null, status: null, value: null },
       ],
       signal: null,
@@ -761,13 +1027,15 @@ function buildUnresolvedQuestions(input: {
 }): string[] {
   const questions: string[] = [];
   if (!input.preferenceStatus.householdShapeConfirmed) questions.push('Household shape is not confirmed.');
+  if (!input.preferenceStatus.positiveTasteConfirmed) questions.push('Favorite foods or cuisines are not confirmed.');
+  if (!input.preferenceStatus.mealRoutineConfirmed) questions.push('Normal meal routine is not confirmed.');
   if (!input.preferenceStatus.hardAvoidsExplicitlyConfirmed && !input.preferenceStatus.allergiesExplicitlyConfirmed) {
     questions.push('Hard avoids and allergies have not been explicitly confirmed.');
   }
   if (!input.preferenceStatus.weeknightTimeLimitConfirmed) questions.push('Weeknight cooking time limit is unknown.');
   if (!input.preferenceStatus.groceryExpectationsConfirmed) questions.push('Grocery-list expectations are unknown.');
   if (input.pantryInventoryCoverage.hasImportedInventory && !input.pantryInventoryCoverage.importedInventoryConfirmed) {
-    questions.push('Imported pantry evidence has not been reviewed for stale or accidental items.');
+    questions.push('Imported at-home food evidence has not been reviewed for stale or accidental items.');
   }
   if (input.confirmedPreferences.length === 0) questions.push('No Meals preference has been explicitly confirmed yet.');
   return questions.slice(0, 5);
@@ -784,8 +1052,8 @@ function buildEvidenceGaps(input: {
   if (input.recipePlanHistoryCoverage.approvedPlanCount === 0) gaps.push('No accepted meal-plan history.');
   if (input.recipePlanHistoryCoverage.activeRecipeMemoryCount === 0) gaps.push('No active recipe memory.');
   if (!input.preferenceStatus.groceryExpectationsConfirmed) gaps.push('Grocery expectation missing.');
-  if (input.groceryListReadiness.pantryCheckCount > 0) gaps.push('Current grocery list still has pantry checks.');
-  if (input.pantryInventoryCoverage.staleOrExpiredCount > 0) gaps.push('Some pantry evidence is stale, expired, accidental, or not representative.');
+  if (input.groceryListReadiness.pantryCheckCount > 0) gaps.push('Current grocery list still has at-home checks.');
+  if (input.pantryInventoryCoverage.staleOrExpiredCount > 0) gaps.push('Some at-home food evidence is stale, expired, accidental, or not representative.');
   return gaps.slice(0, 6);
 }
 
@@ -812,7 +1080,7 @@ function buildSuggestedNextAction(input: {
   }
   if (input.pantryInventoryCoverage.hasImportedInventory && !input.pantryInventoryCoverage.importedInventoryConfirmed) {
     return {
-      label: 'Mark stale or accidental pantry items',
+      label: 'Mark stale or accidental at-home items',
       rationale: 'Pantry confidence should not rise from items that do not represent how the household eats now.',
       toolName: 'meals_record_calibration_response',
     };
@@ -848,6 +1116,7 @@ function applyPreferencePatch(
     coreRules.hard_avoids_confirmed_at = now;
   }
   if (patch.dislikes) coreRules.dislikes = mergeStringArray(asStringArray(coreRules.dislikes), patch.dislikes);
+  if (patch.favoriteFoods) coreRules.favorite_foods = mergeStringArray(asStringArray(coreRules.favorite_foods), patch.favoriteFoods);
   if (patch.allergies != null) {
     coreRules.allergies = patch.allergies.length > 0 ? mergeStringArray(asStringArray(coreRules.allergies), patch.allergies) : [];
     coreRules.allergies_confirmed_at = now;
@@ -860,13 +1129,62 @@ function applyPreferencePatch(
   if (patch.preferredCuisines) {
     coreRules.preferred_cuisines = mergeStringArray(asStringArray(coreRules.preferred_cuisines), patch.preferredCuisines);
   }
+  if (patch.spicePreference?.trim()) coreRules.spice_preference = patch.spicePreference.trim();
+  if (patch.householdSizeSegment?.trim()) household.size_segment = patch.householdSizeSegment.trim();
+  if (typeof patch.householdDefaultServeTarget === 'number' && Number.isFinite(patch.householdDefaultServeTarget)) {
+    household.default_serve_target = Math.max(1, Math.round(patch.householdDefaultServeTarget));
+  }
+  if (typeof patch.householdAdultCount === 'number' && Number.isFinite(patch.householdAdultCount)) {
+    household.adult_count = Math.max(0, Math.round(patch.householdAdultCount));
+  }
+  if (typeof patch.householdChildCount === 'number' && Number.isFinite(patch.householdChildCount)) {
+    household.child_count = Math.max(0, Math.round(patch.householdChildCount));
+  }
+  if (typeof patch.householdChildrenEatSameMeals === 'boolean') household.children_eat_same_meals = patch.householdChildrenEatSameMeals;
+  if (patch.householdGuestFrequency?.trim()) household.guest_frequency = patch.householdGuestFrequency.trim();
+  if (typeof patch.householdLeftoverTargetServings === 'number' && Number.isFinite(patch.householdLeftoverTargetServings)) {
+    household.leftover_target_servings = Math.max(0, Math.round(patch.householdLeftoverTargetServings));
+  }
+  if (patch.householdMealParticipation) household.meal_participation = normalizeStringArrayRecord(patch.householdMealParticipation);
   if (patch.cookingCadence?.trim()) planning.cooking_cadence = patch.cookingCadence.trim();
+  if (patch.mealRoutine?.trim()) planning.meal_routine = patch.mealRoutine.trim();
+  if (typeof patch.planningTargetBreakfastCount === 'number' && Number.isFinite(patch.planningTargetBreakfastCount)) {
+    planning.target_breakfast_count = Math.max(0, Math.round(patch.planningTargetBreakfastCount));
+  }
+  if (typeof patch.planningTargetLunchCount === 'number' && Number.isFinite(patch.planningTargetLunchCount)) {
+    planning.target_lunch_count = Math.max(0, Math.round(patch.planningTargetLunchCount));
+  }
+  if (typeof patch.planningTargetDinnerCount === 'number' && Number.isFinite(patch.planningTargetDinnerCount)) {
+    planning.target_dinner_count = Math.max(0, Math.round(patch.planningTargetDinnerCount));
+  }
+  if (typeof patch.planningTargetSnackCount === 'number' && Number.isFinite(patch.planningTargetSnackCount)) {
+    planning.target_snack_count = Math.max(0, Math.round(patch.planningTargetSnackCount));
+  }
+  if (typeof patch.planningFamilyDinnerCount === 'number' && Number.isFinite(patch.planningFamilyDinnerCount)) {
+    planning.family_dinner_count = Math.max(0, Math.round(patch.planningFamilyDinnerCount));
+  }
+  if (patch.planningGroceryDay?.trim()) planning.grocery_day = patch.planningGroceryDay.trim();
+  if (patch.planningPrepDay?.trim()) planning.prep_day = patch.planningPrepDay.trim();
+  if (patch.planningBusyNights) planning.busy_nights = mergeStringArray(asStringArray(planning.busy_nights), patch.planningBusyNights);
+  if (patch.planningCalendarPolicy?.trim()) planning.calendar_policy = patch.planningCalendarPolicy.trim();
   if (typeof patch.weeknightTimeLimitMinutes === 'number' && Number.isFinite(patch.weeknightTimeLimitMinutes)) {
     planning.weeknight_time_limit_minutes = Math.max(0, Math.round(patch.weeknightTimeLimitMinutes));
   }
+  if (typeof patch.planningTotalTimeToleranceMinutes === 'number' && Number.isFinite(patch.planningTotalTimeToleranceMinutes)) {
+    planning.total_time_tolerance_minutes = Math.max(0, Math.round(patch.planningTotalTimeToleranceMinutes));
+  }
+  if (patch.planningEquipmentConstraints) {
+    planning.equipment_constraints = mergeStringArray(asStringArray(planning.equipment_constraints), patch.planningEquipmentConstraints);
+  }
+  if (patch.planningBatchFreezerComfort?.trim()) planning.batch_freezer_comfort = patch.planningBatchFreezerComfort.trim();
+  if (patch.cleanupTolerance?.trim()) planning.cleanup_tolerance = patch.cleanupTolerance.trim();
   if (patch.leftoverPreference?.trim()) planning.leftover_preference = patch.leftoverPreference.trim();
   if (patch.budgetSensitivity?.trim()) shopping.budget_sensitivity = patch.budgetSensitivity.trim();
   if (patch.groceryExpectation?.trim()) shopping.grocery_expectation = patch.groceryExpectation.trim();
+  if (patch.shoppingSubstitutionTolerance?.trim()) shopping.substitution_tolerance = patch.shoppingSubstitutionTolerance.trim();
+  if (patch.shoppingPantryCheckPolicy?.trim()) shopping.pantry_check_policy = patch.shoppingPantryCheckPolicy.trim();
+  if (patch.shoppingPreferredStores) shopping.preferred_stores = mergeStringArray(asStringArray(shopping.preferred_stores), patch.shoppingPreferredStores);
+  if (patch.shoppingPreferredBrands) shopping.preferred_brands = mergeStringArray(asStringArray(shopping.preferred_brands), patch.shoppingPreferredBrands);
 
   raw.core_rules = coreRules;
   raw.household = household;
@@ -886,6 +1204,8 @@ function inferStarterPreferencePatch(text: string): MealsCalibrationResponseInpu
     lower.match(/\b(\d+)\s+(?:people|adults?|kids?|children)\b/);
   if (householdMatch) {
     patch.householdShape = householdMatch[0];
+  } else if (/\b(solo|just me|one person|single adult)\b/.test(lower)) {
+    patch.householdShape = value;
   } else if (/\b(adult|child|kid|family|household|couple)\b/.test(lower)) {
     patch.householdShape = value;
   }
@@ -910,6 +1230,9 @@ function inferStarterPreferencePatch(text: string): MealsCalibrationResponseInpu
     lower.match(/\b(\d+)\s+(?:weeknight\s+)?(?:dinners?|meals?|nights?)\b/) ??
     lower.match(/\b(?:cook|cooking|dinner)\s+([^.;]*(?:week|night|weekday|weeknight)[^.;]*)/);
   if (cadenceMatch) patch.cookingCadence = cadenceMatch[0];
+  if (/\b(solo|couple|family|household|kids|children|leftovers?|batch|meal prep|fresh each night|cook once)\b/.test(lower)) {
+    patch.mealRoutine = value;
+  }
 
   const timeMatch = lower.match(/\b(\d{1,3})\s*(?:minutes?|mins?)\b/);
   if (timeMatch?.[1]) {
@@ -921,6 +1244,16 @@ function inferStarterPreferencePatch(text: string): MealsCalibrationResponseInpu
   }
   if (/\bleftovers?\b/.test(lower)) {
     patch.leftoverPreference = value;
+  }
+  const favoriteMatch = lower.match(/\b(?:like|love|favorite|favourite|prefer|go[- ]?to)\s+([^.;]+)/);
+  if (favoriteMatch?.[1]) {
+    patch.favoriteFoods = splitStarterList(favoriteMatch[1]);
+  }
+  if (/\b(mild|medium spice|spicy|heat|no spice|not spicy)\b/.test(lower)) {
+    patch.spicePreference = value;
+  }
+  if (/\b(low cleanup|minimal cleanup|one pan|sheet pan|cleanup|dishes)\b/.test(lower)) {
+    patch.cleanupTolerance = value;
   }
   if (/\bbudget|cheap|affordable|price|cost\b/.test(lower)) {
     patch.budgetSensitivity = value;
@@ -939,6 +1272,16 @@ function splitStarterList(text: string): string[] {
     .map((entry) => entry.trim().replace(/\b(?:for|with|please|but|except)\b.*$/i, '').trim())
     .filter((entry) => entry.length > 0)
     .slice(0, 8);
+}
+
+function normalizeStringArrayRecord(value: Record<string, string[]>): Record<string, string[]> {
+  return Object.entries(value).reduce<Record<string, string[]>>((record, [key, items]) => {
+    const normalizedKey = normalizeText(key);
+    if (!normalizedKey || !Array.isArray(items)) return record;
+    const normalizedItems = items.map((item) => item.trim()).filter(Boolean);
+    if (normalizedItems.length > 0) record[normalizedKey] = Array.from(new Set(normalizedItems));
+    return record;
+  }, {});
 }
 
 function validateWritableSignal(signal: NonNullable<MealsCalibrationResponseInput['signals']>[number]): void {
@@ -1076,11 +1419,15 @@ function isSignalKind(value: string): value is MealsCalibrationSignalKind {
     'allergy',
     'dietary_constraint',
     'preferred_cuisine',
+    'favorite_food',
     'cooking_cadence',
+    'meal_routine',
     'weeknight_time_limit',
     'budget_sensitivity',
+    'cleanup_tolerance',
     'leftover_preference',
     'grocery_expectation',
+    'spice_preference',
     'meal_pattern',
     'pantry_pattern',
     'starter_preference',

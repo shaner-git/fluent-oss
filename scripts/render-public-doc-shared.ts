@@ -13,6 +13,7 @@ export type CurrentToolGroups = {
   core: string[];
   healthCanonical: string[];
   mealsCanonical: string[];
+  mealsLegacyRender: string[];
   mealsRender: string[];
   styleCanonical: string[];
   styleRender: string[];
@@ -53,6 +54,14 @@ export const CURRENT_RENDER_TOOL_NAMES = [
   ...CURRENT_STYLE_RENDER_TOOL_NAMES,
 ] as const;
 
+export const LEGACY_RENDER_TOOL_NAMES = ['meals_render_pantry_dashboard'] as const;
+
+const LEGACY_RENDER_TOOL_NAME_SET = new Set<string>(LEGACY_RENDER_TOOL_NAMES);
+
+export const ACTIVE_CURRENT_RENDER_TOOL_NAMES = CURRENT_RENDER_TOOL_NAMES.filter(
+  (name) => !LEGACY_RENDER_TOOL_NAME_SET.has(name),
+);
+
 export const CURRENT_RENDER_TOOL_HOST_GUIDE: readonly RenderToolHostGuide[] = [
   {
     name: 'meals_render_recipe_card',
@@ -64,10 +73,10 @@ export const CURRENT_RENDER_TOOL_HOST_GUIDE: readonly RenderToolHostGuide[] = [
   },
   {
     name: 'meals_render_pantry_dashboard',
-    hostClass: 'ChatGPT/App-SDK-style widget',
-    claude: 'Prefer canonical inventory reads and a host-native summary.',
-    openclaw: 'Use the plain-MCP inventory path.',
-    plainMcpFallback: '`meals_get_inventory_summary` plus `meals_get_inventory` when detail is needed',
+    hostClass: 'Legacy compatibility widget; retired product surface',
+    claude: 'Do not use for new flows. Prefer Meals setup calibration, the living grocery list, inventory reads, and host-native summaries.',
+    openclaw: 'Do not use for new flows. Use the plain-MCP inventory or grocery-list path.',
+    plainMcpFallback: '`meals_get_inventory_summary`, `meals_get_inventory`, or `meals_get_current_grocery_list` when detail is needed',
   },
   {
     name: 'meals_render_grocery_list_v2',
@@ -99,6 +108,14 @@ export const CURRENT_RENDER_TOOL_HOST_GUIDE: readonly RenderToolHostGuide[] = [
   },
 ] as const;
 
+export const ACTIVE_CURRENT_RENDER_TOOL_HOST_GUIDE = CURRENT_RENDER_TOOL_HOST_GUIDE.filter(
+  (guide) => !LEGACY_RENDER_TOOL_NAME_SET.has(guide.name),
+);
+
+export const LEGACY_CURRENT_RENDER_TOOL_HOST_GUIDE = CURRENT_RENDER_TOOL_HOST_GUIDE.filter((guide) =>
+  LEGACY_RENDER_TOOL_NAME_SET.has(guide.name),
+);
+
 export const PREVIEW_RICH_TOOL_GUIDE: readonly PreviewToolGuide[] = [
   {
     name: 'meals_render_week_plan',
@@ -129,6 +146,7 @@ export function splitCurrentToolGroups(snapshot: FrozenContractSnapshot): Curren
   const core: string[] = [];
   const healthCanonical: string[] = [];
   const mealsCanonical: string[] = [];
+  const mealsLegacyRender: string[] = [];
   const mealsRender: string[] = [];
   const styleCanonical: string[] = [];
   const styleRender: string[] = [];
@@ -146,7 +164,11 @@ export function splitCurrentToolGroups(snapshot: FrozenContractSnapshot): Curren
 
     if (tool.startsWith('meals_')) {
       if (currentRenderToolSet.has(tool)) {
-        mealsRender.push(tool);
+        if (LEGACY_RENDER_TOOL_NAME_SET.has(tool)) {
+          mealsLegacyRender.push(tool);
+        } else {
+          mealsRender.push(tool);
+        }
       } else {
         mealsCanonical.push(tool);
       }
@@ -167,6 +189,7 @@ export function splitCurrentToolGroups(snapshot: FrozenContractSnapshot): Curren
     core,
     healthCanonical,
     mealsCanonical,
+    mealsLegacyRender,
     mealsRender,
     styleCanonical,
     styleRender,

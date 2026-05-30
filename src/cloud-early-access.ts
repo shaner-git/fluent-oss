@@ -6,7 +6,7 @@ export const FLUENT_SUPPORT_EMAIL = 'hello@meetfluent.app';
 const FLUENT_CLOUD_EARLY_ACCESS_NOTE = 'Fluent is in early access and open source.';
 
 export type FluentCloudAccessEnvironment = 'production' | 'staging' | 'development' | 'local';
-export type FluentCloudConfiguredAccessMode = 'allowlist' | 'open_dev';
+export type FluentCloudConfiguredAccessMode = 'allowlist' | 'open_dev' | 'self_serve';
 export type FluentCloudResolvedAccessMode = FluentCloudConfiguredAccessMode | 'closed';
 export type FluentCloudAccessDenialReason = 'missing_allowlist' | 'not_in_allowlist' | null;
 export type FluentCloudAccessFailureCode =
@@ -42,6 +42,8 @@ type FluentCloudAccessEvaluationInput = {
   deploymentEnvironment?: string | null;
   email: string | null | undefined;
   onWarning?: (warning: string) => void;
+  selfServeAllowedDomains?: readonly string[];
+  selfServeAllowedEmails?: readonly string[];
 };
 
 export type FluentCloudAccessEvaluation = {
@@ -269,7 +271,7 @@ export function evaluateFluentCloudAccess(
 
   if (input.accessMode?.trim() && !requestedMode) {
     warn(
-      `Ignoring unsupported FLUENT_CLOUD_ACCESS_MODE=${input.accessMode.trim()}. Supported values are allowlist and open_dev.`,
+      `Ignoring unsupported FLUENT_CLOUD_ACCESS_MODE=${input.accessMode.trim()}. Supported values are allowlist, self_serve, and open_dev.`,
     );
   }
 
@@ -281,7 +283,7 @@ export function evaluateFluentCloudAccess(
   }
 
   const devOverrideRequested =
-    requestedMode === 'open_dev' || (requestedMode !== 'allowlist' && devOverrideFlag);
+    requestedMode === 'open_dev' || (!requestedMode && devOverrideFlag);
   if (devOverrideRequested && !isLocalDevelopmentEnvironment(resolvedEnvironment)) {
     warn(
       `Ignoring the open_dev cloud access override in ${resolvedEnvironment}. Production and staging must use an explicit allowlist.`,
@@ -301,6 +303,29 @@ export function evaluateFluentCloudAccess(
     };
   }
 
+  if (requestedMode === 'self_serve') {
+    const selfServeScope = normalizeSelfServeScope({
+      domains: input.selfServeAllowedDomains,
+      emails: input.selfServeAllowedEmails,
+    });
+    const allowedByScope = Boolean(
+      normalizedEmail &&
+        (!selfServeScope.restricted ||
+          selfServeScope.emails.includes(normalizedEmail) ||
+          selfServeScope.domains.includes(normalizedEmail.split('@').at(-1) ?? '')),
+    );
+    return {
+      allowed: allowedByScope,
+      configuredAllowlist,
+      denialReason: allowedByScope ? null : 'not_in_allowlist',
+      normalizedEmail,
+      operatorWarnings,
+      requestedMode,
+      resolvedEnvironment,
+      resolvedMode: 'self_serve',
+    };
+  }
+
   if (configuredAllowlist) {
     return {
       allowed: Boolean(normalizedEmail && input.allowedEmails.includes(normalizedEmail)),
@@ -315,7 +340,7 @@ export function evaluateFluentCloudAccess(
   }
 
   warn(
-    `${resolvedEnvironment} Fluent Cloud access is fail-closed because no allowlist is configured. Set ALLOWED_EMAILS or ALLOWED_EMAIL. Local development may opt in explicitly with FLUENT_CLOUD_ACCESS_MODE=open_dev or ALLOW_ALL_CLOUD_EMAILS_FOR_DEV=true.`,
+    `${resolvedEnvironment} Fluent Cloud access is fail-closed because no allowlist is configured. Set ALLOWED_EMAILS or ALLOWED_EMAIL, or intentionally set FLUENT_CLOUD_ACCESS_MODE=self_serve for open managed signup. Local development may opt in explicitly with FLUENT_CLOUD_ACCESS_MODE=open_dev or ALLOW_ALL_CLOUD_EMAILS_FOR_DEV=true.`,
   );
   return {
     allowed: false,
@@ -608,9 +633,29 @@ function normalizeFluentCloudAccessMode(value: string | null | undefined): Fluen
       return 'allowlist';
     case 'open_dev':
       return 'open_dev';
+    case 'self_serve':
+    case 'self-serve':
+      return 'self_serve';
     default:
       return null;
   }
+}
+
+function normalizeSelfServeScope(input: {
+  domains?: readonly string[];
+  emails?: readonly string[];
+}): { domains: string[]; emails: string[]; restricted: boolean } {
+  const domains = Array.from(
+    new Set((input.domains ?? []).map((value) => value.trim().toLowerCase().replace(/^@/, '')).filter(Boolean)),
+  );
+  const emails = Array.from(
+    new Set((input.emails ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean)),
+  );
+  return {
+    domains,
+    emails,
+    restricted: domains.length > 0 || emails.length > 0,
+  };
 }
 
 function parseBooleanFlag(value: boolean | string | null | undefined): boolean {

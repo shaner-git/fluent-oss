@@ -191,12 +191,12 @@ Do not let host memory, prior chat context, or an earlier unsaved recommendation
 `style_analyze_purchase` returns wardrobe context only.
 
 - A regular user will usually ask "should I buy this?", "is this right for my wardrobe?", or paste a product link. Treat that as enough intent to produce the native purchase-analysis surface in MCP Apps-capable hosts after the staged visual flow succeeds. Do not wait for the user to say "show me the card", "open the widget", or "render the MCP app".
-- Do not call `style_analyze_purchase` in the normal URL purchase-analysis happy path. Use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, actual host image inspection, an agent-owned `stylist_judgment`, `style_submit_purchase_visual_observations`, then `style_show_purchase_analysis_widget` in MCP Apps hosts or `style_render_purchase_analysis` in text-first hosts.
+- Do not call `style_analyze_purchase` in the normal URL purchase-analysis happy path. Use `style_prepare_purchase_analysis`, candidate image evidence from tools exposed in the current host, `style_get_purchase_vision_packet`, actual host image inspection, an agent-owned `stylist_judgment`, `style_submit_purchase_visual_observations`, then `style_show_purchase_analysis_widget` in MCP Apps hosts or `style_render_purchase_analysis` in text-first hosts.
 - Do not fall back to `style_get_context` as the purchase decision path when the candidate has no URL or image. Use `style_prepare_purchase_analysis` first so Fluent can return the comparator group, render gate, and evidence requirements.
 - In the staged purchase flow, do not call `style_get_visual_bundle`; use `style_get_purchase_vision_packet` for candidate/comparator images, then call `style_submit_purchase_visual_observations`.
 - For product URLs, call `style_prepare_purchase_analysis` before any final verdict or widget.
 - If `style_prepare_purchase_analysis` returns `hostResponseMode: "request_candidate_image"`, stop the purchase verdict path and ask for candidate image evidence. Do not call `style_analyze_purchase` just to produce a text-only shopping take.
-- URL-only purchase prompts use the staged flow: `style_prepare_purchase_analysis` -> `style_extract_purchase_page_evidence` -> enriched `style_prepare_purchase_analysis` -> `style_get_purchase_vision_packet` -> host image inspection -> `style_submit_purchase_visual_observations` -> `style_show_purchase_analysis_widget`.
+- URL-only purchase prompts use the staged flow for the active host. In full-MCP hosts where `style_extract_purchase_page_evidence` is exposed, use it after `style_prepare_purchase_analysis` to obtain direct product image evidence. In curated ChatGPT v2, that extraction tool is intentionally absent; ask for or use a direct product image/upload before continuing to `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations`, and the final render path.
 - `style_render_purchase_analysis` returns structured presentation data without opening a widget.
 - Do not use `style_show_purchase_analysis_widget` as the first analytical step; it is the final widget surface after the candidate has been prepared and usable images have been inspected.
 - In ChatGPT/App SDK or MCP Apps-style hosts, once `style_submit_purchase_visual_observations` returns `renderReady: true`, call `style_show_purchase_analysis_widget` before or alongside the final buy/wait/skip explanation instead of stopping with prose only.
@@ -230,13 +230,13 @@ Do not let host memory, prior chat context, or an earlier unsaved recommendation
 - Use the returned comparator buckets to choose which closet items to inspect visually.
 - Treat purchase analysis as a staged flow:
   - `style_prepare_purchase_analysis` for URL/candidate normalization and evidence requirements
-  - `style_extract_purchase_page_evidence` for product-page title and direct product image URLs when preparation needs candidate images
+  - `style_extract_purchase_page_evidence` for product-page title and direct product image URLs only in full-MCP hosts where that tool is exposed; curated ChatGPT v2 must use direct image or upload evidence instead
   - `style_get_purchase_vision_packet` for model-visible candidate and closet-comparator images, compact profile facts, and comparison reasons
   - `style_submit_purchase_visual_observations` after the host has actually inspected the inline images
   - `style_render_purchase_analysis` for final structured data without opening the widget in text-first clients
   - `style_show_purchase_analysis_widget` as the ChatGPT/App SDK finish when you are ready to show the final widget and have real host visual observations
 - If the candidate has an image, pass it as `imageUrl`, `image_url`, or `imageUrls`, then use `style_get_purchase_vision_packet` and `style_submit_purchase_visual_observations` before deciding.
-- A product page URL is not enough on its own. If `style_prepare_purchase_analysis` returns `hostResponseMode: "request_candidate_image"`, do not give a final buy/wait/skip answer yet. Extract a usable direct product image or ask the user for one.
+- A product page URL is not enough on its own. If `style_prepare_purchase_analysis` returns `hostResponseMode: "request_candidate_image"`, do not give a final buy/wait/skip answer yet. Obtain a usable direct product image through an exposed host/tool path, or ask the user for one.
 - Do not treat a returned image URL or visual-bundle asset as inspected visual evidence until the host has actually fetched, rendered, or shown it to a vision-capable model.
 - Use metadata to shortlist. Use the images to judge.
 - Make the final recommendation in Fluent's normal voice, with uncertainty when appropriate.

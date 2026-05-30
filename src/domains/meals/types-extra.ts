@@ -4,7 +4,11 @@ import type {
   ConfirmedOrderSyncStatus,
   FeedbackValue,
   MealsCalibrationContextRecord,
+  MealsConfidenceBreakdown,
+  MealsReadinessRecord,
   MealsTrainingContextRecord,
+  RecipeBookActionId,
+  RecipeCatalogSummaryRecord,
 } from './types';
 
 export interface LogFeedbackInput {
@@ -27,6 +31,14 @@ export interface MarkMealCookedInput {
   recipeId?: string | null;
   date?: string;
   provenance: MutationProvenance;
+}
+
+export interface ApplyRecipeBookActionInput {
+  action: RecipeBookActionId;
+  note?: string | null;
+  provenance: MutationProvenance;
+  recipeId: string;
+  weekStart?: string | null;
 }
 
 export interface UpdateInventoryInput {
@@ -158,6 +170,7 @@ export interface CreateRecipeInput {
 }
 
 export interface UpsertMealPlanInput {
+  createNewPlan?: boolean;
   plan: unknown;
   provenance: MutationProvenance;
 }
@@ -278,9 +291,71 @@ export interface MealPlanCandidateSummaryRecord {
     unresolvedCount: number;
     missingItemCount: number;
   };
+  planningBrief: MealPlanningBriefRecord;
+  planReview: MealPlanReviewRecord;
   entries: MealPlanCandidateEntryRecord[];
   summary: unknown;
   calibrationContext?: MealsCalibrationContextRecord;
+}
+
+export interface MealPlanningBriefRecord {
+  weekStart: string;
+  readiness?: MealsReadinessRecord;
+  confidenceBreakdown?: MealsConfidenceBreakdown;
+  recipeCoverage: {
+    activeRecipeCount: number;
+    activeRecipeCountByMealType: Record<string, number>;
+    activeRecipeMemoryCount: number;
+    approvedPlanCount: number;
+    missingSlotCount: number;
+    plannedRecipeCount: number;
+    requestedSlotCount: number;
+    thinMealTypes: string[];
+  };
+  contextSignals: {
+    calendarAvailability: CalendarAvailability;
+    calendarUsed: boolean;
+    groceryIntentCount: number;
+    inventoryItemCount: number;
+    nearExpiryItemPreview: string[];
+    preferenceSignals: {
+      budgetSensitive: boolean;
+      dietaryConstraintCount: number;
+      dislikedFoodCount: number;
+      householdAdultCount: number | null;
+      householdChildCount: number | null;
+      householdChildrenEatSameMeals: boolean | null;
+      householdMealParticipationTypes: string[];
+      householdServeTarget: number | null;
+      householdSizeSegment: 'solo' | 'two' | 'three' | 'multi' | 'unknown';
+      leftoverPreference: string | null;
+      likedFoodCount: number;
+      pantryCheckPolicy: string | null;
+      preferredCuisineCount: number;
+      preferredGroceryBrandCount: number;
+      preferredGroceryStoreCount: number;
+      shoppingSubstitutionTolerance: string | null;
+      targetBreakfastCount: number | null;
+      targetFamilyDinnerCount: number | null;
+      targetLunchCount: number | null;
+      targetSnackCount: number | null;
+      targetWeeknightDinnerCount: number | null;
+      weeknightTimeLimitMinutes: number | null;
+    };
+    recentRecipeCount: number;
+    trainingContextUsed: boolean;
+  };
+  evidenceNotes: string[];
+  recipeCatalog: RecipeCatalogSummaryRecord;
+}
+
+export interface MealPlanReviewRecord {
+  headline: string;
+  strengths: string[];
+  tradeoffs: string[];
+  watchouts: string[];
+  suggestedSwaps: string[];
+  acceptanceChecklist: string[];
 }
 
 export interface MealPlanGenerationRecord {

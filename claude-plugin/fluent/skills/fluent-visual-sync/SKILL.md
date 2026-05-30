@@ -31,7 +31,7 @@ Do **not** use this skill when:
 
 - The user only wants a text summary.
 - The host is known to support Fluent MCP Apps widget payloads directly, including Claude.ai MCP Apps runs and ChatGPT app surfaces where `meals_render_grocery_list_v2` is the correct path.
-- The current turn needs raw grocery-plan detail, order reconciliation, or intent debugging more than the checklist UI itself.
+- The current turn needs raw grocery-plan detail, order reconciliation, or intent reconciliation more than the checklist UI itself.
 
 ## Core pattern: visualizer + sendPrompt round-trip
 

@@ -99,12 +99,19 @@ When the user says they are already cooking a planned meal or have started prep:
 - if the meal was planned for a later day in the same week, Fluent can pull it forward and shift the remaining same-type schedule automatically
 - after the write, refresh with `meals_get_today_context` or `meals_get_plan` only if the user still needs the updated view
 
-Use higher-detail or audit reads only when needed:
+Use higher-detail reads only when needed:
 
 - `meals_get_recipe`
 - `meals_get_today_context`
 - `meals_get_inventory`
-- `fluent_list_domain_events` for audit or debugging
+- `meals_get_recipe_book`
+
+Recipe-book setup and browsing:
+
+- use `meals_get_recipe_book` for shelves, why-shown reasons, catalog gaps, and safe recipe-specific actions
+- use `meals_apply_recipe_book_action` only after explicit user intent
+- treat Want to try, Favorite, and Not for us as recipe-specific evidence, not broad household preference, allergy, dietary restriction, or hard avoid
+- treat Pin to week as a week-scoped planning intent, not a durable preference
 
 Recipe presentation pattern:
 
@@ -117,7 +124,7 @@ Recipe presentation pattern:
   - otherwise, if the host offers `recipe_display_v0`, call `meals_get_recipe` first and then render through `recipe_display_v0`
   - do not require the user to ask for a "card" explicitly when the request is obviously recipe-first
 - for simple recipe-data questions, stop at `meals_get_recipe` and a text answer instead of rendering a visual
-- reserve `meals_render_recipe_card` for Claude-side debugging only in visualizer-only runs; in Claude MCP Apps-capable runs it is the normal Fluent recipe-card path
+- reserve `meals_render_recipe_card` for explicit visualizer-only render probes; in Claude MCP Apps-capable runs it is the normal Fluent recipe-card path
 - keep the text answer truthful and complete even when you expect the host to render the recipe card
 - if a saved recipe lookup succeeds, do not answer from prior knowledge unless the user explicitly asks for a generic version instead of the saved Fluent recipe
 
@@ -146,7 +153,7 @@ Grocery-list presentation pattern:
   4. before the first render in a session, load `visualize:read_me` with `modules: ["interactive"]`
   5. render the grocery list through `visualize:show_widget`
   6. do not describe the visual as shown, prepared, or rendered unless the widget is actually mounted; if it is not mounted, say that the visualizer did not render and give the text checklist from the same `meals_get_current_grocery_list` response
-- gather or reconcile extra grocery state first only when the turn specifically needs underlying plan detail, reconciliation detail, or intent debugging:
+- gather or reconcile extra grocery state first only when the turn specifically needs underlying plan detail, reconciliation detail, or intent reconciliation:
   - `meals_prepare_order`
   - `meals_list_grocery_intents`
 - do not require the user to ask for a "card" or "surface" explicitly when the turn is clearly grocery-list-first
@@ -175,7 +182,7 @@ Instead:
 Claude recipe guidance:
 
 - for recipe-first turns in MCP Apps-capable hosts, prefer `meals_show_recipe` or `meals_render_recipe_card`
-- in Claude.ai, the presence of `meals_show_recipe` or `meals_render_recipe_card` means the MCP Apps recipe path is available; use it before `recipe_display_v0` for ordinary "show me the recipe" turns
+- in Claude.ai, the presence of `meals_show_recipe` or `meals_render_recipe_card` is a candidate MCP Apps recipe path, not proof by itself; use it before `recipe_display_v0` only when `ui://` mounting is proven live or the turn is explicitly testing that path
 - for recipe-first turns in visualizer-only hosts, prefer `meals_get_recipe` and then render with `recipe_display_v0` when that first-party recipe widget is available
 - if `recipe_display_v0` is not available in a visualizer-only host, let Claude render its own native recipe visual or a strongly structured text recipe
 - if richer rendering is available, bias toward a first-party or Claude-native recipe card with:
@@ -192,7 +199,7 @@ Claude recipe guidance:
 Claude grocery guidance:
 
 - for grocery-list-first turns in MCP Apps-capable hosts, prefer `meals_render_grocery_list_v2`
-- in Claude.ai, the presence of `meals_render_grocery_list_v2` means the MCP Apps grocery path is available; use it before `meals_get_grocery_plan` for ordinary "show my grocery list" turns
+- in Claude.ai, the presence of `meals_render_grocery_list_v2` is a candidate MCP Apps grocery path, not proof by itself; use it before `meals_get_grocery_plan` only when `ui://` mounting is proven live or the turn is explicitly testing that path
 - for grocery-list-first turns in rich Claude visualizer-only hosts, prefer `visualize:show_widget` as the default rendering path
 - if the previous assistant turn offered to show the grocery list and the user accepts, render the widget immediately; do not require a second explicit visual request
 - load and follow `fluent-visual-sync` before rendering the first visualizer checklist in a session only when the native render tool is unavailable or fails; the widget then includes the sync round-trip, stable item keys, and supported action statuses
@@ -421,7 +428,7 @@ Use this HTML and JS shape as the default starting point for `visualize:show_wid
       </div>
     </div>
     <div class="button-row">
-      <button type="button" id="reset-button">Reset</button>
+      <button type="button" id="refresh-button">Refresh from Fluent</button>
     </div>
   </div>
 
@@ -480,7 +487,7 @@ Use this HTML and JS shape as the default starting point for `visualize:show_wid
     const remainingCount = document.getElementById('remaining-count');
     const summary = document.getElementById('grocery-summary');
     const title = document.getElementById('grocery-title');
-    const resetButton = document.getElementById('reset-button');
+    const refreshButton = document.getElementById('refresh-button');
 
     const allRows = [];
     title.textContent = data.weekLabel;
@@ -501,6 +508,18 @@ Use this HTML and JS shape as the default starting point for `visualize:show_wid
       input.checked = checked;
       updateRemaining();
     }
+
+    function sendPrompt(prompt) {
+      if (window.claude?.complete) {
+        window.claude.complete(prompt);
+      } else {
+        console.log(prompt);
+      }
+    }
+
+    refreshButton.addEventListener('click', () => {
+      sendPrompt('Refresh my grocery list from Fluent.');
+    });
 
     Object.entries(groupLabels).forEach(([key, label]) => {
       const items = data.groups[key] || [];
@@ -542,10 +561,6 @@ Use this HTML and JS shape as the default starting point for `visualize:show_wid
       allRows.push(row);
       const input = row.querySelector('input');
       input.addEventListener('change', () => toggleRow(row, input.checked));
-    });
-
-    resetButton.addEventListener('click', () => {
-      allRows.forEach((row) => toggleRow(row, false));
     });
 
     [
@@ -648,42 +663,13 @@ Do not run the full planning loop for ordinary chat unless the user is clearly p
 
 ## Ordering Execution Boundary
 
-- Fluent MCP owns canonical meal plans, preferences, grocery plans, inventory, recipes, feedback, and audit state.
+- Fluent MCP owns canonical meal plans, preferences, grocery plans, inventory, recipes, and feedback state.
 - Fluent owns lifecycle and onboarding truth.
 - This skill provides workflow guidance for first-use wording, planning orchestration, and the ordering handoff.
 - Keep retailer credentials out of Fluent MCP, D1, and hosted profile metadata.
-- For early-access Fluent, prefer the hosted purchase runner after the hosted grocery plan exists and `meals_prepare_order` returns a safe remaining-to-buy set.
-- The hosted purchase runner may use Cloudflare-managed secret material and internal Worker routes, but that execution subsystem remains outside the public Meals MCP contract.
-- The open-source runtime keeps the local export plus browser flow as the supported execution path.
-- After checkout succeeds and a real retailer order exists, sync the confirmed order details back into Fluent.
-- If the confirmed order includes a delivery slot, the local workflow may emit a delivery-event candidate keyed by the retailer order id for whatever calendar tooling the client actually has.
+- Before any retailer handoff, use `meals_prepare_order` to reconcile what still needs to be bought right now.
+- Do not complete checkout inside Claude. Stop at a reconciled list, cart/preflight handoff, or explicit external runner boundary.
 - If the user says they already bought items and inventory may be stale, pause ordering until inventory is updated.
-- When a browser or local ordering flow adds a planned line to the live retailer cart, prefer persisting `in_cart` for that grocery line so later preflight reads show it as already in cart without claiming it was purchased.
-- When the user has a recent receipt for current-week grocery lines, prefer marking those lines `purchased` so future durable staples can stay covered across later runs.
 - Describe ordering state in these buckets when relevant: still need to buy, already have, already in cart, needs review.
 - Use pantry-first sufficiency confirmations only for low-risk pantry blockers. Do not use them for proteins, dairy, eggs, bread/wraps, fresh produce, or other items that still need quantity-aware review.
-- If local export or browser ordering is requested, use the bundled local export and browser-flow scripts in this skill package.
-- Prefer Browser Use-style execution backends for retailer automation:
-  - `--browser-backend browser-use-local-cdp` for a local Chrome/CDP session
-    On Windows, Fluent may insert a tiny local CDP relay so Playwright can attach to the same Chrome session without requiring Chrome to be relaunched with permissive `--remote-allow-origins` flags. If the machine's live Chrome/CDP surface still refuses attach, Fluent falls back to a local Playwright-owned Chrome profile instead of failing the run outright.
-  - `--browser-backend browser-use-cloud-cdp` for a remote Browser Use Cloud browser
-  - keep `--browser-backend local` only as the legacy Playwright persistent-profile compatibility path
-- If the hosted purchase lane is requested, the current internal Worker route still uses `--browser-backend cloudflare-browser-rendering`; treat that as a separate hosted execution subsystem from the Browser Use local/remote agent-run lane.
-- If a direct CDP lane pauses with `waitingForVerification`, follow the agent-email verification bridge below. Do not improvise a different email-code loop.
-- If Browser Use Cloud connects but navigation fails with `ERR_TUNNEL_CONNECTION_FAILED`, treat it as a Browser Use provider/network regression first, not a Fluent selector/auth bug. Prefer retrying later or switching to `--browser-backend browser-use-local-cdp`.
-- If the legacy Worker-hosted lane pauses in `waiting` with a verification request, a capable agent may fetch the latest retailer email code through its own email surface and submit it back through the internal verification route before resuming the run.
 - Treat retailer order details as the post-checkout source of truth. Do not infer `skipped` from omission, and preserve confirmed ordered extras as inventory evidence instead of fabricating grocery-plan history.
-
-### Agent-Email Verification Bridge
-
-Use this bridge only when the current agent has an approved email surface, such as the Gmail connector, and the browser-flow report contains `waitingForVerification: true`.
-
-- Preserve the remote browser session. Do not rerun from the beginning and do not close the session unless the resume fails or the user cancels.
-- Read the report fields `browserBackend`, `remoteSessionId`, `verificationRequest.requestedAt`, and `verificationResume`.
-- Search email for the newest Voila/Voilà verification-code message received after `verificationRequest.requestedAt`. Prefer a narrow Gmail query such as `("Voila" OR "Voilà") ("verification code" OR "security code" OR "one-time code") newer_than:30m`; include the retailer account email only when it is known.
-- Extract only the 4-8 digit verification code from the newest matching message. Do not print the code in the user-facing handoff unless the user explicitly asks.
-- Resume the same browser session:
-  - Browser Run: pass `--browser-run-session-id "<remoteSessionId>" --verification-code "<code>"`.
-  - Browser Use Cloud: pass `--browser-use-session-id "<remoteSessionId>" --verification-code "<code>"`.
-- If multiple plausible codes exist, prefer the newest message after the request timestamp. If ambiguity remains, pause and ask the user for the code rather than guessing.
-- If resume succeeds, continue the cart-first flow and stop before checkout. If resume fails, close or stop the remote session so paid browser time is not left running.

@@ -40,6 +40,8 @@ import {
   normalizeGeneratePlanOverrides,
   type PlanningSnapshot,
 } from './planning';
+import { buildRecipeBookOnboarding } from './recipe-book';
+import { summarizeRecipeCatalog } from './recipe-catalog';
 import { MealsRepository } from './repository';
 import { canonicalizeInventoryItem, normalizeUnit } from './units';
 import type {
@@ -67,10 +69,13 @@ import type {
   PreparedOrderItemRecord,
   PreparedOrderSubstitutionDecisionRecord,
   PreparedOrderUnresolvedItemRecord,
+  RecipeBookActionResultRecord,
+  RecipeCatalogSummaryRecord,
   TodayContext,
 } from './types';
 import type {
   AcceptMealPlanCandidateInput,
+  ApplyRecipeBookActionInput,
   CalendarContext,
   ConfirmedOrderSyncMetadataInput,
   CreateRecipeInput,
@@ -256,12 +261,42 @@ export class MealsService {
       overrides,
       weekStart: input.weekStart,
     });
+    const planningBrief = {
+      ...candidate.summary.planningBrief,
+      confidenceBreakdown: calibration.confidenceBreakdown,
+      readiness: calibration.mealPlanningReadiness,
+      evidenceNotes: [
+        ...candidate.summary.planningBrief.evidenceNotes,
+        calibration.mealPlanningReadiness.label,
+        ...calibration.mealPlanningReadiness.notes,
+      ],
+    };
+    const planReview = {
+      ...candidate.summary.planReview,
+      watchouts: Array.from(
+        new Set([
+          ...candidate.summary.planReview.watchouts,
+          ...calibration.mealPlanningReadiness.notes,
+        ]),
+      ),
+      suggestedSwaps:
+        calibration.mealPlanningReadiness.ready
+          ? candidate.summary.planReview.suggestedSwaps
+          : Array.from(
+              new Set([
+                ...candidate.summary.planReview.suggestedSwaps,
+                'Confirm 3-5 starter meal signals or accept this as a lower-confidence starter plan.',
+              ]),
+            ),
+    };
     candidate.summary = {
       ...candidate.summary,
       calibrationContext,
+      planningBrief,
+      planReview,
       rationale: [
         ...candidate.summary.rationale,
-        `Planning basis: ${calibration.mealPlanningReadiness.basis}; distinguish confirmed preferences, inferred meal history, pantry evidence, and fallback assumptions.`,
+        `Planning basis: ${calibration.mealPlanningReadiness.basis}; distinguish confirmed preferences, inferred meal history, at-home food evidence, and fallback assumptions.`,
         calibration.mealPlanningReadiness.label,
       ],
       warnings: [
@@ -360,8 +395,10 @@ export class MealsService {
     if (!candidate) {
       throw new Error(`Unknown meal plan candidate: ${input.candidateId}`);
     }
+    const previousPlan = await this.getPlanByWeek(generation.weekStart);
 
     const acceptedPlan = await this.upsertPlan({
+      createNewPlan: true,
       plan: {
         ...(asRecord(candidate.plan) ?? {}),
         approved_at: new Date().toISOString(),
@@ -371,6 +408,8 @@ export class MealsService {
           generation_id: input.generationId,
           input_hash: input.inputHash,
           planner: 'mcp-native',
+          previous_plan_id: previousPlan?.id ?? null,
+          replacement_mode: 'new_plan_preserve_history',
         },
         status: 'approved',
       },
@@ -409,8 +448,9 @@ export class MealsService {
   async upsertPlan(input: UpsertMealPlanInput): Promise<MealPlanRecord> {
     const normalized = normalizeMealPlanDocument(input.plan);
     const existing =
-      (normalized.id ? await this.getPlanById(normalized.id) : null) ?? (await this.getPlanByWeek(normalized.weekStart));
-    const planId = existing?.id ?? normalized.id ?? `plan:${this.tenantId}:${normalized.weekStart}`;
+      (normalized.id ? await this.getPlanById(normalized.id) : null) ??
+      (input.createNewPlan ? null : await this.getPlanByWeek(normalized.weekStart));
+    const planId = existing?.id ?? normalized.id ?? (input.createNewPlan ? `plan:${this.tenantId}:${normalized.weekStart}:${crypto.randomUUID()}` : `plan:${this.tenantId}:${normalized.weekStart}`);
     const now = new Date().toISOString();
     const status = normalized.status ?? 'approved';
     const approvedAt = status === 'approved' || status === 'active' ? normalized.approvedAt ?? now : normalized.approvedAt;
@@ -709,6 +749,137 @@ export class MealsService {
     }));
   }
 
+  async getRecipeCatalogSummary(input: {
+    mealType?: string;
+    status?: string;
+  } = {}): Promise<{
+    items: ReturnType<typeof summarizeRecipeCatalog>['items'];
+    summary: RecipeCatalogSummaryRecord;
+  }> {
+    const status = input.status ?? 'active';
+    const [recipes, mealMemory] = await Promise.all([
+      this.listRecipes(input.mealType, status),
+      this.getMealMemory(),
+    ]);
+    return summarizeRecipeCatalog({ mealMemory, mealType: input.mealType, recipes, status });
+  }
+
+  async getRecipeBookOnboarding(): Promise<import('./types').RecipeBookOnboardingRecord> {
+    const [recipes, mealMemory, preferences, inventory] = await Promise.all([
+      this.listRecipes(undefined, 'active'),
+      this.getMealMemory(),
+      this.getPreferences(),
+      this.getInventory(),
+    ]);
+    return buildRecipeBookOnboarding({ inventory, mealMemory, preferences, recipes });
+  }
+
+  async applyRecipeBookAction(input: ApplyRecipeBookActionInput): Promise<RecipeBookActionResultRecord> {
+    const recipe = await this.getRecipe(input.recipeId);
+    if (!recipe || recipe.status === 'retired') {
+      throw new Error(`Active recipe not found: ${input.recipeId}`);
+    }
+
+    const now = new Date().toISOString();
+    const existingMemory = (await this.getMealMemory(input.recipeId))[0] ?? null;
+    if (existingMemory?.status === 'retired' && input.action === 'pin_to_week') {
+      throw new Error(`Recipe is marked not for us and cannot be pinned to a week: ${input.recipeId}`);
+    }
+    const currentFeedback = asRecord(existingMemory?.lastFeedback) ?? {};
+    const before = existingMemory ? { ...existingMemory } : null;
+    const actionFeedback = {
+      ...currentFeedback,
+      recipe_book: {
+        ...(asRecord(currentFeedback.recipe_book ?? currentFeedback.recipeBook) ?? {}),
+        action: input.action,
+        actionAt: now,
+        note: input.note ?? null,
+      },
+    };
+
+    const nextStatus = deriveRecipeBookMemoryStatus(existingMemory?.status ?? null, input.action);
+    const nextMemory = input.action === 'pin_to_week'
+      ? {
+          lastFeedback: actionFeedback,
+          lastUsedAt: existingMemory?.lastUsedAt ?? null,
+          notes: mergeNotes(existingMemory?.notes, input.note),
+          status: nextStatus,
+        }
+      : {
+          lastFeedback: {
+            ...actionFeedback,
+            taste:
+              input.action === 'favorite'
+                ? 'good'
+                : input.action === 'not_for_us'
+                  ? 'bad'
+                  : currentFeedback.taste ?? null,
+            repeat_again:
+              input.action === 'favorite'
+                ? 'good'
+                : input.action === 'not_for_us'
+                  ? 'bad'
+                  : currentFeedback.repeat_again ?? null,
+          },
+          lastUsedAt: existingMemory?.lastUsedAt ?? null,
+          notes: mergeNotes(existingMemory?.notes, input.note),
+          status: nextStatus,
+        };
+
+    await this.upsertMealMemoryRecord({
+      recipeId: input.recipeId,
+      status: nextMemory.status,
+      lastFeedback: nextMemory.lastFeedback,
+      notes: nextMemory.notes,
+      lastUsedAt: nextMemory.lastUsedAt,
+      updatedAt: now,
+    });
+
+    const memory = (await this.getMealMemory(input.recipeId))[0] ?? null;
+    const result: RecipeBookActionResultRecord = {
+      action: input.action,
+      confirmationPrompt:
+        input.action === 'not_for_us'
+          ? 'If this points to a broader hard avoid, ask explicitly before saving it as a household rule.'
+          : null,
+      evidenceScope: input.action === 'pin_to_week' ? 'planning_intent' : 'recipe_evidence',
+      memory,
+      planningIntent:
+        input.action === 'pin_to_week'
+          ? {
+              args: {
+                overrides: {
+                  includeRecipeIds: [input.recipeId],
+                },
+                ...(input.weekStart ? { week_start: input.weekStart } : {}),
+              },
+              toolName: 'meals_generate_plan',
+            }
+          : null,
+      recipeId: input.recipeId,
+      recipeName: recipe.name,
+      safetyNote:
+        'Recipe-book actions are recipe-specific evidence. They do not create allergies, medical restrictions, dietary constraints, or broad hard avoids.',
+    };
+
+    await this.recordDomainEvent({
+      entityType: 'meal_memory',
+      entityId: input.recipeId,
+      eventType: 'recipe_book.action_applied',
+      before,
+      after: memory,
+      patch: {
+        action: input.action,
+        evidence_scope: result.evidenceScope,
+        planning_intent: result.planningIntent,
+        recipe_id: input.recipeId,
+      },
+      provenance: input.provenance,
+    });
+
+    return result;
+  }
+
   async getPreferences(): Promise<MealPreferencesRecord> {
     const row = await this.db
       .prepare(
@@ -741,7 +912,7 @@ export class MealsService {
   }
 
   async updatePreferences(input: UpdateMealPreferencesInput): Promise<MealPreferencesRecord> {
-    const before = await this.getPreferences();
+    const before = await this.getPreferencesOrDefault();
     const nextRaw = normalizeMealPreferences(input.preferences);
     const version = typeof nextRaw.version === 'string' && nextRaw.version.trim() ? nextRaw.version.trim() : before.version;
     const now = new Date().toISOString();
@@ -791,7 +962,7 @@ export class MealsService {
 
   async getOnboardingCalibration(input: { includeCurrentGroceryList?: boolean } = {}): Promise<MealsOnboardingCalibrationRecord> {
     const [preferences, inventory, mealMemory, planHistory, currentPlan] = await Promise.all([
-      this.getPreferences(),
+      this.getPreferencesOrDefault(),
       this.getInventory(),
       this.getMealMemory(),
       this.listPlanHistory(12),
@@ -814,7 +985,7 @@ export class MealsService {
     response: MealsCalibrationResponseInput;
     provenance: MutationProvenance;
   }): Promise<MealPreferencesRecord> {
-    const preferences = await this.getPreferences();
+    const preferences = await this.getPreferencesOrDefault();
     const nextRaw = applyMealsCalibrationResponse({
       preferences,
       response: input.response,
@@ -847,6 +1018,24 @@ export class MealsService {
     });
 
     return updated;
+  }
+
+  private async getPreferencesOrDefault(): Promise<MealPreferencesRecord> {
+    try {
+      return await this.getPreferences();
+    } catch (error) {
+      if (!isMissingMealPreferencesError(error)) {
+        throw error;
+      }
+      return {
+        profileId: this.profileId,
+        profileOwner: null,
+        raw: {},
+        tenantId: this.tenantId,
+        updatedAt: null,
+        version: '1',
+      };
+    }
   }
 
   async getInventory(): Promise<InventoryRecord[]> {
@@ -1583,7 +1772,7 @@ export class MealsService {
   async getGroceryPlan(weekStart: string): Promise<GroceryPlanRecord | null> {
     const row = await this.db
       .prepare(
-        `SELECT id, week_start, meal_plan_id, raw_json, generated_at
+        `SELECT id, week_start, meal_plan_id, raw_json, source_snapshot_json, generated_at
          FROM meal_grocery_plans
          WHERE tenant_id = ? AND week_start = ?`,
       )
@@ -1593,6 +1782,7 @@ export class MealsService {
         week_start: string;
         meal_plan_id: string | null;
         raw_json: string;
+        source_snapshot_json: string | null;
         generated_at: string;
       }>();
 
@@ -1605,6 +1795,7 @@ export class MealsService {
       weekStart: row.week_start,
       mealPlanId: row.meal_plan_id,
       generatedAt: row.generated_at,
+      sourceSnapshot: safeParse(row.source_snapshot_json),
       raw: (safeParse(row.raw_json) as GroceryPlanRecord['raw']) ?? {
         generatedAt: row.generated_at,
         items: [],
@@ -2095,7 +2286,12 @@ export class MealsService {
         stringifyJson({
           groceryIntents: groceryIntents.map((intent) => intent.id),
           inventoryUpdatedAt: inventory.map((item) => item.confirmedAt ?? item.purchasedAt).filter(Boolean),
+          mealPlanId: plan.id,
           preferenceVersion: preferences.version,
+          previousGeneratedAt: before?.generatedAt ?? null,
+          previousGroceryPlanId: before?.id ?? null,
+          previousMealPlanId: before?.mealPlanId ?? null,
+          replacementMode: before ? 'regenerate_preserve_event_history' : 'new_grocery_plan',
         }),
         generatedAt,
         this.tenantId,
@@ -2197,7 +2393,7 @@ export class MealsService {
     if (isSufficiencyAction) {
       if (!this.isPreparedOrderSufficiencyEligible(targetItem)) {
         throw new Error(
-          `${targetItem.name} still requires quantity-aware review before ordering; pantry sufficiency confirmation is not supported for this item.`,
+          `${targetItem.name} still requires quantity-aware review before ordering; at-home sufficiency confirmation is not supported for this item.`,
         );
       }
     }
@@ -3908,6 +4104,23 @@ export class MealsService {
 
   private async dateToWeekday(date: string): Promise<string> {
     return this.repository.dateToWeekday(date);
+  }
+}
+
+function isMissingMealPreferencesError(error: unknown): boolean {
+  return error instanceof Error && /Missing Fluent meal preferences/i.test(error.message);
+}
+
+function deriveRecipeBookMemoryStatus(currentStatus: string | null, action: ApplyRecipeBookActionInput['action']): string {
+  switch (action) {
+    case 'favorite':
+      return 'proven';
+    case 'want_to_try':
+      return 'trial';
+    case 'not_for_us':
+      return 'retired';
+    case 'pin_to_week':
+      return currentStatus ?? 'observed';
   }
 }
 

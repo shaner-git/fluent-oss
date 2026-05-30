@@ -525,7 +525,8 @@ function sanitizePantryDetail(value: string | null | undefined): string | null {
   if (
     lower === 'pantry quantity still needs confirmation.' ||
     lower === 'pantry stock still needs confirmation before ordering.' ||
-    lower === 'marked as a pantry item, so verify what is on hand before adding it to the cart.'
+    lower === 'marked as a pantry item, so verify what is on hand before adding it to the cart.' ||
+    lower === 'marked as an at-home item, so verify what is on hand before adding it to the cart.'
   ) {
     return null;
   }
@@ -542,6 +543,7 @@ function sanitizeGenericDetail(value: string | null | undefined): string | null 
   if (
     normalized.toLowerCase() === 'pantry quantity still needs confirmation.' ||
     normalized.toLowerCase() === 'marked as a pantry item, so verify what is on hand before adding it to the cart.' ||
+    normalized.toLowerCase() === 'marked as an at-home item, so verify what is on hand before adding it to the cart.' ||
     normalized.toLowerCase() === 'inventory quantity is unknown; plan recommends buying the full amount.'
   ) {
     return null;
@@ -1050,7 +1052,7 @@ export function getGroceryListWidgetHtml(): string {
   .grocery-sync-button-add,
   .grocery-sync-button,
   .grocery-sync-refresh,
-  .grocery-sync-reset {
+  .grocery-sync-clear {
     appearance: none;
     border: 1px solid var(--grocery-button-border);
     border-radius: 10px;
@@ -1122,7 +1124,7 @@ export function getGroceryListWidgetHtml(): string {
   .grocery-sync-button-add:not([disabled]):hover,
   .grocery-sync-button:not([disabled]):hover,
   .grocery-sync-refresh:not([disabled]):hover,
-  .grocery-sync-reset:not([disabled]):hover {
+  .grocery-sync-clear:not([disabled]):hover {
     border-color: var(--grocery-accent);
     transform: translateY(-1px);
   }
@@ -1134,7 +1136,7 @@ export function getGroceryListWidgetHtml(): string {
     font-weight: 500;
   }
 
-  .grocery-sync-reset {
+  .grocery-sync-clear {
     background: #fff;
     color: var(--grocery-text-muted);
   }
@@ -1147,7 +1149,7 @@ export function getGroceryListWidgetHtml(): string {
   .grocery-sync-button-add[disabled],
   .grocery-sync-button[disabled],
   .grocery-sync-refresh[disabled],
-  .grocery-sync-reset[disabled] {
+  .grocery-sync-clear[disabled] {
     cursor: default;
     opacity: 0.55;
   }
@@ -1335,15 +1337,7 @@ export function getGroceryListWidgetHtml(): string {
       }
 
       if (bucketId === 'covered') {
-        return [{
-          args: {
-            item_key: item.itemKey,
-            week_start: weekStart,
-          },
-          id: 'undo',
-          label: 'Undo',
-          toolName: 'meals_delete_grocery_plan_action',
-        }];
+        return [];
       }
 
       return [];
@@ -1364,14 +1358,16 @@ export function getGroceryListWidgetHtml(): string {
           var syncAction = cloneSyncAction(item.syncAction) || syncActions[0] || null;
           var fallbackActions = buildFallbackSyncActions(item, bucketId, weekStart);
           var primaryActionId = bucketId === 'covered'
-            ? 'undo'
+            ? null
             : bucketId === 'check_pantry'
               ? 'already_have_enough'
               : 'mark_bought';
-          var primaryAction = syncActions.find(function (action) { return action.id === primaryActionId; })
-            || (syncAction && syncAction.id === primaryActionId ? syncAction : null)
-            || fallbackActions.find(function (action) { return action.id === primaryActionId; })
-            || null;
+          var primaryAction = primaryActionId
+            ? syncActions.find(function (action) { return action.id === primaryActionId; })
+              || (syncAction && syncAction.id === primaryActionId ? syncAction : null)
+              || fallbackActions.find(function (action) { return action.id === primaryActionId; })
+              || null
+            : null;
           var nextSyncActions = syncActions.length ? syncActions.slice() : [];
           fallbackActions.forEach(function (fallbackAction) {
             if (!nextSyncActions.some(function (action) { return action.id === fallbackAction.id; })) {
@@ -1603,7 +1599,7 @@ export function getGroceryListWidgetHtml(): string {
       render();
     }
 
-    function resetStaged() {
+    function clearStagedChanges() {
       if (syncPending) {
         return;
       }
@@ -2499,7 +2495,7 @@ export function getGroceryListWidgetHtml(): string {
         renderAddItemControls(),
         '<button type="button" class="grocery-sync-button" data-sync-button aria-label="' + escapeHtml(stagedCount ? 'Save ' + stagedCount + ' grocery list change' + (stagedCount === 1 ? '' : 's') : 'Save changes') + '"' + (stagedCount && !syncPending ? '' : ' disabled') + '>' + escapeHtml(syncPending ? 'Saving…' : 'Save changes') + '</button>',
         '<button type="button" class="grocery-sync-refresh" data-refresh-button aria-label="Refresh list"' + (syncPending ? ' disabled' : '') + '>Refresh list</button>',
-        (stagedCount ? '<button type="button" class="grocery-sync-reset" data-reset-button' + (syncPending ? ' disabled' : '') + '>Reset</button>' : ''),
+        (stagedCount ? '<button type="button" class="grocery-sync-clear" data-clear-staged-button aria-label="Clear staged grocery list changes"' + (syncPending ? ' disabled' : '') + '>Clear changes</button>' : ''),
         '</div>',
         '<p class="grocery-visually-hidden" role="status" aria-live="polite">' + escapeHtml(syncStatus) + '</p>',
         (syncError ? '<p class="grocery-sync-error" role="alert">' + escapeHtml(syncError) + '</p>' : ''),
@@ -2535,10 +2531,10 @@ export function getGroceryListWidgetHtml(): string {
           });
         }
 
-        var resetButton = root.querySelector('[data-reset-button]');
-        if (resetButton) {
-          resetButton.addEventListener('click', function () {
-            resetStaged();
+        var clearButton = root.querySelector('[data-clear-staged-button]');
+        if (clearButton) {
+          clearButton.addEventListener('click', function () {
+            clearStagedChanges();
           });
         }
 

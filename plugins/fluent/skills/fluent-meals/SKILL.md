@@ -20,6 +20,7 @@ See [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-su
 - Grocery list: in Codex and plain clients, prefer `meals_get_current_grocery_list` and answer in text; use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail.
 - Grocery widget: only with proven ChatGPT/App SDK-style widget support, prefer `meals_render_grocery_list_v2` as the default rich end-user experience.
 - Recipe asks: call `meals_get_recipe`; when widgets are supported, follow `meals_get_recipe` with `meals_render_recipe_card`.
+- Recipe-book setup or browsing: call `meals_get_recipe_book`; use `meals_apply_recipe_book_action` only after explicit user intent. Treat recipe-book actions as recipe-specific evidence or week-scoped planning intent, not broad household preference, allergy, dietary restriction, or hard avoid.
 - Weekly planning: read context, generate/accept a plan, then generate groceries.
 - Meals setup and calibration: use `meals_get_onboarding_calibration` before planning or grocery recommendations when preferences, pantry freshness, household shape, schedule, or grocery expectations are unknown. Ask 3-5 starter signals for new users, or 1-3 confirm/correct questions for returning/imported users. Use `meals_record_calibration_response` only after explicit user intent.
 
@@ -38,10 +39,6 @@ When the user says they are already cooking a planned meal or have started prep:
 ## Grocery And Ordering Boundary
 
 This public Codex package does not bundle browser or retailer-execution scripts. Stop at a reconciled list or external checkout handoff.
-
-### Agent-Email Verification Bridge
-
-This bridge is operator-only. Use it only when a separate approved browser-ordering tool reports `waitingForVerification: true` and the current agent has an approved email surface. Do not expose verification codes in user-facing text unless the user explicitly asks.
 
 ## Safety
 

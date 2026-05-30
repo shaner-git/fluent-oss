@@ -39,7 +39,8 @@ export type HostedCloudAccessSource =
   | 'duplicate_active_account'
   | 'existing_membership'
   | 'legacy_allowlist'
-  | 'open_dev';
+  | 'open_dev'
+  | 'self_serve';
 
 export interface FluentCloudInviteActor {
   actorEmail?: string | null;
@@ -76,6 +77,8 @@ export interface HostedCloudAccessInput {
   allowedEmails: readonly string[];
   deploymentEnvironment?: string | null;
   email: string | null | undefined;
+  selfServeAllowedDomains?: readonly string[];
+  selfServeAllowedEmails?: readonly string[];
   userId?: string | null;
 }
 
@@ -491,6 +494,8 @@ export async function evaluateHostedCloudInviteAccess(
     allowedEmails: input.allowedEmails,
     deploymentEnvironment: input.deploymentEnvironment,
     email: input.email,
+    selfServeAllowedDomains: input.selfServeAllowedDomains,
+    selfServeAllowedEmails: input.selfServeAllowedEmails,
   });
   const normalizedEmail = normalizeOptionalEmail(input.email);
   const membershipByUser = input.userId ? await findMembershipByUserId(db, input.userId) : null;
@@ -503,6 +508,20 @@ export async function evaluateHostedCloudInviteAccess(
       provisioningSource: null,
       publicState: 'account_active',
       source: 'existing_membership',
+      waitlistEntry: normalizedEmail ? await getWaitlistEntryByEmail(db, normalizedEmail) : null,
+    };
+  }
+
+  const existingAccount = normalizedEmail ? await findActiveCloudAccountByEmail(db, normalizedEmail) : null;
+  if (existingAccount && input.userId && existingAccount.userId !== input.userId) {
+    return {
+      accountTenantId: existingAccount.tenantId,
+      allowed: false,
+      denialReason: 'duplicate_active_account',
+      invite: normalizedEmail ? await getLatestInviteByEmail(db, normalizedEmail) : null,
+      provisioningSource: null,
+      publicState: 'account_active',
+      source: 'duplicate_active_account',
       waitlistEntry: normalizedEmail ? await getWaitlistEntryByEmail(db, normalizedEmail) : null,
     };
   }
@@ -522,16 +541,17 @@ export async function evaluateHostedCloudInviteAccess(
     };
   }
 
-  const existingAccount = normalizedEmail ? await findActiveCloudAccountByEmail(db, normalizedEmail) : null;
-  if (existingAccount && input.userId && existingAccount.userId !== input.userId) {
+  if (fallbackAccess.allowed && fallbackAccess.resolvedMode === 'self_serve') {
     return {
-      accountTenantId: existingAccount.tenantId,
-      allowed: false,
-      denialReason: 'duplicate_active_account',
-      invite: normalizedEmail ? await getLatestInviteByEmail(db, normalizedEmail) : null,
-      provisioningSource: null,
-      publicState: 'account_active',
-      source: 'duplicate_active_account',
+      accountTenantId: null,
+      allowed: true,
+      denialReason: null,
+      invite: null,
+      provisioningSource: {
+        accessSource: 'self_serve',
+      },
+      publicState: 'account_onboarding',
+      source: 'self_serve',
       waitlistEntry: normalizedEmail ? await getWaitlistEntryByEmail(db, normalizedEmail) : null,
     };
   }

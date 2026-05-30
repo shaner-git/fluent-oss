@@ -2,14 +2,20 @@ import type { FluentAuthProps } from './auth';
 
 export type FluentRuntimeProfile = 'chatgpt_app' | 'full';
 
+export const CHATGPT_MCP_PATHS = ['/mcp/chatgpt', '/mcp/chatgpt-v2'] as const;
+
 export function resolveMcpRuntimeProfileForRequest(
   pathname: string,
   authProps?: Pick<FluentAuthProps, 'oauthClientName' | 'oauthClientRedirectUris'>,
 ): FluentRuntimeProfile {
-  if (pathname === '/mcp/chatgpt') {
+  if (isChatGptMcpPath(pathname)) {
     return 'chatgpt_app';
   }
   return isChatGptOAuthClient(authProps) ? 'chatgpt_app' : 'full';
+}
+
+export function isChatGptMcpPath(pathname: string): boolean {
+  return CHATGPT_MCP_PATHS.includes(pathname.replace(/\/$/, '') as (typeof CHATGPT_MCP_PATHS)[number]);
 }
 
 export function isChatGptOAuthClient(

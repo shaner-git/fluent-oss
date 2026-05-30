@@ -58,7 +58,7 @@ import { hasHostedEmailDelivery, sendHostedMagicLinkEmail } from './hosted-email
 import { resolveHostedCloudAccess, resolveHostedCloudClientDecision } from './hosted-access-state';
 import { escapeHeaderQuotedString } from './http-header';
 import { createFluentMcpServer } from './mcp';
-import { resolveMcpRuntimeProfileForRequest } from './chatgpt-profile-routing';
+import { CHATGPT_MCP_PATHS, isChatGptMcpPath, resolveMcpRuntimeProfileForRequest } from './chatgpt-profile-routing';
 import { wrapCloudflareDatabase } from './storage';
 import { ensureHostedUserProvisioned } from './hosted-identity';
 import {
@@ -171,13 +171,13 @@ export async function maybeHandleBetterAuthCompatibilityRequest(
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const compatibilityRoute = normalizeCompatibilityRoute(url.pathname);
-  if (url.pathname === '/mcp' || url.pathname === '/mcp/chatgpt' || compatibilityRoute) {
+  if (url.pathname === '/mcp' || isChatGptMcpPath(url.pathname) || compatibilityRoute) {
     if (!hasBetterAuthConfig(env)) {
       return betterAuthConfigErrorResponse(new Error('Better Auth is not configured.'));
     }
   }
 
-  if (url.pathname === '/mcp' || url.pathname === '/mcp/chatgpt') {
+  if (url.pathname === '/mcp' || isChatGptMcpPath(url.pathname)) {
     return handleBetterAuthMcpRequest(request, env, ctx);
   }
 
@@ -748,7 +748,13 @@ export function createBetterAuthConfig(request: Request, env: CloudRuntimeEnv) {
         'openid',
         'profile',
       ],
-      validAudiences: [baseURL, `${baseURL}/`, `${baseURL}/mcp`, `${baseURL}/mcp/`, `${baseURL}/mcp/chatgpt`, `${baseURL}/mcp/chatgpt/`],
+      validAudiences: [
+        baseURL,
+        `${baseURL}/`,
+        `${baseURL}/mcp`,
+        `${baseURL}/mcp/`,
+        ...CHATGPT_MCP_PATHS.flatMap((pathname) => [`${baseURL}${pathname}`, `${baseURL}${pathname}/`]),
+      ],
     }),
     ...(env.BETTER_AUTH_API_KEY?.trim()
       ? [
@@ -925,7 +931,7 @@ async function handleBetterAuthMcpRequest(
   }
 
   const url = new URL(request.url);
-  const route = url.pathname === '/mcp/chatgpt' ? '/mcp/chatgpt' : '/mcp';
+  const route = isChatGptMcpPath(url.pathname) ? url.pathname.replace(/\/$/, '') : '/mcp';
   const profile = resolveMcpRuntimeProfileForRequest(url.pathname, authResult);
   const server = createFluentMcpServer(coreBindingsFromCloudEnv(env), url.origin, {
     profile,
@@ -1167,7 +1173,7 @@ async function handleReviewerDemoCredentialsOpsRequest(request: Request, env: Cl
   }
 
   const db = wrapCloudflareDatabase(env.DB);
-  const onboarding = await applyFluentCloudOperatorAction(db, {
+  let onboarding = await applyFluentCloudOperatorAction(db, {
     action: 'provision_reviewer_demo',
     actorId: payload.actor_id ?? 'operator-cli',
     actorLabel: payload.actor_label ?? 'operator-cli',
@@ -1179,6 +1185,17 @@ async function handleReviewerDemoCredentialsOpsRequest(request: Request, env: Cl
   if (onboarding.accountKind !== 'reviewer_demo') {
     return json({ error: 'Reviewer credential issuance requires accountKind=reviewer_demo.' }, 409);
   }
+  if (onboarding.currentState !== 'active' && onboarding.currentState !== 'trialing') {
+    onboarding = await applyFluentCloudOperatorAction(db, {
+      action: 'mark_active',
+      actorId: payload.actor_id ?? 'operator-cli',
+      actorLabel: payload.actor_label ?? 'operator-cli',
+      actorType: payload.actor_type ?? 'operator',
+      email,
+      note: payload.note ?? 'Reviewer demo credentials issued through protected ops path.',
+      supportTags: payload.tags ?? ['chatgpt-app'],
+    });
+  }
 
   const user = await upsertReviewerDemoBetterAuthCredential(db, {
     email,
@@ -1189,7 +1206,7 @@ async function handleReviewerDemoCredentialsOpsRequest(request: Request, env: Cl
     email,
     userId: user.id,
   });
-  if (!accessDecision.allowed || !accessDecision.provisioningSource) {
+  if (!accessDecision.allowed) {
     return json({ error: accessDecision.code ?? 'Reviewer demo account is not allowed for hosted access.' }, 409);
   }
 
@@ -1198,19 +1215,14 @@ async function handleReviewerDemoCredentialsOpsRequest(request: Request, env: Cl
     id: user.id,
     name: user.name,
   };
-  let provisioning: Awaited<ReturnType<typeof ensureHostedUserProvisioned>>;
-  try {
-    provisioning = await ensureHostedUserProvisioned(db, hostedUser, {
-      cloudAccess: accessDecision.provisioningSource,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes('does not have a valid Fluent Cloud invite')) {
-      throw error;
-    }
-    provisioning = await ensureHostedUserProvisioned(db, hostedUser, {
-      cloudAccess: { accessSource: 'legacy_allowlist' },
-    });
+  const provisioning = accessDecision.provisioningSource
+    ? await provisionReviewerDemoUser(db, hostedUser, accessDecision.provisioningSource)
+    : {
+        profileId: accessDecision.profileId,
+        tenantId: accessDecision.tenantId,
+      };
+  if (!provisioning.profileId || !provisioning.tenantId) {
+    return json({ error: 'Reviewer demo account is allowed but has no provisioned Fluent profile.' }, 409);
   }
   const verified = await markFluentCloudEmailVerified(db, {
     email,
@@ -1230,6 +1242,26 @@ async function handleReviewerDemoCredentialsOpsRequest(request: Request, env: Cl
     profileId: provisioning.profileId,
     tenantMarker: 'accountKind=reviewer_demo',
   });
+}
+
+async function provisionReviewerDemoUser(
+  db: ReturnType<typeof wrapCloudflareDatabase>,
+  hostedUser: { email: string; id: string; name: string },
+  cloudAccess: NonNullable<Awaited<ReturnType<typeof resolveHostedCloudAccess>>['provisioningSource']>,
+): Promise<Awaited<ReturnType<typeof ensureHostedUserProvisioned>>> {
+  try {
+    return await ensureHostedUserProvisioned(db, hostedUser, {
+      cloudAccess,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes('does not have a valid Fluent Cloud invite')) {
+      throw error;
+    }
+    return ensureHostedUserProvisioned(db, hostedUser, {
+      cloudAccess: { accessSource: 'legacy_allowlist' },
+    });
+  }
 }
 
 async function upsertReviewerDemoBetterAuthCredential(
@@ -1299,7 +1331,7 @@ async function verifyHostedAccessToken(
   resourceOrigin: string,
 ): Promise<JWTPayload> {
   const issuer = `${resolveBetterAuthBaseUrl(request, env)}/api/auth`;
-  const audience = [resourceOrigin, `${resourceOrigin}/mcp`, `${resourceOrigin}/mcp/chatgpt`];
+  const audience = [resourceOrigin, `${resourceOrigin}/mcp`, ...CHATGPT_MCP_PATHS.map((pathname) => `${resourceOrigin}${pathname}`)];
 
   try {
     const { payload } = await jwtVerify(
@@ -1827,10 +1859,10 @@ function renderConsentPage(input: {
   <p class="meta">Client ID <code>${escapeHtml(input.clientId ?? 'unknown')}</code></p>
 </div>
 <div class="notice soft">
-  <p class="notice-title">What approving means</p>
-  <p>Fluent stores your account, OAuth consent, and the Meals, Style, and Health data this client is allowed to read or update.</p>
-  <p>Self-serve user exports are JSON files retained for 7 days. Provisioned-account deletion is user-initiated but operator-assisted today.</p>
-  <p class="meta">Policy: <a href="https://meetfluent.app/privacy/">meetfluent.app/privacy</a></p>
+  <p class="notice-title">Before you approve</p>
+  <p>Approving lets this app use the requested access with your Fluent account.</p>
+  <p>Fluent keeps the approval record for this connection. Requested exports are kept for 7 days. Account deletion starts with you and is completed with Fluent support today.</p>
+  <p class="notice-link">Privacy: <a href="https://meetfluent.app/privacy/">meetfluent.app/privacy</a></p>
 </div>
 <div class="actions">
   <button id="approve" class="btn-primary">Approve <span class="btn-arrow">→</span></button>
@@ -1839,7 +1871,18 @@ function renderConsentPage(input: {
 <div id="consent-status" class="meta" aria-live="polite"></div>
 <script>
 const status = document.getElementById('consent-status');
+function consentErrorMessage(data) {
+  const raw = String(data?.error_description || data?.message || data?.error || '').trim();
+  if (!raw) return 'We could not finish the approval. Return to the app and try connecting again.';
+  const normalized = raw.toLowerCase().replaceAll('_', ' ');
+  if (normalized.includes('invalid signature') || normalized.includes('expired')) {
+    return 'This approval link is no longer valid. Return to the app and start the connection again.';
+  }
+  if (/^[a-z_]+$/.test(raw)) return 'We could not finish the approval. Return to the app and try connecting again.';
+  return raw;
+}
 async function submitConsent(accept) {
+  status.classList.remove('status-error');
   status.textContent = accept ? 'Approving access…' : 'Denying access…';
   try {
     const response = await fetch('/api/auth/oauth2/consent', {
@@ -1853,10 +1896,12 @@ async function submitConsent(accept) {
       }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data?.message || data?.error || 'Unable to process consent.');
+    if (!response.ok) throw new Error(consentErrorMessage(data));
     if (data?.url) { window.location.assign(data.url); return; }
+    status.classList.remove('status-error');
     status.textContent = 'Consent recorded.';
   } catch (error) {
+    status.classList.add('status-error');
     status.textContent = error instanceof Error ? error.message : String(error);
   }
 }
@@ -2041,7 +2086,7 @@ function humanizeScope(scope: string): string {
     case 'email':
       return 'Read your email address';
     case FLUENT_MEALS_READ_SCOPE:
-      return 'Read your meals, pantry, and grocery context';
+      return 'Read your meal planning, grocery, and at-home food context';
     case FLUENT_MEALS_WRITE_SCOPE:
       return 'Create and update meal plans and grocery lists';
     case FLUENT_STYLE_READ_SCOPE:
@@ -2195,6 +2240,7 @@ function renderAuthShell(input: { body: string; title: string }): string {
     }
     .meta code { font-size: 12px; }
     .status-live { min-height: 1.4em; color: var(--muted); }
+    .status-error { color: var(--warn); }
     .support-list {
       list-style: none; padding: 0; margin: 20px 0 0;
       display: grid; gap: 8px;
@@ -2213,6 +2259,14 @@ function renderAuthShell(input: { body: string; title: string }): string {
     }
     .notice-title { margin: 0 0 6px; font-weight: 600; color: var(--ink-strong); font-size: 14px; }
     .notice p { margin: 0 0 4px; font-size: 14px; color: var(--muted); }
+    .notice .notice-link {
+      margin-top: 8px; font-size: 13.5px; color: var(--muted);
+    }
+    .notice .notice-link a {
+      color: var(--accent-strong); text-decoration-color: rgba(225,211,186,0.5);
+      text-underline-offset: 3px;
+    }
+    .notice .notice-link a:hover { color: var(--ink-strong); text-decoration-color: var(--ink-strong); }
     .notice.success { border-color: rgba(163,176,148,0.28); }
     .notice.success .notice-title { color: var(--success); }
     .notice.soft { border-color: rgba(212,196,168,0.2); }
@@ -2368,7 +2422,7 @@ function protectedResourceForMetadataRequest(request: Request): string {
   }
   try {
     const parsed = new URL(requestedResource);
-    if (parsed.origin === url.origin && (parsed.pathname === '/mcp' || parsed.pathname === '/mcp/chatgpt')) {
+    if (parsed.origin === url.origin && (parsed.pathname === '/mcp' || isChatGptMcpPath(parsed.pathname))) {
       return parsed.toString().replace(/\/$/, '');
     }
   } catch {
@@ -2470,8 +2524,8 @@ function createBearerAuthErrorResponse(
 function protectedResourceMetadataUrlForMcpRequest(request: Request, resourceOrigin: string): string {
   const url = new URL(request.url);
   const metadataUrl = new URL('/.well-known/oauth-protected-resource', resourceOrigin);
-  if (url.pathname === '/mcp/chatgpt') {
-    metadataUrl.searchParams.set('resource', `${resourceOrigin}/mcp/chatgpt`);
+  if (isChatGptMcpPath(url.pathname)) {
+    metadataUrl.searchParams.set('resource', `${resourceOrigin}${url.pathname.replace(/\/$/, '')}`);
   }
   return metadataUrl.toString();
 }
