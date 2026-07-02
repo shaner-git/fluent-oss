@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { FLUENT_MEALS_READ_SCOPE, FLUENT_MEALS_WRITE_SCOPE, runWithFluentAuthProps } from '../src/auth';
 import { createLocalRuntime } from '../src/local/runtime';
+import { FluentCoreService } from '../src/fluent-core';
+import { FLUENT_OSS_DEFAULT_PROFILE_ID, FLUENT_OSS_DEFAULT_TENANT_ID } from '../src/fluent-identity';
 import {
   MealsService,
   summarizeDomainEvents,
@@ -11,10 +14,19 @@ import {
   summarizeMealPreferences,
 } from '../src/domains/meals/service';
 import { deriveMealsPlanningPreferenceProfile, shouldAvoidLeftovers } from '../src/domains/meals/preference-model';
+import {
+  overlayPersonFactsOntoCoreRules,
+  TIER1_KIND_TO_CORE_RULES_FIELD,
+} from '../src/domains/meals/person-facts-overlay';
+import { applyMealsCalibrationResponse } from '../src/domains/meals/onboarding-calibration';
+import { recordFluentVNextEvent } from '../src/vnext-write-layer';
+import { registerMealsMcpSurface } from '../src/mcp-meals';
+import type { PersonFact, PersonFactKind } from '../src/personal-context';
 
 const tempRoots: string[] = [];
 const TEST_ACTOR_EMAIL = 'planner@example.com';
 const TEST_ACTOR_NAME = 'Test User';
+const TIER1_MEALS_PERSON_FACT_KINDS = ['allergy', 'hard_avoid', 'dietary_pattern', 'anti_favorite', 'taste_pref'] as const;
 
 main().catch((error) => {
   console.error(error);
@@ -26,6 +38,7 @@ async function main() {
     await verifiesHostedPlannerBrainFlows();
     await reschedulesFutureMealWhenCookedEarly();
     await doesNotBindFutureMealWhenLoggingFeedbackEarly();
+    await updatesExistingRecipeMemoryWhenLoggingFeedback();
     await honorsPinnedMealAssignmentsDuringGeneration();
     await deprioritizesRecipesWithRecentShoppingSubstitutionFriction();
     await rejectsPlanningWithoutRequiredCalendarContext();
@@ -38,6 +51,17 @@ async function main() {
     await appliesStructuredOnboardingSignalsToPlanning();
     await appliesMealParticipationSignalsToServingTargets();
     await enforcesDietaryConstraintsDuringPlanning();
+    await derivesPlannerTier1DietaryFromPersonFacts();
+    await allowsRecipeWhenPersonFactIsRejected();
+    await leavesPlannerBehaviorUnchangedWhenPersonFactsReaderIsNull();
+    await preservesTier2PreferencesWhenOverlayingPersonFacts();
+    await mirrorsTier1DietaryFromVNextCalibrationEvent();
+    await mirrorsTier1DietaryFromLegacyCalibrationTool();
+    await guardsTier1OverlayClearList();
+    await noCoreRulesOnlyTier1DietaryWriterRemainsTripwirePending();
+    await excludesAllergenicRecipeFromPersonFactsWithoutCoreRulesSeed();
+    await dropsTier1DietaryPreferencePatchCoreRulesWrites();
+    await leavesTier1DietaryRejectedSignalsToPersonFacts();
     await scalesRepeatedWeekdayMealPrepToDailyServes();
     await appliesTrainingAwarePlanningBiases();
     await acceptsCandidateAfterUnrelatedHistoryChanges();
@@ -109,7 +133,6 @@ async function appliesConfirmedPreferenceSignalsToPlanning() {
           budgetSensitivity: 'budget conscious',
           cleanupTolerance: 'low cleanup on weeknights',
           cookingCadence: '1 weeknight dinner',
-          favoriteFoods: ['chicken'],
           groceryExpectation: 'pantry-aware grocery lists',
           householdShape: 'family of 3',
           leftoverPreference: 'planned leftovers for lunch',
@@ -189,7 +212,7 @@ async function appliesConfirmedPreferenceSignalsToPlanning() {
     assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.weeknightTimeLimitMinutes, 30);
     assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.preferredCuisineCount, 1);
     assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.targetWeeknightDinnerCount, 1);
-    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.likedFoodCount, 1);
+    assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.likedFoodCount, 0);
     assert.equal(candidate.planningBrief.contextSignals.preferenceSignals.budgetSensitive, true);
   } finally {
     runtime.sqliteDb.close();
@@ -457,7 +480,11 @@ async function appliesMealParticipationSignalsToServingTargets() {
 
 async function enforcesDietaryConstraintsDuringPlanning() {
   const runtime = createTempRuntime();
-  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database, async () => [
+    personFact('dietary_pattern', { label: 'vegetarian' }),
+    personFact('dietary_pattern', { label: 'gluten-free' }),
+    personFact('dietary_pattern', { label: 'dairy-free' }),
+  ]);
   const provenance = {
     actorEmail: TEST_ACTOR_EMAIL,
     actorName: TEST_ACTOR_NAME,
@@ -474,7 +501,6 @@ async function enforcesDietaryConstraintsDuringPlanning() {
       response: {
         preferencePatch: {
           cookingCadence: '1 weeknight dinner',
-          dietaryConstraints: ['vegetarian', 'gluten-free', 'dairy-free'],
           householdShape: 'solo',
           mealRoutine: 'solo weeknight dinners',
           weeknightTimeLimitMinutes: 30,
@@ -576,6 +602,494 @@ async function enforcesDietaryConstraintsDuringPlanning() {
   } finally {
     runtime.sqliteDb.close();
   }
+}
+
+async function derivesPlannerTier1DietaryFromPersonFacts() {
+  const runtime = createTempRuntime();
+  const core = new FluentCoreService(runtime.env.db, runtime.env);
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database, (input) => core.listPersonFacts(input));
+  const provenance = plannerProvenance('planner-brain-person-facts-authority-test');
+
+  try {
+    await core.upsertPersonFact(
+      {
+        kind: 'allergy',
+        source: { origin: 'user_confirmed', domain: 'meals', detail: 'test' },
+        status: 'confirmed',
+        value: { label: 'shellfish', severity: 'avoid' },
+        visibility: { domains: 'all', hosts: 'all', derived_only_across: [] },
+      },
+      provenance,
+    );
+
+    await createPlannerDinnerRecipe(service, provenance, {
+      id: 'planner-brain-person-facts-shellfish',
+      ingredients: ['shellfish', 'rice'],
+      name: 'Shellfish Rice',
+      tags: ['weeknight'],
+    });
+    await createPlannerDinnerRecipe(service, provenance, {
+      id: 'planner-brain-person-facts-safe-beans',
+      ingredients: ['beans', 'rice'],
+      name: 'Safe Bean Rice',
+      tags: ['weeknight'],
+    });
+
+    const generation = await service.generatePlan({
+      weekStart: '2026-06-22',
+      overrides: {
+        breakfastCount: 0,
+        dinnerCount: 1,
+        includeRecipeIds: ['planner-brain-person-facts-shellfish', 'planner-brain-person-facts-safe-beans'],
+        lunchCount: 0,
+        snackCount: 0,
+      },
+      provenance,
+    });
+    const candidate = generation.candidates[0];
+
+    assert.ok(candidate);
+    assert.equal(candidate.recipeIds.includes('planner-brain-person-facts-shellfish'), false);
+    assert.equal(candidate.recipeIds.includes('planner-brain-person-facts-safe-beans'), true);
+
+    const acceptedPlan = await service.acceptPlanCandidate({
+      candidateId: candidate.candidateId,
+      generationId: generation.id,
+      inputHash: generation.inputHash,
+      provenance,
+    });
+    assert.equal(acceptedPlan.entries[0]?.recipeId, 'planner-brain-person-facts-safe-beans');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function allowsRecipeWhenPersonFactIsRejected() {
+  const runtime = createTempRuntime();
+  const core = new FluentCoreService(runtime.env.db, runtime.env);
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database, (input) => core.listPersonFacts(input));
+  const provenance = plannerProvenance('planner-brain-person-facts-replace-test');
+
+  try {
+    await core.upsertPersonFact(
+      {
+        kind: 'allergy',
+        source: { origin: 'user_confirmed', domain: 'meals', detail: 'test' },
+        status: 'confirmed',
+        value: { label: 'peanuts', severity: 'avoid' },
+        visibility: { domains: 'all', hosts: 'all', derived_only_across: [] },
+      },
+      provenance,
+    );
+    await core.rejectPersonFact({ kind: 'allergy', value: { label: 'peanuts', severity: 'avoid' } }, provenance);
+
+    await createPlannerDinnerRecipe(service, provenance, {
+      id: 'planner-brain-person-facts-peanut',
+      ingredients: ['peanuts', 'noodles'],
+      name: 'Peanut Noodles',
+      tags: ['weeknight'],
+    });
+    await createPlannerDinnerRecipe(service, provenance, {
+      id: 'planner-brain-person-facts-safe-pasta',
+      ingredients: ['tomato', 'pasta'],
+      name: 'Safe Pasta',
+      tags: ['weeknight'],
+    });
+
+    const generation = await service.generatePlan({
+      weekStart: '2026-06-29',
+      overrides: {
+        breakfastCount: 0,
+        dinnerCount: 1,
+        includeRecipeIds: ['planner-brain-person-facts-peanut'],
+        lunchCount: 0,
+        snackCount: 0,
+      },
+      provenance,
+    });
+    const candidate = generation.candidates[0];
+
+    assert.ok(candidate);
+    assert.equal(candidate.entries[0]?.recipeId, 'planner-brain-person-facts-peanut');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function leavesPlannerBehaviorUnchangedWhenPersonFactsReaderIsNull() {
+  const runtime = createTempRuntime();
+  const core = new FluentCoreService(runtime.env.db, runtime.env);
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database, null);
+  const provenance = plannerProvenance('planner-brain-person-facts-null-reader-test');
+
+  try {
+    await core.upsertPersonFact(
+      {
+        kind: 'allergy',
+        source: { origin: 'user_confirmed', domain: 'meals', detail: 'test' },
+        status: 'confirmed',
+        value: { label: 'shellfish', severity: 'avoid' },
+        visibility: { domains: 'all', hosts: 'all', derived_only_across: [] },
+      },
+      provenance,
+    );
+    await createPlannerDinnerRecipe(service, provenance, {
+      id: 'planner-brain-null-reader-shellfish',
+      ingredients: ['shellfish', 'rice'],
+      name: 'Null Reader Shellfish Rice',
+      tags: ['weeknight'],
+    });
+
+    const generation = await service.generatePlan({
+      weekStart: '2026-07-06',
+      overrides: {
+        breakfastCount: 0,
+        dinnerCount: 1,
+        includeRecipeIds: ['planner-brain-null-reader-shellfish'],
+        lunchCount: 0,
+        snackCount: 0,
+      },
+      provenance,
+    });
+
+    assert.equal(generation.candidates[0]?.entries[0]?.recipeId, 'planner-brain-null-reader-shellfish');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function preservesTier2PreferencesWhenOverlayingPersonFacts() {
+  const raw = {
+    core_rules: {
+      allergies: ['shadow shellfish'],
+      allergies_confirmed_at: '2026-06-01T00:00:00.000Z',
+      dietary_constraints_confirmed_at: '2026-06-01T00:00:00.000Z',
+      hard_avoids_confirmed_at: '2026-06-01T00:00:00.000Z',
+      liked_foods: ['lentils'],
+      likes: ['tacos'],
+      preferred_cuisines: ['thai'],
+      soft_avoids: ['cilantro', 'overly salty'],
+      spice_preference: 'medium',
+    },
+    household: { shape: 'family of 3' },
+    planning: { cooking_cadence: '2 weeknight dinners', grocery_day: 'Sunday' },
+    shopping: { grocery_expectation: 'exact list' },
+  };
+  const planningBefore = JSON.stringify(raw.planning);
+  const shoppingBefore = JSON.stringify(raw.shopping);
+  const householdBefore = JSON.stringify(raw.household);
+
+  raw.core_rules = overlayPersonFactsOntoCoreRules(raw.core_rules, [
+    personFact('anti_favorite', { label: 'cilantro', domain_hint: 'meals' }),
+    personFact('taste_pref', { label: 'mushrooms', polarity: 'like' }),
+    personFact('taste_pref', { label: 'burnt toast', polarity: 'dislike' }),
+    personFact('allergy', { label: 'Shellfish', severity: 'avoid' }),
+  ]);
+
+  assert.deepEqual(raw.core_rules.allergies, ['Shellfish']);
+  assert.deepEqual(raw.core_rules.dislikes, ['cilantro']);
+  assert.deepEqual(raw.core_rules.favorite_foods, ['mushrooms']);
+  // soft_avoids is non-owned and left untouched (even though 'cilantro' is also an active anti_favorite dislike);
+  // the planner merges dislikes+soft_avoids and dedupes, so the overlay does not cross-mutate non-owned fields.
+  assert.deepEqual(raw.core_rules.soft_avoids, ['cilantro', 'overly salty']);
+  assert.equal(raw.core_rules.spice_preference, 'medium');
+  assert.deepEqual(raw.core_rules.preferred_cuisines, ['thai']);
+  assert.deepEqual(raw.core_rules.liked_foods, ['lentils']);
+  assert.deepEqual(raw.core_rules.likes, ['tacos']);
+  assert.equal(Object.keys(raw.core_rules).some((key) => key.endsWith('_confirmed_at')), false);
+  assert.equal(JSON.stringify(raw.planning), planningBefore);
+  assert.equal(JSON.stringify(raw.shopping), shoppingBefore);
+  assert.equal(JSON.stringify(raw.household), householdBefore);
+}
+
+async function mirrorsTier1DietaryFromVNextCalibrationEvent() {
+  const runtime = createTempRuntime();
+  const core = new FluentCoreService(runtime.env.db, runtime.env);
+  const meals = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const provenance = plannerProvenance('planner-brain-vnext-tier1-mirror-test');
+
+  try {
+    const ack = await recordFluentVNextEvent(
+      {
+        core: {
+          appendPersonConsentEvent: (input, inputProvenance) => core.appendPersonConsentEvent(input, inputProvenance),
+          getCapabilities: () => core.getCapabilities(),
+          getProfile: () => core.getProfile(),
+          listPersonFacts: (input) => core.listPersonFacts(input),
+          rejectPersonFact: (input, inputProvenance) => core.rejectPersonFact(input, inputProvenance),
+          updateProfile: (input, inputProvenance) => core.updateProfile(input, inputProvenance),
+          upsertPersonFact: (input, inputProvenance) => core.upsertPersonFact(input, inputProvenance),
+        },
+        meals: {
+          getOnboardingCalibration: (input) => meals.getOnboardingCalibration(input),
+          recordCalibrationResponse: (input) => meals.recordCalibrationResponse(input),
+        },
+      },
+      {
+        domain: 'meals',
+        event: {
+          preference_patch: {
+            allergies: ['sesame'],
+          },
+        },
+        eventType: 'meals_calibration_response',
+        provenance,
+      },
+    );
+
+    assert.equal(ack.source, 'meals.recordCalibrationResponse+core.mirrorTier1PersonFacts');
+    const facts = await core.listPersonFacts({ consumerDomain: 'meals', host: 'unknown' });
+    assert.equal(facts.some((fact) => fact.kind === 'allergy' && factLabel(fact) === 'sesame'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function mirrorsTier1DietaryFromLegacyCalibrationTool() {
+  const runtime = createTempRuntime();
+  const meals = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const core = new FluentCoreService(runtime.env.db, runtime.env);
+  const server = new PlannerFakeMcpServer();
+  registerMealsMcpSurface(server as unknown as never, meals, core, 'https://example.test');
+  const recordCalibration = server.tools.get('meals_record_calibration_response');
+  assert.ok(recordCalibration);
+
+  try {
+    await runWithFluentAuthProps(
+      {
+        profileId: FLUENT_OSS_DEFAULT_PROFILE_ID,
+        scope: [FLUENT_MEALS_READ_SCOPE, FLUENT_MEALS_WRITE_SCOPE],
+        tenantId: FLUENT_OSS_DEFAULT_TENANT_ID,
+      },
+      () =>
+        recordCalibration({
+          preference_patch: {
+            hard_avoids: ['mushrooms'],
+          },
+          response_mode: 'ack',
+        }),
+    );
+
+    const facts = await core.listPersonFacts({ consumerDomain: 'meals', host: 'unknown' });
+    assert.equal(facts.some((fact) => fact.kind === 'hard_avoid' && factLabel(fact) === 'mushrooms'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function guardsTier1OverlayClearList() {
+  assert.deepEqual(Object.keys(TIER1_KIND_TO_CORE_RULES_FIELD).sort(), [...TIER1_MEALS_PERSON_FACT_KINDS].sort());
+  assert.deepEqual(Object.values(TIER1_KIND_TO_CORE_RULES_FIELD).sort(), [
+    'allergies',
+    'dietary_constraints',
+    'dislikes',
+    'favorite_foods',
+    'hard_avoids',
+  ]);
+}
+
+async function noCoreRulesOnlyTier1DietaryWriterRemainsTripwirePending() {
+  const root = path.resolve(__dirname, '..');
+  const sourceRoot = path.join(root, 'src');
+  const tier1Fields = [
+    'allergies',
+    'hard_avoids',
+    'dietary_constraints',
+    'dislikes',
+    'favorite_foods',
+    'allergies_confirmed_at',
+    'hard_avoids_confirmed_at',
+    'dietary_constraints_confirmed_at',
+    'dislikes_confirmed_at',
+    'favorite_foods_confirmed_at',
+  ];
+  const assignmentPattern = new RegExp(
+    `(?:coreRules|core_rules|nextCoreRules|next|rebuilt)\\s*(?:\\.\\s*(?:${tier1Fields.join('|')})|\\[\\s*['"](?:${tier1Fields.join(
+      '|',
+    )})['"]\\s*\\])\\s*=`,
+  );
+  const matches: string[] = [];
+
+  for (const filePath of listSourceFiles(sourceRoot)) {
+    const relativePath = path.relative(root, filePath).replace(/\\/g, '/');
+    const lines = readFileSync(filePath, 'utf8').split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (!assignmentPattern.test(line)) return;
+      if (isAllowedTier1DietaryCoreRulesAssignment(relativePath, line)) return;
+      matches.push(`${relativePath}:${index + 1}: ${line.trim()}`);
+    });
+  }
+
+  assert.deepEqual(matches, [], `Unexpected Tier-1 dietary core_rules writer(s):\n${matches.join('\n')}`);
+}
+
+async function excludesAllergenicRecipeFromPersonFactsWithoutCoreRulesSeed() {
+  const runtime = createTempRuntime();
+  const core = new FluentCoreService(runtime.env.db, runtime.env);
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database, (input) => core.listPersonFacts(input));
+  const provenance = plannerProvenance('planner-brain-sole-source-allergy-test');
+
+  try {
+    await core.upsertPersonFact(
+      {
+        kind: 'allergy',
+        source: { origin: 'user_confirmed', domain: 'meals', detail: 'test' },
+        status: 'confirmed',
+        value: { label: 'cashews', severity: 'avoid' },
+        visibility: { domains: 'all', hosts: 'all', derived_only_across: [] },
+      },
+      provenance,
+    );
+
+    await createPlannerDinnerRecipe(service, provenance, {
+      id: 'planner-brain-sole-source-cashew-curry',
+      ingredients: ['cashews', 'rice'],
+      name: 'Cashew Curry',
+      tags: ['weeknight'],
+    });
+    await createPlannerDinnerRecipe(service, provenance, {
+      id: 'planner-brain-sole-source-safe-rice',
+      ingredients: ['lentils', 'rice'],
+      name: 'Safe Lentil Rice',
+      tags: ['weeknight'],
+    });
+
+    const generation = await service.generatePlan({
+      weekStart: '2026-07-13',
+      overrides: {
+        breakfastCount: 0,
+        dinnerCount: 1,
+        includeRecipeIds: ['planner-brain-sole-source-cashew-curry', 'planner-brain-sole-source-safe-rice'],
+        lunchCount: 0,
+        snackCount: 0,
+      },
+      provenance,
+    });
+    const candidate = generation.candidates[0];
+
+    assert.ok(candidate);
+    assert.equal(candidate.recipeIds.includes('planner-brain-sole-source-cashew-curry'), false);
+    assert.equal(candidate.recipeIds.includes('planner-brain-sole-source-safe-rice'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function dropsTier1DietaryPreferencePatchCoreRulesWrites() {
+  const now = '2026-06-20T12:00:00.000Z';
+  const raw = applyMealsCalibrationResponse({
+    now,
+    preferences: {
+      raw: {
+        core_rules: {
+          liked_foods: ['lentils'],
+        },
+      },
+    } as never,
+    response: {
+      preferencePatch: {
+        allergies: ['shellfish'],
+        dietaryConstraints: ['vegetarian'],
+        dislikes: ['cilantro'],
+        favoriteFoods: ['mushrooms'],
+        groceryExpectation: 'exact list',
+        hardAvoids: ['peanuts'],
+        householdAdultCount: 2,
+        householdChildCount: 1,
+        householdDefaultServeTarget: 3,
+        householdShape: 'family of 3',
+        planningGroceryDay: 'Sunday',
+        planningTargetDinnerCount: 4,
+        preferredCuisines: ['thai'],
+        shoppingPreferredStores: ['No Frills'],
+        shoppingSubstitutionTolerance: 'flexible substitutions',
+        spicePreference: 'medium',
+      },
+    },
+  });
+  const coreRules = raw.core_rules as Record<string, unknown>;
+  const household = raw.household as Record<string, unknown>;
+  const planning = raw.planning as Record<string, unknown>;
+  const shopping = raw.shopping as Record<string, unknown>;
+
+  for (const key of [
+    'allergies',
+    'hard_avoids',
+    'dietary_constraints',
+    'dislikes',
+    'favorite_foods',
+    'allergies_confirmed_at',
+    'hard_avoids_confirmed_at',
+    'dietary_constraints_confirmed_at',
+    'dislikes_confirmed_at',
+    'favorite_foods_confirmed_at',
+  ]) {
+    assert.equal(Object.prototype.hasOwnProperty.call(coreRules, key), false, key);
+  }
+  assert.deepEqual(coreRules.liked_foods, ['lentils']);
+  assert.deepEqual(coreRules.preferred_cuisines, ['thai']);
+  assert.equal(coreRules.spice_preference, 'medium');
+  assert.equal(household.shape, 'family of 3');
+  assert.equal(household.adult_count, 2);
+  assert.equal(household.child_count, 1);
+  assert.equal(household.default_serve_target, 3);
+  assert.equal(planning.grocery_day, 'Sunday');
+  assert.equal(planning.target_dinner_count, 4);
+  assert.equal(shopping.grocery_expectation, 'exact list');
+  assert.deepEqual(shopping.preferred_stores, ['No Frills']);
+  assert.equal(shopping.substitution_tolerance, 'flexible substitutions');
+}
+
+async function leavesTier1DietaryRejectedSignalsToPersonFacts() {
+  const raw = applyMealsCalibrationResponse({
+    now: '2026-06-20T12:00:00.000Z',
+    preferences: {
+      raw: {
+        core_rules: {
+          allergies: ['peanuts'],
+          preferred_cuisines: ['thai', 'mexican'],
+        },
+      },
+    } as never,
+    response: {
+      signals: [
+        {
+          kind: 'allergy',
+          status: 'rejected',
+          value: 'peanuts',
+        },
+        {
+          kind: 'preferred_cuisine',
+          status: 'rejected',
+          value: 'thai',
+        },
+      ],
+    },
+  });
+  const coreRules = raw.core_rules as Record<string, unknown>;
+
+  assert.deepEqual(coreRules.allergies, ['peanuts']);
+  assert.equal(Object.prototype.hasOwnProperty.call(coreRules, 'allergies_confirmed_at'), false);
+  assert.deepEqual(coreRules.preferred_cuisines, ['mexican']);
+}
+
+function listSourceFiles(root: string): string[] {
+  const entries = readdirSync(root).map((entry) => path.join(root, entry));
+  const files: string[] = [];
+  for (const entry of entries) {
+    const stat = statSync(entry);
+    if (stat.isDirectory()) {
+      files.push(...listSourceFiles(entry));
+    } else if (entry.endsWith('.ts')) {
+      files.push(entry);
+    }
+  }
+  return files;
+}
+
+function isAllowedTier1DietaryCoreRulesAssignment(relativePath: string, line: string): boolean {
+  if (relativePath === 'src/domains/meals/person-facts-overlay.ts') return true;
+  return relativePath === 'src/mcp-meals.ts' && /TIER1_DIETARY_CORE_RULE_KEYS|stripTier1DietaryCoreRules|nextCoreRules/.test(line);
 }
 
 async function includesTextFirstPlanningBriefAndReview() {
@@ -877,6 +1391,98 @@ async function doesNotBindFutureMealWhenLoggingFeedbackEarly() {
     assert.equal(feedback.date, '2026-04-09');
     assert.equal(feedback.mealPlanId, null);
     assert.equal(feedback.mealPlanEntryId, null);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function updatesExistingRecipeMemoryWhenLoggingFeedback() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+  const provenance = {
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
+    confidence: 1,
+    scopes: ['meals:write'],
+    sessionId: 'planner-brain-existing-memory-feedback-test',
+    sourceAgent: 'codex-test',
+    sourceSkill: 'fluent-meals',
+    sourceType: 'test',
+  };
+
+  try {
+    await service.createRecipe({
+      recipe: {
+        id: 'planner-brain-existing-memory-recipe',
+        name: 'Planner Brain Existing Memory Recipe',
+        meal_type: 'dinner',
+        servings: 2,
+        total_time: 30,
+        active_time: 20,
+        macros: {
+          calories: 520,
+          fiber_g: 4,
+          protein_g: 34,
+          sodium_mg: 420,
+        },
+        cost_per_serving_cad: 5.9,
+        ingredients: [{ item: 'salmon fillet', quantity: 2, unit: 'count', ordering_policy: 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Cook the existing-memory recipe.' }],
+      },
+      provenance,
+    });
+
+    runtime.sqliteDb.sqlite
+      .prepare(
+        `INSERT INTO meal_memory (
+          id, tenant_id, recipe_id, status, last_feedback_json, notes_json, last_used_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'legacy-memory-id-for-existing-memory-recipe',
+        FLUENT_OSS_DEFAULT_TENANT_ID,
+        'planner-brain-existing-memory-recipe',
+        'proven',
+        JSON.stringify({ taste: 'good', repeat_again: 'good' }),
+        JSON.stringify(['Already proven from earlier cooking.']),
+        '2026-04-01',
+        '2026-04-01T12:00:00.000Z',
+      );
+
+    const feedback = await service.logFeedback({
+      date: '2026-04-12',
+      difficulty: 'okay',
+      familyAcceptance: 'good',
+      notes: 'Still works well when attached to a plan entry.',
+      recipeId: 'planner-brain-existing-memory-recipe',
+      repeatAgain: 'good',
+      taste: 'good',
+      timeReality: 'okay',
+      provenance,
+    });
+
+    assert.equal(feedback.recipeId, 'planner-brain-existing-memory-recipe');
+
+    const memoryRows = runtime.sqliteDb.sqlite
+      .prepare('SELECT id, status, last_feedback_json, notes_json, last_used_at FROM meal_memory WHERE recipe_id = ?')
+      .all('planner-brain-existing-memory-recipe') as Array<{
+      id: string;
+      last_feedback_json: string;
+      last_used_at: string;
+      notes_json: string;
+      status: string;
+    }>;
+
+    assert.equal(memoryRows.length, 1);
+    assert.equal(memoryRows[0]?.id, 'legacy-memory-id-for-existing-memory-recipe');
+    assert.equal(memoryRows[0]?.status, 'proven');
+    assert.equal(memoryRows[0]?.last_used_at, '2026-04-12');
+    const lastFeedback = JSON.parse(memoryRows[0]!.last_feedback_json) as Record<string, unknown>;
+    assert.equal(lastFeedback.taste, 'good');
+    assert.equal(lastFeedback.difficulty, 'okay');
+    const notes = JSON.parse(memoryRows[0]!.notes_json) as string[];
+    assert.equal(notes.includes('Already proven from earlier cooking.'), true);
+    assert.equal(notes.includes('Still works well when attached to a plan entry.'), true);
   } finally {
     runtime.sqliteDb.close();
   }
@@ -2309,6 +2915,88 @@ async function acceptsStringifiedPlanPayload() {
     assert.equal(plan.entries[0]?.recipeId, 'planner-brain-stringified-plan-recipe');
   } finally {
     runtime.sqliteDb.close();
+  }
+}
+
+function plannerProvenance(sessionId: string) {
+  return {
+    actorEmail: TEST_ACTOR_EMAIL,
+    actorName: TEST_ACTOR_NAME,
+    confidence: 1,
+    scopes: ['meals:write'],
+    sessionId,
+    sourceAgent: 'codex-test',
+    sourceSkill: 'fluent-meals',
+    sourceType: 'test',
+  };
+}
+
+async function createPlannerDinnerRecipe(
+  service: MealsService,
+  provenance: ReturnType<typeof plannerProvenance>,
+  input: { id: string; ingredients: string[]; name: string; tags?: string[] },
+) {
+  await service.createRecipe({
+    recipe: {
+      id: input.id,
+      name: input.name,
+      meal_type: 'dinner',
+      servings: 1,
+      total_time: 20,
+      active_time: 15,
+      cost_per_serving_cad: 4,
+      macros: {
+        calories: 450,
+        fiber_g: 6,
+        protein_g: 18,
+        sodium_mg: 420,
+      },
+      tags: input.tags ?? ['weeknight'],
+      ingredients: input.ingredients.map((item) => ({ item, quantity: 1, unit: 'count', ordering_policy: 'flexible_match' })),
+      instructions: [{ step_number: 1, detail: `Cook ${input.name}.` }],
+    },
+    provenance,
+  });
+}
+
+function personFact(kind: PersonFactKind, value: Record<string, unknown>): PersonFact {
+  return {
+    annotations: [],
+    confidence: 1,
+    confirmed_at: '2026-06-01T00:00:00.000Z',
+    fact_id: `pf:test:${kind}:${String(value.label ?? '')}`,
+    kind,
+    note: null,
+    observed_at: '2026-06-01T00:00:00.000Z',
+    path: `test.${kind}.${String(value.label ?? '')}`,
+    question_id: null,
+    schema_version: 1,
+    section: kind === 'allergy' || kind === 'dietary_pattern' ? 'dietary' : 'taste',
+    source: { detail: 'test', domain: 'meals', origin: 'user_confirmed' },
+    stale_after: null,
+    status: 'confirmed',
+    supersedes: null,
+    value: value as never,
+    visibility: { domains: 'all', hosts: 'all', derived_only_across: [] },
+  };
+}
+
+function factLabel(fact: PersonFact): string {
+  const value = fact.value as { label?: unknown };
+  return typeof value.label === 'string' ? value.label : '';
+}
+
+type PlannerToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
+
+class PlannerFakeMcpServer {
+  readonly tools = new Map<string, PlannerToolHandler>();
+
+  registerResource() {
+    return undefined;
+  }
+
+  registerTool(name: string, _config: unknown, handler: PlannerToolHandler) {
+    this.tools.set(name, handler);
   }
 }
 

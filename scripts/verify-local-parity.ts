@@ -5,12 +5,13 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { FLUENT_CONTRACT_VERSION, FLUENT_RESOURCE_URIS, FLUENT_TOOL_NAMES } from '../src/contract';
 import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../src/fluent-identity';
 import { defaultLocalScopes, ensureLocalTokenState, LOCAL_AUTH_MODEL } from '../src/local/auth';
+import { cliString, parseCliArgs, resolveCliBaseUrl, resolveCliRoot } from '../src/local/cli';
 import { resolveLocalRuntimePaths } from '../src/local/runtime';
 
-const args = parseArgs(process.argv.slice(2));
-const cwd = path.resolve(args.cwd ?? process.cwd());
-const baseUrl = (args['base-url'] ?? args.baseUrl ?? 'http://127.0.0.1:8788').replace(/\/$/, '');
-const rootDir = args.root ? path.resolve(cwd, args.root) : undefined;
+const args = parseCliArgs(process.argv.slice(2));
+const cwd = path.resolve(cliString(args, 'cwd') ?? process.cwd());
+const baseUrl = resolveCliBaseUrl({ args, defaultBaseUrl: 'http://127.0.0.1:8788' });
+const rootDir = resolveCliRoot({ args, cwd });
 const paths = resolveLocalRuntimePaths(rootDir);
 const LOCAL_SERVER_START_HINT = 'npm run oss:start';
 
@@ -445,23 +446,6 @@ function compareSets({
     missingResources: expectedResources.filter((value) => !liveResources.includes(value)),
     missingTools: expectedTools.filter((value) => !liveTools.includes(value)),
   };
-}
-
-function parseArgs(argv: string[]): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (!token.startsWith('--')) continue;
-    const key = token.slice(2);
-    const next = argv[index + 1];
-    if (next && !next.startsWith('--')) {
-      result[key] = next;
-      index += 1;
-    } else {
-      result[key] = 'true';
-    }
-  }
-  return result;
 }
 
 function tryParseJson(value: string) {

@@ -14,6 +14,19 @@ export const FLUENT_SUPPORTED_SCOPES = [
   FLUENT_STYLE_READ_SCOPE,
   FLUENT_STYLE_WRITE_SCOPE,
 ] as const;
+export const FLUENT_PUBLIC_HOSTED_SCOPES = [
+  FLUENT_MEALS_READ_SCOPE,
+  FLUENT_MEALS_WRITE_SCOPE,
+  FLUENT_STYLE_READ_SCOPE,
+  FLUENT_STYLE_WRITE_SCOPE,
+] as const;
+export const FLUENT_PUBLIC_HOSTED_OAUTH_SCOPES = [
+  'email',
+  ...FLUENT_PUBLIC_HOSTED_SCOPES,
+  'offline_access',
+  'openid',
+  'profile',
+] as const;
 
 export interface FluentAuthProps {
   accessToken?: string;

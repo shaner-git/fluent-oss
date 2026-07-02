@@ -11,8 +11,6 @@ export const FLUENT_LOCAL_TOKEN_ENV = 'FLUENT_LOCAL_TOKEN';
 export const FLUENT_REQUIRED_HOSTED_SCOPES = [
   'meals:read',
   'meals:write',
-  'health:read',
-  'health:write',
   'style:read',
   'style:write',
   'offline_access',

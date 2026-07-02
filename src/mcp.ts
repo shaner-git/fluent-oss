@@ -5,6 +5,7 @@ import type { CoreRuntimeBindings } from './config';
 import {
   FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES,
   FLUENT_CONTRACT_VERSION,
+  fluentAssistantAppProfile,
   fluentChatGptAppProfile,
 } from './contract';
 import { FluentCoreService } from './fluent-core';
@@ -15,13 +16,17 @@ import { registerStyleMcpSurface } from './mcp-style';
 import { getFluentAuthProps } from './auth';
 import { assertCurrentUserToolAllowedForSubscriptionLifecycle } from './subscription-lifecycle';
 import { HealthService } from './domains/health/service';
+import { BudgetsService } from './domains/budgets/service';
 import { iconFor } from './mcp-shared';
 import { MealsService } from './domains/meals/service';
 import { StyleService } from './domains/style/service';
 
-export type FluentMcpRuntimeProfile = 'chatgpt_app' | 'full';
+export type FluentMcpRuntimeProfile = 'assistant_app' | 'chatgpt_app' | 'full';
 
 const MCP_TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
+// Move 4 landed: core_rules Tier-1 dietary dual-write is removed; person_facts is sole source.
+// Keep this disabled and the reader null as a read-time safety belt for the legacy server-side planner overlay.
+export const ENABLE_MEALS_PERSON_FACTS_PLANNING = false;
 
 export function createFluentMcpServer(
   bindings: CoreRuntimeBindings,
@@ -30,20 +35,32 @@ export function createFluentMcpServer(
 ): McpServer {
   const fluentCore = new FluentCoreService(bindings.db, bindings);
   const health = new HealthService(bindings.db);
-  const meals = new MealsService(bindings.db);
+  const meals = new MealsService(
+    bindings.db,
+    ENABLE_MEALS_PERSON_FACTS_PLANNING ? (input) => fluentCore.listPersonFacts(input) : null,
+  );
+  const budgets = new BudgetsService(bindings.db);
   const style = new StyleService(bindings.db, {
     artifacts: bindings.artifacts,
+    budgets,
     imageDeliverySecret: bindings.imageDeliverySecret ?? null,
     origin,
   });
   const server = new McpServer({
     icons: iconFor(origin),
-    name: options.profile === 'chatgpt_app' ? 'fluent-chatgpt-app' : 'fluent-mcp',
+    name:
+      options.profile === 'chatgpt_app'
+        ? 'fluent-chatgpt-app'
+        : options.profile === 'assistant_app'
+          ? 'fluent-assistant-app'
+          : 'fluent-mcp',
     version: FLUENT_CONTRACT_VERSION,
   });
   applyMcpToolOutputSchemaDefaults(server, options.profile ?? 'full');
   if (options.profile === 'chatgpt_app') {
-    applyChatGptAppProfileFilter(server);
+    applyCuratedMcpProfileFilter(server, fluentChatGptAppProfile());
+  } else if (options.profile === 'assistant_app') {
+    applyCuratedMcpProfileFilter(server, fluentAssistantAppProfile());
   }
   if (bindings.deploymentTrack === 'cloud') {
     const originalRegisterTool = server.registerTool.bind(server);
@@ -75,11 +92,11 @@ export function createFluentMcpServer(
     }) as typeof server.registerTool;
   }
 
-  registerCoreMcpSurface(server, fluentCore, meals, health, style, origin);
+  registerCoreMcpSurface(server, fluentCore, meals, health, style, budgets, origin);
   registerHealthMcpSurface(server, health, origin);
-  registerMealsMcpSurface(server, meals, fluentCore, origin);
+  registerMealsMcpSurface(server, meals, fluentCore, origin, { budgets });
   registerStyleMcpSurface(server, style, origin, {
-    allowPurchasePageExtraction: options.profile !== 'chatgpt_app',
+    allowPurchasePageExtraction: options.profile === 'full',
     imageDeliverySecret: bindings.imageDeliverySecret ?? null,
   });
 
@@ -102,6 +119,20 @@ function applyMcpToolOutputSchemaDefaults(server: McpServer, profile: FluentMcpR
 
 const FLUENT_FULL_MCP_WRITE_TOOL_NAMES = new Set([
   'fluent_update_profile',
+  'fluent_update_shared_profile_patch',
+  'fluent_set_budget_envelope',
+  'fluent_log_budget_spend',
+  'fluent_update_style_item_patch',
+  'fluent_create_style_item',
+  'fluent_refresh_style_item_profile',
+  'fluent_set_style_item_image',
+  'fluent_save_recipe',
+  'fluent_update_recipe_patch',
+  'fluent_record_recipe_feedback',
+  'fluent_apply_grocery_list_change',
+  'fluent_upsert_item',
+  'fluent_archive_item',
+  'fluent_record_event',
   'fluent_enable_domain',
   'fluent_disable_domain',
   'fluent_begin_domain_onboarding',
@@ -201,8 +232,10 @@ function normalizeMcpToolResult(value: unknown): unknown {
   };
 }
 
-function applyChatGptAppProfileFilter(server: McpServer): void {
-  const profile = fluentChatGptAppProfile();
+function applyCuratedMcpProfileFilter(
+  server: McpServer,
+  profile: { resources: readonly string[]; tools: readonly string[]; writeTools: readonly string[] },
+): void {
   const allowedTools = new Set<string>(profile.tools);
   const allowedResources = new Set<string>(profile.resources);
   const writeTools = new Set<string>(profile.writeTools);
@@ -219,7 +252,7 @@ function applyChatGptAppProfileFilter(server: McpServer): void {
       return undefined;
     }
     const chatGptConfig = normalizeChatGptAppToolConfig(name, config, { openWorldTools, writeTools });
-    const chatGptHandler = (async (...args: any[]) => sanitizeChatGptAppResult(name, await handler(...args))) as any;
+    const chatGptHandler = (async (...args: any[]) => sanitizeCuratedMcpResult(name, await handler(...args), profile)) as any;
     return (originalRegisterTool as any)(name, chatGptConfig, chatGptHandler);
   }) as typeof server.registerTool;
 
@@ -233,7 +266,7 @@ function applyChatGptAppProfileFilter(server: McpServer): void {
     if (!uri || !allowedResources.has(uri)) {
       return undefined;
     }
-    const chatGptHandler = (async (...args: any[]) => sanitizeChatGptAppResult(uri, await handler(...args))) as any;
+    const chatGptHandler = (async (...args: any[]) => sanitizeCuratedMcpResult(uri, await handler(...args), profile)) as any;
     return (originalRegisterResource as any)(name, uriOrTemplate, config, chatGptHandler);
   }) as typeof server.registerResource;
 }
@@ -292,9 +325,17 @@ const CHATGPT_APP_FORBIDDEN_KEYS = new Set([
 ]);
 
 export function sanitizeChatGptAppResult(surface: string, value: unknown): unknown {
+  return sanitizeCuratedMcpResult(surface, value, fluentChatGptAppProfile());
+}
+
+export function sanitizeCuratedMcpResult(
+  surface: string,
+  value: unknown,
+  profile: { tools: readonly string[] },
+): unknown {
   const allowedToolNames =
     surface === 'meals_list_tools' || surface === 'fluent_get_capabilities'
-      ? new Set<string>(fluentChatGptAppProfile().tools)
+      ? new Set<string>(profile.tools)
       : undefined;
   return sanitizeChatGptAppValue(value, {
     allowedToolNames,
@@ -359,7 +400,7 @@ function shouldOmitChatGptAppKey(
 }
 
 function isToolNameListKey(key: string): boolean {
-  return key === 'toolNames' || key === 'starterReadTools' || key === 'starterWriteTools';
+  return key === 'toolNames' || key === 'starterReadTools' || key === 'detailReadTools' || key === 'starterWriteTools';
 }
 
 function isRootProfileObjectPath(pathParts: string[]) {

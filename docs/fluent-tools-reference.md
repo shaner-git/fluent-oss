@@ -3,7 +3,7 @@
 This page is generated from `contracts/fluent-contract.v1.json`.
 Anything listed as a current tool is present in the frozen public contract artifact. Preview items are intentionally not current contract tools.
 
-Current contract version: `2026-05-17.fluent-core-v1.84`
+Current contract version: `2026-06-01.fluent-core-v1.85`
 
 ## How To Read This Page
 
@@ -22,6 +22,33 @@ Current contract version: `2026-05-17.fluent-core-v1.84`
 - `fluent_get_home`
 - `fluent_get_next_actions`
 - `fluent_get_profile`
+- `fluent_get_context`
+- `fluent_get_shared_profile`
+- `fluent_list_items`
+- `fluent_get_item`
+- `fluent_list_evidence`
+- `fluent_get_media_bundle`
+- `fluent_update_shared_profile_patch`
+- `fluent_save_recipe`
+- `fluent_update_recipe_patch`
+- `fluent_record_recipe_feedback`
+- `fluent_save_meal_plan`
+- `fluent_apply_grocery_list_change`
+- `fluent_apply_grocery_shopping_result`
+- `fluent_get_purchase_context`
+- `fluent_set_budget_envelope`
+- `fluent_log_budget_spend`
+- `fluent_render_surface`
+- `fluent_render_budgets_surface`
+- `fluent_render_style_closet_surface`
+- `fluent_update_style_item_patch`
+- `fluent_create_style_item`
+- `fluent_refresh_style_item_profile`
+- `fluent_set_style_item_image`
+- `fluent_upsert_item`
+- `fluent_archive_item`
+- `fluent_record_event`
+- `fluent_render_surface`
 - `fluent_update_profile`
 - `fluent_list_domains`
 - `fluent_enable_domain`

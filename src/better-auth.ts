@@ -15,9 +15,10 @@ import {
   FLUENT_HEALTH_WRITE_SCOPE,
   FLUENT_MEALS_READ_SCOPE,
   FLUENT_MEALS_WRITE_SCOPE,
+  FLUENT_PUBLIC_HOSTED_OAUTH_SCOPES,
+  FLUENT_PUBLIC_HOSTED_SCOPES,
   FLUENT_STYLE_READ_SCOPE,
   FLUENT_STYLE_WRITE_SCOPE,
-  FLUENT_SUPPORTED_SCOPES,
 } from './auth';
 import {
   applyOperatorAccountDeletionAction,
@@ -58,7 +59,10 @@ import { hasHostedEmailDelivery, sendHostedMagicLinkEmail } from './hosted-email
 import { resolveHostedCloudAccess, resolveHostedCloudClientDecision } from './hosted-access-state';
 import { escapeHeaderQuotedString } from './http-header';
 import { createFluentMcpServer } from './mcp';
-import { CHATGPT_MCP_PATHS, isChatGptMcpPath, resolveMcpRuntimeProfileForRequest } from './chatgpt-profile-routing';
+import {
+  isProfiledMcpPath,
+  resolveMcpRuntimeProfileForRequest,
+} from './chatgpt-profile-routing';
 import { wrapCloudflareDatabase } from './storage';
 import { ensureHostedUserProvisioned } from './hosted-identity';
 import {
@@ -90,6 +94,17 @@ type BetterAuthCompatibilityRoute =
   | '/.well-known/openid-configuration'
   | '/.well-known/oauth-protected-resource';
 
+const CHATGPT_AUTH_CALLBACK_URIS = [
+  'https://chatgpt.com/connector/oauth/callback',
+  'https://chatgpt.com/connector/oauth/callback-id',
+  'https://platform.openai.com/apps-manage/oauth',
+] as const;
+
+const CLAUDE_AUTH_CALLBACK_URIS = [
+  'https://claude.ai/api/mcp/auth_callback',
+  'https://claude.com/api/mcp/auth_callback',
+] as const;
+
 export async function maybeHandleBetterAuthRequest(
   request: Request,
   env: CloudRuntimeEnv,
@@ -107,6 +122,14 @@ export async function maybeHandleBetterAuthRequest(
 
   if (request.method === 'POST' && url.pathname.startsWith('/ops/account-deletion/requests/')) {
     return handleAccountDeletionOpsRequest(request, env);
+  }
+
+  if (url.pathname === '/api/auth/.well-known/openid-configuration') {
+    return handleBetterAuthWellKnownMetadata(request, env, 'openid_configuration');
+  }
+
+  if (url.pathname === '/api/auth/.well-known/oauth-authorization-server') {
+    return handleBetterAuthWellKnownMetadata(request, env, 'authorization_server');
   }
 
   if (url.pathname === '/api/auth' || url.pathname.startsWith('/api/auth/')) {
@@ -171,13 +194,13 @@ export async function maybeHandleBetterAuthCompatibilityRequest(
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const compatibilityRoute = normalizeCompatibilityRoute(url.pathname);
-  if (url.pathname === '/mcp' || isChatGptMcpPath(url.pathname) || compatibilityRoute) {
+  if (url.pathname === '/mcp' || isProfiledMcpPath(url.pathname) || compatibilityRoute) {
     if (!hasBetterAuthConfig(env)) {
       return betterAuthConfigErrorResponse(new Error('Better Auth is not configured.'));
     }
   }
 
-  if (url.pathname === '/mcp' || isChatGptMcpPath(url.pathname)) {
+  if (url.pathname === '/mcp' || isProfiledMcpPath(url.pathname)) {
     return handleBetterAuthMcpRequest(request, env, ctx);
   }
 
@@ -187,9 +210,10 @@ export async function maybeHandleBetterAuthCompatibilityRequest(
 
   switch (compatibilityRoute) {
     case '/authorize':
+      await reconcileKnownBetterAuthRedirectUrisForAuthorizeRequest(request, env);
       return proxyBetterAuthRequest(request, env, '/api/auth/oauth2/authorize');
     case '/token':
-      return proxyBetterAuthRequest(request, env, '/api/auth/oauth2/token');
+      return proxyBetterAuthRequest(request, env, '/api/auth/oauth2/token', { defaultResource: true });
     case '/register':
       return proxyBetterAuthRequest(request, env, '/api/auth/oauth2/register');
     case '/.well-known/oauth-authorization-server':
@@ -350,6 +374,7 @@ async function handleConsentPage(request: Request, env: CloudRuntimeEnv): Promis
       provisioningError: provisioning.error,
       requestedScopes: consentInfo.requestedScopes,
       session,
+      switchAccountUrl: buildAccountSwitchSignInPath(request.url),
     }),
   );
 }
@@ -736,24 +761,12 @@ export function createBetterAuthConfig(request: Request, env: CloudRuntimeEnv) {
       consentPage: '/consent',
       customAccessTokenClaims: async ({ user }) => buildHostedAccessTokenClaims(env, user),
       loginPage: '/sign-in',
-      scopes: [
-        'email',
-        FLUENT_MEALS_READ_SCOPE,
-        FLUENT_MEALS_WRITE_SCOPE,
-        FLUENT_HEALTH_READ_SCOPE,
-        FLUENT_HEALTH_WRITE_SCOPE,
-        FLUENT_STYLE_READ_SCOPE,
-        FLUENT_STYLE_WRITE_SCOPE,
-        'offline_access',
-        'openid',
-        'profile',
-      ],
+      scopes: [...FLUENT_PUBLIC_HOSTED_OAUTH_SCOPES],
       validAudiences: [
         baseURL,
         `${baseURL}/`,
         `${baseURL}/mcp`,
         `${baseURL}/mcp/`,
-        ...CHATGPT_MCP_PATHS.flatMap((pathname) => [`${baseURL}${pathname}`, `${baseURL}${pathname}/`]),
       ],
     }),
     ...(env.BETTER_AUTH_API_KEY?.trim()
@@ -871,7 +884,7 @@ async function getConsentClientSummary(
         .split(' ')
         .map((scope) => scope.trim())
         .filter(Boolean)
-    : [...FLUENT_SUPPORTED_SCOPES];
+    : [...FLUENT_PUBLIC_HOSTED_OAUTH_SCOPES];
 
   if (!clientId) {
     return {
@@ -926,12 +939,12 @@ async function handleBetterAuthMcpRequest(
       request,
       'Missing or invalid access token',
       new URL(request.url).origin,
-      FLUENT_SUPPORTED_SCOPES,
+      FLUENT_PUBLIC_HOSTED_SCOPES,
     );
   }
 
   const url = new URL(request.url);
-  const route = isChatGptMcpPath(url.pathname) ? url.pathname.replace(/\/$/, '') : '/mcp';
+  const route = isProfiledMcpPath(url.pathname) ? url.pathname.replace(/\/$/, '') : '/mcp';
   const profile = resolveMcpRuntimeProfileForRequest(url.pathname, authResult);
   const server = createFluentMcpServer(coreBindingsFromCloudEnv(env), url.origin, {
     profile,
@@ -1026,7 +1039,7 @@ export async function authenticateBetterAuthBearerRequest(
       request,
       message,
       resourceOrigin,
-      FLUENT_SUPPORTED_SCOPES,
+      FLUENT_PUBLIC_HOSTED_SCOPES,
     );
   }
 }
@@ -1331,7 +1344,11 @@ async function verifyHostedAccessToken(
   resourceOrigin: string,
 ): Promise<JWTPayload> {
   const issuer = `${resolveBetterAuthBaseUrl(request, env)}/api/auth`;
-  const audience = [resourceOrigin, `${resourceOrigin}/mcp`, ...CHATGPT_MCP_PATHS.map((pathname) => `${resourceOrigin}${pathname}`)];
+  const audience = [
+    resourceOrigin,
+    `${resourceOrigin}/mcp`,
+    `${resourceOrigin}/mcp/`,
+  ];
 
   try {
     const { payload } = await jwtVerify(
@@ -1485,6 +1502,11 @@ export function deriveMagicLinkCallbackUrl(requestUrl: string): string {
   return query ? `${parsed.pathname}?${query}` : parsed.pathname;
 }
 
+export function buildAccountSwitchSignInPath(requestUrl: string): string {
+  const url = new URL(requestUrl);
+  return `/sign-in${url.search}`;
+}
+
 function buildSignInRedirectUrl(requestUrl: string): string {
   const url = new URL(requestUrl);
   const next = `${url.pathname}${url.search}`;
@@ -1625,6 +1647,123 @@ function parseOAuthClientMetadata(value: string | null | undefined): OAuthClient
   }
 }
 
+type BetterAuthOAuthClientRedirectRecord = {
+  clientId?: string | null;
+  clientName?: string | null;
+  disabled?: number | null;
+  name?: string | null;
+  redirectUris?: string | null;
+};
+
+export async function reconcileKnownBetterAuthRedirectUrisForAuthorizeRequest(
+  request: Request,
+  env: Pick<CloudRuntimeEnv, 'DB'>,
+): Promise<boolean> {
+  if (request.method.toUpperCase() !== 'GET') {
+    return false;
+  }
+
+  const url = new URL(request.url);
+  const clientId = url.searchParams.get('client_id')?.trim();
+  const requestedRedirectUri = url.searchParams.get('redirect_uri')?.trim();
+  if (!clientId || !requestedRedirectUri) {
+    return false;
+  }
+
+  const db = wrapCloudflareDatabase(env.DB);
+  const client = await db
+    .prepare(
+      `SELECT clientId, name, name AS clientName, disabled, redirectUris
+       FROM oauthClient
+       WHERE clientId = ?
+       LIMIT 1`,
+    )
+    .bind(clientId)
+    .first<BetterAuthOAuthClientRedirectRecord>();
+  if (!client?.clientId || Number(client.disabled ?? 0) !== 0) {
+    return false;
+  }
+
+  const existingRedirectUris = parseJsonStringArray(client.redirectUris);
+  const reconciled = reconcileKnownBetterAuthClientRedirectUris({
+    clientName: client.clientName ?? client.name ?? null,
+    redirectUris: existingRedirectUris,
+    requestedRedirectUri,
+  });
+  if (!reconciled) {
+    return false;
+  }
+
+  await db
+    .prepare('UPDATE oauthClient SET redirectUris = ?, updatedAt = ? WHERE clientId = ?')
+    .bind(JSON.stringify(reconciled), new Date().toISOString(), client.clientId)
+    .run();
+
+  console.warn(
+    '[Fluent OAuth] reconciled known hosted callback redirect URIs ' +
+      JSON.stringify({
+        client_family: inferKnownHostedCallbackFamily(client.clientName ?? client.name ?? '', requestedRedirectUri),
+        client_id_present: true,
+        requested_redirect_uri: summarizeUrl(requestedRedirectUri),
+      }),
+  );
+
+  return true;
+}
+
+export function reconcileKnownBetterAuthClientRedirectUris(input: {
+  clientName?: string | null;
+  redirectUris: string[];
+  requestedRedirectUri: string;
+}): string[] | null {
+  const familyUris = resolveKnownHostedCallbackUris(input.clientName ?? '', [
+    ...input.redirectUris,
+    input.requestedRedirectUri,
+  ]);
+  if (!familyUris) {
+    return null;
+  }
+
+  if (!familyUris.includes(input.requestedRedirectUri)) {
+    return null;
+  }
+
+  const hasKnownCallback = input.redirectUris.some((uri) => familyUris.includes(uri));
+  if (!hasKnownCallback || input.redirectUris.includes(input.requestedRedirectUri)) {
+    return null;
+  }
+
+  return Array.from(new Set([...input.redirectUris, ...familyUris]));
+}
+
+function resolveKnownHostedCallbackUris(clientName: string, uris: string[]): readonly string[] | null {
+  const normalizedName = clientName.trim().toLowerCase();
+  if (
+    normalizedName.includes('chatgpt') ||
+    uris.some((uri) => CHATGPT_AUTH_CALLBACK_URIS.includes(uri as (typeof CHATGPT_AUTH_CALLBACK_URIS)[number]))
+  ) {
+    return CHATGPT_AUTH_CALLBACK_URIS;
+  }
+  if (
+    normalizedName === 'claude' ||
+    normalizedName.includes('claude') ||
+    uris.some((uri) => CLAUDE_AUTH_CALLBACK_URIS.includes(uri as (typeof CLAUDE_AUTH_CALLBACK_URIS)[number]))
+  ) {
+    return CLAUDE_AUTH_CALLBACK_URIS;
+  }
+  return null;
+}
+
+function inferKnownHostedCallbackFamily(clientName: string, requestedRedirectUri: string): string {
+  if (resolveKnownHostedCallbackUris(clientName, [requestedRedirectUri]) === CHATGPT_AUTH_CALLBACK_URIS) {
+    return 'chatgpt';
+  }
+  if (resolveKnownHostedCallbackUris(clientName, [requestedRedirectUri]) === CLAUDE_AUTH_CALLBACK_URIS) {
+    return 'claude';
+  }
+  return 'unknown';
+}
+
 function stringArrayValue(value: unknown): string[] | null {
   if (!Array.isArray(value)) {
     return null;
@@ -1702,6 +1841,8 @@ function renderSignInPage(input: {
   <p class="notice-title">You're signed in to Fluent.</p>
   <p>Return to the app or browser tab that opened this page to continue the connection.</p>
   <p class="meta">Signed in as <strong>${escapeHtml(input.session?.user?.email ?? input.session?.user?.id ?? 'your email')}</strong>.</p>
+  <button id="sign-out-current-account" type="button" class="btn-secondary">Use a different account</button>
+  <div id="signed-in-status" class="meta status-live" aria-live="polite"></div>
 </div>`
     : '';
 
@@ -1766,8 +1907,31 @@ const passwordForm = document.getElementById('password-form');
 const status = document.getElementById('form-status');
 const submitButton = document.getElementById('magic-link-submit');
 const passwordSubmitButton = document.getElementById('password-submit');
+const signOutCurrentAccountButton = document.getElementById('sign-out-current-account');
+const signedInStatus = document.getElementById('signed-in-status');
 const callbackUrl = ${JSON.stringify(input.callbackUrl)};
 const passwordRedirectUrl = ${JSON.stringify(input.passwordRedirectUrl)};
+async function signOutCurrentAccount(redirectUrl) {
+  const targetStatus = signedInStatus || status;
+  if (signOutCurrentAccountButton) signOutCurrentAccountButton.disabled = true;
+  if (targetStatus) targetStatus.textContent = 'Signing out...';
+  try {
+    const response = await fetch('${input.origin}/api/auth/sign-out', {
+      method: 'POST',
+      headers: { 'accept': 'application/json', 'content-type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.message || data?.error || 'Unable to sign out.');
+    if (targetStatus) targetStatus.textContent = 'Signed out. Reloading...';
+    window.location.assign(redirectUrl);
+  } catch (error) {
+    if (targetStatus) targetStatus.textContent = error instanceof Error ? error.message : String(error);
+    if (signOutCurrentAccountButton) signOutCurrentAccountButton.disabled = false;
+  }
+}
+signOutCurrentAccountButton?.addEventListener('click', () => signOutCurrentAccount(window.location.href));
 passwordForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (passwordSubmitButton) passwordSubmitButton.disabled = true;
@@ -1828,6 +1992,7 @@ function renderConsentPage(input: {
   provisioningError: string | null;
   requestedScopes: string[];
   session: BetterAuthSessionPayload;
+  switchAccountUrl: string;
 }): string {
   const scopeItems = input.requestedScopes
     .map((scope) => {
@@ -1867,10 +2032,12 @@ function renderConsentPage(input: {
 <div class="actions">
   <button id="approve" class="btn-primary">Approve <span class="btn-arrow">→</span></button>
   <button id="deny" class="btn-secondary">Deny</button>
+  <button id="switch-account" class="btn-secondary">Use a different account</button>
 </div>
 <div id="consent-status" class="meta" aria-live="polite"></div>
 <script>
 const status = document.getElementById('consent-status');
+const switchAccountButton = document.getElementById('switch-account');
 function consentErrorMessage(data) {
   const raw = String(data?.error_description || data?.message || data?.error || '').trim();
   if (!raw) return 'We could not finish the approval. Return to the app and try connecting again.';
@@ -1907,6 +2074,27 @@ async function submitConsent(accept) {
 }
 document.getElementById('approve')?.addEventListener('click', () => submitConsent(true));
 document.getElementById('deny')?.addEventListener('click', () => submitConsent(false));
+switchAccountButton?.addEventListener('click', async () => {
+  status.classList.remove('status-error');
+  status.textContent = 'Signing out...';
+  switchAccountButton.disabled = true;
+  try {
+    const response = await fetch('/api/auth/sign-out', {
+      method: 'POST',
+      headers: { 'accept': 'application/json', 'content-type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.message || data?.error || 'Unable to sign out.');
+    status.textContent = 'Signed out. Choose the Fluent account to connect.';
+    window.location.assign(${JSON.stringify(input.switchAccountUrl)});
+  } catch (error) {
+    status.classList.add('status-error');
+    status.textContent = error instanceof Error ? error.message : String(error);
+    switchAccountButton.disabled = false;
+  }
+});
 </script>`,
     title: 'Authorize | Fluent',
   });
@@ -2362,9 +2550,18 @@ function normalizeCompatibilityRoute(pathname: string): BetterAuthCompatibilityR
     case '/register':
     case '/token':
     case '/.well-known/oauth-authorization-server':
+      return pathname;
+    case '/.well-known/oauth-authorization-server/api/auth':
+      return '/.well-known/oauth-authorization-server';
     case '/.well-known/openid-configuration':
+      return pathname;
+    case '/.well-known/openid-configuration/api/auth':
+      return '/.well-known/openid-configuration';
     case '/.well-known/oauth-protected-resource':
       return pathname;
+    case '/.well-known/oauth-protected-resource/mcp':
+    case '/.well-known/oauth-protected-resource/mcp/':
+      return '/.well-known/oauth-protected-resource';
     default:
       return null;
   }
@@ -2374,11 +2571,218 @@ async function proxyBetterAuthRequest(
   request: Request,
   env: CloudRuntimeEnv,
   pathname: string,
+  options: { defaultResource?: boolean } = {},
 ): Promise<Response> {
+  const proxiedRequest = await buildBetterAuthProxyRequest(request, env, pathname, options);
+  const tokenFailureRequestShape =
+    pathname === '/api/auth/oauth2/token'
+      ? await summarizeOAuthTokenRequestBody(proxiedRequest).catch((error) => ({
+          parseError: error instanceof Error ? error.message : String(error),
+        }))
+      : null;
+  const response = await handleBetterAuthApiRequest(proxiedRequest, env);
+  if (pathname === '/api/auth/oauth2/token' && response.status >= 400) {
+    await logSanitizedTokenExchangeFailure(tokenFailureRequestShape ?? {}, response);
+  }
+  return normalizeOAuthCompatibilityRedirect(request, response);
+}
+
+export async function normalizeOAuthCompatibilityRedirect(request: Request, response: Response): Promise<Response> {
+  const locationRedirect = absolutizeInternalRedirectLocation(request, response);
+  if (locationRedirect !== response || response.status < 200 || response.status >= 300) {
+    return locationRedirect;
+  }
+
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.toLowerCase().includes('application/json')) {
+    return response;
+  }
+
+  const body = await response.clone().json().catch(() => null);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return response;
+  }
+
+  const redirect = body as { redirect?: unknown; url?: unknown };
+  if (redirect.redirect !== true || typeof redirect.url !== 'string' || !redirect.url.trim()) {
+    return response;
+  }
+
+  const requestOrigin = new URL(request.url).origin;
+  let redirectUrl: URL;
+  try {
+    redirectUrl = new URL(redirect.url, requestOrigin);
+  } catch {
+    return response;
+  }
+
+  // Open-redirect guard (defense-in-depth): only follow same-origin redirects, mirroring
+  // absolutizeInternalRedirectLocation (which accepts only relative internal paths). A cross-origin
+  // url here — e.g. an attacker-supplied callbackURL echoed into a {redirect,url} body — must not be
+  // turned into a 302. The legitimate cross-origin OAuth client redirect_uri travels the Location-header
+  // branch above, not this JSON branch, so this does not affect the OAuth authorization redirect.
+  if (redirectUrl.origin !== requestOrigin) {
+    return response;
+  }
+
+  return Response.redirect(redirectUrl.toString(), 302);
+}
+
+export function absolutizeInternalRedirectLocation(request: Request, response: Response): Response {
+  if (response.status < 300 || response.status >= 400) {
+    return response;
+  }
+
+  const location = response.headers.get('location')?.trim();
+  if (!location?.startsWith('/') || location.startsWith('//')) {
+    return response;
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set('location', new URL(location, new URL(request.url).origin).toString());
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
+async function logSanitizedTokenExchangeFailure(
+  requestShape: Record<string, unknown>,
+  response: Response,
+): Promise<void> {
+  let responseShape: Record<string, unknown> = {};
+  try {
+    const text = await response.clone().text();
+    const parsed = text ? JSON.parse(text) as Record<string, unknown> : {};
+    responseShape = {
+      error: typeof parsed.error === 'string' ? parsed.error : undefined,
+      error_description:
+        typeof parsed.error_description === 'string'
+          ? sanitizeOAuthErrorDescription(parsed.error_description)
+          : undefined,
+    };
+  } catch {
+    responseShape = { error: 'unparseable_error_response' };
+  }
+
+  console.warn(
+    '[Fluent OAuth] token exchange failed ' +
+      JSON.stringify({
+        request: requestShape,
+        response: responseShape,
+        status: response.status,
+      }),
+  );
+}
+
+async function summarizeOAuthTokenRequestBody(request: Request): Promise<Record<string, unknown>> {
+  const contentType = request.headers.get('content-type') ?? '';
+  let body: Record<string, unknown> = {};
+  if (contentType.toLowerCase().includes('application/json')) {
+    const parsed = await request.clone().json().catch(() => null);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      body = parsed as Record<string, unknown>;
+    }
+  } else if (contentType.toLowerCase().includes('application/x-www-form-urlencoded')) {
+    body = Object.fromEntries(new URLSearchParams(await request.clone().text()));
+  }
+
+  const redirectUri = typeof body.redirect_uri === 'string' ? summarizeUrl(body.redirect_uri) : null;
+  const resource = typeof body.resource === 'string' ? summarizeUrl(body.resource) : null;
+  return {
+    grant_type: typeof body.grant_type === 'string' ? body.grant_type : undefined,
+    has_code: typeof body.code === 'string' && body.code.length > 0,
+    has_code_verifier: typeof body.code_verifier === 'string' && body.code_verifier.length > 0,
+    has_client_id: typeof body.client_id === 'string' && body.client_id.length > 0,
+    has_redirect_uri: typeof body.redirect_uri === 'string' && body.redirect_uri.length > 0,
+    redirect_uri: redirectUri,
+    has_resource: typeof body.resource === 'string' && body.resource.length > 0,
+    resource,
+  };
+}
+
+function summarizeUrl(value: string): Record<string, string> {
+  try {
+    const url = new URL(value);
+    return {
+      host: url.host,
+      pathname: url.pathname,
+      protocol: url.protocol,
+    };
+  } catch {
+    return { host: 'invalid-url', pathname: '', protocol: '' };
+  }
+}
+
+function sanitizeOAuthErrorDescription(value: string): string {
+  return value.replace(/[A-Za-z0-9_-]{20,}/g, '[redacted]').slice(0, 240);
+}
+
+export async function buildBetterAuthProxyRequest(
+  request: Request,
+  env: CloudRuntimeEnv,
+  pathname: string,
+  options: { defaultResource?: boolean } = {},
+): Promise<Request> {
   const targetUrl = new URL(request.url);
   targetUrl.pathname = pathname;
-  const proxiedRequest = new Request(targetUrl.toString(), request);
-  return handleBetterAuthApiRequest(proxiedRequest, env);
+  if (!options.defaultResource || request.method.toUpperCase() !== 'POST') {
+    return new Request(targetUrl.toString(), request);
+  }
+
+  const baseUrl = resolveBetterAuthBaseUrl(request, env);
+  const defaultResource = `${baseUrl}/mcp`;
+  const contentType = request.headers.get('content-type') ?? '';
+  const headers = new Headers(request.headers);
+  headers.delete('content-length');
+
+  if (contentType.toLowerCase().includes('application/json')) {
+    const body = await request.clone().json().catch(() => null);
+    if (body && typeof body === 'object' && !Array.isArray(body)) {
+      const record = body as Record<string, unknown>;
+      record.resource = normalizeOAuthTokenResource(record.resource, baseUrl, defaultResource);
+      headers.set('content-type', 'application/json');
+      return new Request(targetUrl.toString(), {
+        body: JSON.stringify(record),
+        headers,
+        method: request.method,
+        redirect: request.redirect,
+      });
+    }
+  }
+
+  if (contentType.toLowerCase().includes('application/x-www-form-urlencoded')) {
+    const form = new URLSearchParams(await request.clone().text());
+    form.set('resource', normalizeOAuthTokenResource(form.get('resource'), baseUrl, defaultResource));
+    headers.set('content-type', 'application/x-www-form-urlencoded');
+    return new Request(targetUrl.toString(), {
+      body: form,
+      headers,
+      method: request.method,
+      redirect: request.redirect,
+    });
+  }
+
+  return new Request(targetUrl.toString(), request);
+}
+
+function normalizeOAuthTokenResource(value: unknown, baseUrl: string, defaultResource: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    return defaultResource;
+  }
+
+  try {
+    const parsed = new URL(value);
+    const base = new URL(baseUrl);
+    if (parsed.origin === base.origin) {
+      return defaultResource;
+    }
+  } catch {
+    return defaultResource;
+  }
+
+  return value;
 }
 
 function buildProtectedResourceMetadata(request: Request, env: CloudRuntimeEnv) {
@@ -2390,7 +2794,7 @@ function buildProtectedResourceMetadata(request: Request, env: CloudRuntimeEnv) 
     jwks_uri: `${baseUrl}/api/auth/jwks`,
     resource,
     resource_documentation: `${baseUrl}/sign-in`,
-    scopes_supported: [...FLUENT_SUPPORTED_SCOPES],
+    scopes_supported: [...FLUENT_PUBLIC_HOSTED_SCOPES],
   };
 }
 
@@ -2422,8 +2826,8 @@ function protectedResourceForMetadataRequest(request: Request): string {
   }
   try {
     const parsed = new URL(requestedResource);
-    if (parsed.origin === url.origin && (parsed.pathname === '/mcp' || isChatGptMcpPath(parsed.pathname))) {
-      return parsed.toString().replace(/\/$/, '');
+    if (parsed.origin === url.origin && (parsed.pathname === '/mcp' || isProfiledMcpPath(parsed.pathname))) {
+      return defaultResource;
     }
   } catch {
     return defaultResource;
@@ -2522,11 +2926,7 @@ function createBearerAuthErrorResponse(
 }
 
 function protectedResourceMetadataUrlForMcpRequest(request: Request, resourceOrigin: string): string {
-  const url = new URL(request.url);
   const metadataUrl = new URL('/.well-known/oauth-protected-resource', resourceOrigin);
-  if (isChatGptMcpPath(url.pathname)) {
-    metadataUrl.searchParams.set('resource', `${resourceOrigin}${url.pathname.replace(/\/$/, '')}`);
-  }
   return metadataUrl.toString();
 }
 
@@ -2614,8 +3014,8 @@ function createFluentCloudEarlyAccessBearerResponse(
     `error="${details.oauthError}"`,
     `error_description="${escapeHeaderQuotedString(details.message)}"`,
   ];
-  if (FLUENT_SUPPORTED_SCOPES.length) {
-    headerParts.push(`scope="${escapeHeaderQuotedString(FLUENT_SUPPORTED_SCOPES.join(' '))}"`);
+  if (FLUENT_PUBLIC_HOSTED_SCOPES.length) {
+    headerParts.push(`scope="${escapeHeaderQuotedString(FLUENT_PUBLIC_HOSTED_SCOPES.join(' '))}"`);
   }
   const payload = createFluentCloudAccessFailurePayload(code, context);
   return new Response(

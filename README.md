@@ -15,7 +15,7 @@ Use this repo when you want Fluent running on infrastructure you control. If you
 - current docs bucket: [docs/oss](https://github.com/shaner-git/fluent-oss/tree/main/docs/oss)
 - release history: [Fluent open-source runtime releases](https://github.com/shaner-git/fluent-oss/releases)
 - supported direct runtime: Node.js `22.x`
-- supported minimum contract version: `2026-05-17.fluent-core-v1.84`
+- supported minimum contract version: `2026-06-01.fluent-core-v1.85`
 
 ## Who This Is For
 
@@ -51,7 +51,7 @@ If you want the easiest path, managed early access is the simpler choice. If you
 
 ## Prerequisites
 
-- Node.js 22.x if you want to run Fluent open-source runtime directly
+- Node.js 22.x if you want to run Fluent open-source runtime directly. Check with `node --version`; with `nvm`, run `nvm install 22 && nvm use 22`.
 - Docker Desktop or Docker Engine if you prefer the container path
 - an MCP client such as Codex, Claude Desktop, or OpenClaw
 
@@ -71,15 +71,37 @@ npm install
 
 ### 2. Create an OSS token
 
+Optional but recommended for evaluation: isolate Fluent state from your real home directory before bootstrapping a token.
+
+```bash
+export FLUENT_OSS_ROOT="$(pwd)/tmp/fluent-oss-demo-root"
+```
+
+PowerShell:
+
+```powershell
+$env:FLUENT_OSS_ROOT = Join-Path (Get-Location) 'tmp\fluent-oss-demo-root'
+```
+
 ```bash
 npm run oss:token:bootstrap
 ```
 
 Expected result:
-- Fluent creates local auth state under `~/.fluent/`
+- Fluent creates local auth state under `$FLUENT_OSS_ROOT` when set, otherwise under `~/.fluent/`
 - `npm run oss:token:print` prints the token you will use with your MCP client
 
-### 3. Start the server
+### 3. Seed demo data
+
+```bash
+npm run oss:seed:demo
+```
+
+Expected result:
+- Fluent writes a demo closet, budget envelope with spend, recipes, a current meal plan, and inventory into the same local root used by the server
+- The seed is safe to rerun: stable records update, and budget spend is only topped up to the fixture target
+
+### 4. Start the server
 
 ```bash
 npm run oss:start -- --host 127.0.0.1 --port 8788
@@ -94,7 +116,14 @@ Optional health check:
 curl http://127.0.0.1:8788/health
 ```
 
-### 4. Generate MCP client config
+Authenticated `/mcp` proof with the seeded closet:
+
+```bash
+export TOKEN="$(npm run -s oss:token:print | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).token))')"
+node --input-type=module -e "import { Client } from '@modelcontextprotocol/sdk/client/index.js'; import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'; const transport = new StreamableHTTPClientTransport(new URL('http://127.0.0.1:8788/mcp'), { requestInit: { headers: { Authorization: 'Bearer ' + process.env.TOKEN } } }); const client = new Client({ name: 'fluent-oss-proof', version: '1.0.0' }, { capabilities: {} }); await client.connect(transport); const result = await client.callTool({ name: 'fluent_list_items', arguments: { domain: 'style', item_type: 'style_item', limit: 5 } }); console.log(JSON.stringify(result.structuredContent ?? result.content, null, 2)); await transport.close();"
+```
+
+### 5. Generate MCP client config
 
 For Codex:
 
@@ -118,11 +147,13 @@ For OpenClaw, the scaffold output is the native `mcp.servers.fluent` JSON block 
 
 The scaffold command automatically uses your local OSS token unless you override it with `--token` or `--root`.
 
-### 5. Verify the local setup
+### 6. Verify the local setup
 
 ```bash
 npm run verify:oss-parity -- --base-url http://127.0.0.1:8788
 ```
+
+For isolated evaluation, keep `FLUENT_OSS_ROOT` exported in the same shell, or pass `--root ./tmp/fluent-oss-demo-root`. The verifier also honors `FLUENT_OSS_BASE_URL` if npm flag forwarding is unavailable in your shell.
 
 For the broader local check suite:
 

@@ -28,6 +28,7 @@ async function main() {
     await supportsMixedCreateAndUpdateBatchWrites();
     await persistsConfirmedOrderSyncFromBatchMetadata();
     await hardDeletesInventoryItems();
+    await softArchivesInventoryItemReversibly();
     await collapsesDuplicateBatchRowsWithMatchingUnits();
     await rejectsAmbiguousDuplicateUnitsWithoutWriting();
     await rejectsInvalidRowsWithoutWriting();
@@ -63,6 +64,44 @@ async function hardDeletesInventoryItems() {
     assert.equal(deleted?.normalizedName, 'jarlic');
     const inventory = await service.getInventory();
     assert.equal(inventory.some((item) => item.normalizedName === 'jarlic'), false);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function softArchivesInventoryItemReversibly() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    await service.updateInventory({
+      name: 'jarlic',
+      quantity: 2,
+      unit: 'count',
+      status: 'present',
+      provenance,
+    });
+
+    const archived = await service.archiveInventoryItem({ name: 'jarlic', provenance });
+
+    // Soft-archive returns the item flipped to 'removed' with its other fields intact.
+    assert.equal(archived?.status, 'removed');
+    assert.equal(archived?.quantity, 2);
+    assert.equal(archived?.unit, 'count');
+
+    // It leaves the ACTIVE inventory list (getInventory filters status != 'removed')...
+    const active = await service.getInventory();
+    assert.equal(active.some((item) => item.normalizedName === 'jarlic'), false);
+
+    // ...but the row PERSISTS (this is NOT a hard delete) with status 'removed' and its quantity/unit
+    // preserved, so an un-archive (status back to 'present') is lossless. This is the difference from
+    // deleteInventoryItem, and it honors fluent_archive_item's reversible / destructiveHint:false contract.
+    const row = runtime.sqliteDb.sqlite
+      .prepare('SELECT status, quantity, unit FROM meal_inventory_items WHERE normalized_name = ?')
+      .get('jarlic') as { status?: string; quantity?: number; unit?: string } | undefined;
+    assert.equal(row?.status, 'removed');
+    assert.equal(row?.quantity, 2);
+    assert.equal(row?.unit, 'count');
   } finally {
     runtime.sqliteDb.close();
   }

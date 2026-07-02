@@ -201,7 +201,7 @@ async function exchangeCode(input) {
     code: input.code,
     redirect_uri: input.redirectUri,
     code_verifier: input.codeVerifier,
-    resource: input.baseUrl,
+    resource: canonicalMcpResource(input.baseUrl),
   });
   return requestToken(input.baseUrl, body);
 }
@@ -211,9 +211,13 @@ async function exchangeRefresh(input) {
     grant_type: 'refresh_token',
     client_id: input.clientId,
     refresh_token: input.refreshToken,
-    resource: input.baseUrl,
+    resource: canonicalMcpResource(input.baseUrl),
   });
   return requestToken(input.baseUrl, body);
+}
+
+function canonicalMcpResource(baseUrl) {
+  return `${String(baseUrl).replace(/\/+$/, '')}/mcp`;
 }
 
 async function requestToken(baseUrl, body) {

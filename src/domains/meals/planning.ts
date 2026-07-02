@@ -16,6 +16,14 @@ import {
   upsertGroceryPlanItem,
 } from './helpers';
 import {
+  DAIRY_FREE_QUALIFIERS,
+  ingredientMatchesAnyBlocker,
+  PESCATARIAN_BLOCKERS,
+  PLANT_BASED_QUALIFIERS,
+  VEGAN_BLOCKERS,
+  VEGETARIAN_BLOCKERS,
+} from './dietary-patterns';
+import {
   deriveMealsPlanningPreferenceProfile,
   isBudgetSensitive,
   isWeeknightQuickPreference,
@@ -1299,41 +1307,28 @@ function recipeSatisfiesDietaryConstraint(
   if (!normalized) return true;
 
   if (normalized.includes('vegetarian')) {
-    return !hasAnyDietaryBlocker(normalizedIngredientNames, VEGETARIAN_BLOCKERS, PLANT_BASED_QUALIFIERS);
+    return !ingredientMatchesAnyBlocker(normalizedIngredientNames, VEGETARIAN_BLOCKERS, PLANT_BASED_QUALIFIERS);
   }
   if (normalized.includes('vegan')) {
-    return !hasAnyDietaryBlocker(normalizedIngredientNames, VEGAN_BLOCKERS, [...PLANT_BASED_QUALIFIERS, ...DAIRY_FREE_QUALIFIERS]);
+    return !ingredientMatchesAnyBlocker(normalizedIngredientNames, VEGAN_BLOCKERS, [...PLANT_BASED_QUALIFIERS, ...DAIRY_FREE_QUALIFIERS]);
   }
   if (normalized.includes('pescatarian')) {
-    return !hasAnyDietaryBlocker(normalizedIngredientNames, PESCATARIAN_BLOCKERS, PLANT_BASED_QUALIFIERS);
+    return !ingredientMatchesAnyBlocker(normalizedIngredientNames, PESCATARIAN_BLOCKERS, PLANT_BASED_QUALIFIERS);
   }
   if (normalized.includes('gluten')) {
-    return !hasAnyDietaryBlocker(normalizedIngredientNames, GLUTEN_BLOCKERS, GLUTEN_FREE_QUALIFIERS);
+    return !ingredientMatchesAnyBlocker(normalizedIngredientNames, GLUTEN_BLOCKERS, GLUTEN_FREE_QUALIFIERS);
   }
   if (normalized.includes('dairy')) {
-    return !hasAnyDietaryBlocker(normalizedIngredientNames, DAIRY_BLOCKERS, DAIRY_FREE_QUALIFIERS);
+    return !ingredientMatchesAnyBlocker(normalizedIngredientNames, DAIRY_BLOCKERS, DAIRY_FREE_QUALIFIERS);
   }
   if (normalized.includes('halal')) {
-    return !hasAnyDietaryBlocker(normalizedIngredientNames, HALAL_BLOCKERS);
+    return !ingredientMatchesAnyBlocker(normalizedIngredientNames, HALAL_BLOCKERS);
   }
   if (normalized.includes('kosher')) {
-    return !hasAnyDietaryBlocker(normalizedIngredientNames, KOSHER_BLOCKERS);
+    return !ingredientMatchesAnyBlocker(normalizedIngredientNames, KOSHER_BLOCKERS);
   }
 
   return true;
-}
-
-function hasAnyDietaryBlocker(ingredients: string[], blockers: string[], allowedQualifiers: string[] = []): boolean {
-  return ingredients.some((ingredient) =>
-    blockers.some((blocker) =>
-      new RegExp(`\\b${escapeRegExp(blocker)}\\b`, 'i').test(ingredient) &&
-      !allowedQualifiers.some((qualifier) => ingredient.includes(qualifier)),
-    ),
-  );
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function isWeekdayDate(date: string): boolean {
@@ -1341,43 +1336,11 @@ function isWeekdayDate(date: string): boolean {
   return day >= 1 && day <= 5;
 }
 
-const MEAT_BLOCKERS = [
-  'bacon',
-  'beef',
-  'chicken',
-  'duck',
-  'ham',
-  'lamb',
-  'pancetta',
-  'pork',
-  'prosciutto',
-  'sausage',
-  'steak',
-  'turkey',
-];
-const SEAFOOD_BLOCKERS = ['anchovy', 'cod', 'crab', 'fish', 'mussels', 'oyster', 'salmon', 'sardine', 'shellfish', 'shrimp', 'tuna'];
-const VEGETARIAN_BLOCKERS = [...MEAT_BLOCKERS, ...SEAFOOD_BLOCKERS];
-const VEGAN_BLOCKERS = [
-  ...VEGETARIAN_BLOCKERS,
-  'butter',
-  'cheese',
-  'cream',
-  'egg',
-  'eggs',
-  'ghee',
-  'honey',
-  'milk',
-  'whey',
-  'yogurt',
-];
-const PESCATARIAN_BLOCKERS = MEAT_BLOCKERS;
 const GLUTEN_BLOCKERS = ['barley', 'bread', 'breadcrumbs', 'couscous', 'farro', 'flour', 'noodles', 'pasta', 'rye', 'tortilla', 'tortillas', 'wheat'];
 const DAIRY_BLOCKERS = ['butter', 'cheese', 'cream', 'ghee', 'milk', 'whey', 'yogurt'];
 const HALAL_BLOCKERS = ['bacon', 'beer', 'ham', 'lard', 'pancetta', 'pork', 'prosciutto', 'rum', 'wine'];
 const KOSHER_BLOCKERS = ['bacon', 'crab', 'ham', 'lard', 'mussels', 'oyster', 'pork', 'shellfish', 'shrimp'];
-const PLANT_BASED_QUALIFIERS = ['meatless', 'plant based', 'plant-based', 'vegan', 'vegetarian'];
 const GLUTEN_FREE_QUALIFIERS = ['gluten free', 'gluten-free'];
-const DAIRY_FREE_QUALIFIERS = ['dairy free', 'dairy-free', 'vegan'];
 
 function buildMealPlanReview(input: {
   entries: Array<Record<string, unknown>>;

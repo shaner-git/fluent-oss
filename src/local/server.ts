@@ -6,15 +6,19 @@ import { runWithFluentAuthProps } from '../auth';
 import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../fluent-identity';
 import { localHealth, localProbe, createLocalRuntime, LOCAL_DEFAULT_HOST, LOCAL_DEFAULT_PORT } from './runtime';
 import { authorizeLocalBearer, defaultLocalScopes, LOCAL_AUTH_MODEL } from './auth';
+import { cliString, parseCliArgs, resolveCliRoot } from './cli';
 import { maybeHandleStyleImageRequest } from '../style-image-handler';
+import { isProfiledMcpPath, resolveMcpRuntimeProfileForRequest } from '../chatgpt-profile-routing';
 
-const args = parseArgs(process.argv.slice(2));
-const host = args.host ?? LOCAL_DEFAULT_HOST;
-const port = Number(args.port ?? LOCAL_DEFAULT_PORT);
+const LOCAL_CANDIDATE_FULL_MCP_PATH = '/mcp/candidate-full';
+
+const args = parseCliArgs(process.argv.slice(2));
+const host = cliString(args, 'host') ?? LOCAL_DEFAULT_HOST;
+const port = Number(cliString(args, 'port') ?? LOCAL_DEFAULT_PORT);
 const origin = `http://${host}:${port}`;
 const runtime = createLocalRuntime({
   origin,
-  rootDir: args.root,
+  rootDir: resolveCliRoot({ args }),
 });
 
 const server = createServer(async (req, res) => {
@@ -40,7 +44,10 @@ const server = createServer(async (req, res) => {
     return writeFetchResponse(res, styleImageResponse);
   }
 
-  if (url.pathname === '/mcp' || url.pathname === '/mcp/chatgpt') {
+  const normalizedPath = url.pathname.replace(/\/$/, '') || '/';
+  const isCandidateFullMcpPath = normalizedPath === LOCAL_CANDIDATE_FULL_MCP_PATH;
+
+  if (url.pathname === '/mcp' || isProfiledMcpPath(url.pathname) || isCandidateFullMcpPath) {
     const tokenState = authorizeLocalBearer(runtime.paths.rootDir, req.headers.authorization);
     if (!tokenState) {
       res.statusCode = 401;
@@ -72,9 +79,13 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const route = url.pathname === '/mcp/chatgpt' ? '/mcp/chatgpt' : '/mcp';
+    const route = isCandidateFullMcpPath
+      ? LOCAL_CANDIDATE_FULL_MCP_PATH
+      : isProfiledMcpPath(url.pathname)
+        ? normalizedPath
+        : '/mcp';
     const mcpServer = createFluentMcpServer(runtime.env, origin, {
-      profile: route === '/mcp/chatgpt' ? 'chatgpt_app' : 'full',
+      profile: isCandidateFullMcpPath ? 'full' : resolveMcpRuntimeProfileForRequest(route),
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     await mcpServer.connect(transport);
@@ -105,7 +116,7 @@ const server = createServer(async (req, res) => {
     return writeHtml(
       res,
       200,
-      `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Fluent</title></head><body><h1>Fluent</h1><p>Open-source runtime for running Fluent yourself.</p><p>MCP endpoint: <code>${origin}/mcp</code></p><p>Probe: <code>${origin}/codex-probe</code></p><p>Health: <code>${origin}/health</code></p></body></html>`,
+      `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Fluent</title></head><body><h1>Fluent</h1><p>Open-source runtime for running Fluent yourself.</p><p>MCP endpoint: <code>${origin}/mcp</code></p><p>Candidate full-runtime proof endpoint: <code>${origin}${LOCAL_CANDIDATE_FULL_MCP_PATH}</code></p><p>Probe: <code>${origin}/codex-probe</code></p><p>Health: <code>${origin}/health</code></p></body></html>`,
     );
   }
 
@@ -142,23 +153,6 @@ process.on('SIGTERM', async () => {
   runtime.sqliteDb.close();
   process.exit(0);
 });
-
-function parseArgs(argv: string[]): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (!token.startsWith('--')) continue;
-    const key = token.slice(2);
-    const next = argv[index + 1];
-    if (next && !next.startsWith('--')) {
-      result[key] = next;
-      index += 1;
-    } else {
-      result[key] = 'true';
-    }
-  }
-  return result;
-}
 
 function writeHtml(res: import('node:http').ServerResponse, status: number, body: string): void {
   res.statusCode = status;

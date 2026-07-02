@@ -2,7 +2,7 @@
 
 This page is generated from `contracts/fluent-contract.v1.json` plus an explicit preview list for rich surfaces that are not yet in the public contract.
 
-Current contract version: `2026-05-17.fluent-core-v1.84`
+Current contract version: `2026-06-01.fluent-core-v1.85`
 
 ## Meals
 
@@ -111,7 +111,7 @@ Preview only:
 
 ## Style
 
-Style currently ships canonical closet and purchase-analysis data tools, plus one current rich purchase-analysis widget for hosts that support MCP output templates.
+Style currently ships canonical closet and purchase-analysis data tools. Phase 1 public purchase verdicts are prose-only from one `fluent_get_context(domain="style", intent="purchase", candidate, amount)` read; legacy/full-MCP render tools remain listed for compatibility but are not the public-host purchase route.
 
 <!-- current-tools:start -->
 ### Current Canonical Style Tools
@@ -151,9 +151,8 @@ Style currently ships canonical closet and purchase-analysis data tools, plus on
 
 Current host guidance:
 
-- ChatGPT v2 should use `style_prepare_purchase_analysis`, direct product images or uploaded photos when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations`, then `style_show_purchase_analysis_widget`; full-MCP Apps-capable hosts may use `style_extract_purchase_page_evidence` where that tool is exposed before requesting the vision packet.
-- Claude MCP Apps-capable runs may use the same staged evidence flow and `style_show_purchase_analysis_widget` as the native Fluent purchase-analysis surface after real image inspection. Claude visualizer-only or text-only runs should answer from `style_render_purchase_analysis` or host-native visuals instead.
-- OpenClaw and generic MCP clients should use the plain-MCP Style data tools, `style_get_purchase_vision_packet` when the host can inspect images, and `style_render_purchase_analysis` after concrete `host_vision` evidence.
+- Public assistant hosts on canonical `/mcp` should use the Phase 1 one-read prose route: call `fluent_get_context(domain="style", intent="purchase", candidate, amount)` once to get CategoryResolution, StylePurchaseOwnedSlice, StylePurchaseCompleteness, owned-item images, and BudgetArithmeticFact; the host inspects candidate images itself, asks for the candidate price when it cannot determine one, and does not render a verdict card.
+- Claude, OpenClaw, Codex, and generic MCP clients should use the same one-read prose route for public purchase verdicts. Legacy staged-evidence and render/widget tools remain compatibility surfaces only and should not be resurrected as the active public route.
 
 Preview only: none right now.
 

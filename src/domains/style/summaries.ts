@@ -7,6 +7,7 @@ import type {
   StylePurchaseAnalysis,
   StyleWardrobeAnalysis,
 } from './types';
+import { isStyleDisplayPhoto, isStyleFitPhoto } from './helpers';
 
 export function summarizeStyleProfile(profile: StyleProfileRecord) {
   return {
@@ -45,6 +46,8 @@ export function summarizeStyleItem(item: StyleItemRecord) {
     comparatorKey: item.comparatorKey,
     colorFamily: item.colorFamily,
     formality: item.formality,
+    hasDisplayPhoto: item.photos.some(isStyleDisplayPhoto),
+    hasFitPhoto: item.photos.some(isStyleFitPhoto),
     id: item.id,
     name: item.name,
     photoCount: item.photos.length,

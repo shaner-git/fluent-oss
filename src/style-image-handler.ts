@@ -196,6 +196,8 @@ async function fetchRemoteStyleImage(request: Request, source: URL): Promise<Res
     headers: {
       'cache-control': 'private, no-store',
       'content-type': contentType,
+      // Embeddable in cross-origin, COEP-isolated MCP Apps widget iframes (see serveStyleImage).
+      'cross-origin-resource-policy': 'cross-origin',
     },
   });
 }
@@ -226,6 +228,10 @@ async function serveStyleImage(env: AppEnv | CloudRuntimeEnv | OAuthAppEnv, phot
     headers: {
       'cache-control': 'private, no-store',
       'content-type': contentType,
+      // MCP Apps widget iframes (e.g. Claude's *.claudemcpcontent.com) are cross-origin to this
+      // worker and run cross-origin-isolated (COEP: require-corp), which blocks any subresource
+      // lacking CORP. Without this header the closet/purchase widgets show broken images.
+      'cross-origin-resource-policy': 'cross-origin',
     },
   });
 }

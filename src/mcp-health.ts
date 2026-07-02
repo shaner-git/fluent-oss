@@ -45,6 +45,14 @@ const energyLevelSchema = z.enum(['low', 'okay', 'good', 'great']);
 const sorenessLevelSchema = z.enum(['low', 'moderate', 'high']);
 const metricTypeSchema = z.enum(['weight', 'waist', 'body_fat', 'resting_hr', 'sleep_hours', 'custom']);
 const loadHintSchema = z.enum(['light', 'moderate', 'hard']);
+const healthIsoDateInputSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .describe('ISO calendar date formatted exactly as YYYY-MM-DD.');
+const healthBlockIdInputSchema = z
+  .string()
+  .min(1)
+  .describe('Use a block_id returned by health_get_active_block, health_get_block, health_get_block_projection, or health_get_review_context.');
 
 export function registerHealthMcpSurface(server: McpServer, health: HealthService, origin: string) {
   server.registerResource(
@@ -248,7 +256,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       description:
         `Fetch today’s planned Health training session and any lightweight completion signals already recorded. Use this text-first tool for ordinary asks like "show today's training", "what is my workout today?", or "what training do I have today?" rather than opening Fluent Home. This is fitness training context only, not medical diagnosis, treatment, or nutrition prescription.`,
       inputSchema: {
-        date: z.string().optional(),
+        date: healthIsoDateInputSchema.optional().describe('Optional date to fetch, formatted exactly as YYYY-MM-DD; omit to use today.'),
         view: readViewSchema,
       },
       title: 'Get Health Today Context',
@@ -270,7 +278,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       annotations: { idempotentHint: true, readOnlyHint: true },
       description: 'Fetch a weekly Health review context with planned sessions, lightweight adherence signals, and any saved review.',
       inputSchema: {
-        week_start: z.string().optional(),
+        week_start: healthIsoDateInputSchema.optional().describe('Optional week start date formatted exactly as YYYY-MM-DD; omit to use the current training week.'),
         view: readViewSchema,
       },
       title: 'Get Health Review Context',
@@ -293,7 +301,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       description:
         'Fetch the active Health training block with inline sessions for fitness planning. This is text-first training context only, not medical diagnosis, treatment, or nutrition prescription.',
       inputSchema: {
-        date: z.string().optional(),
+        date: healthIsoDateInputSchema.optional().describe('Optional date formatted exactly as YYYY-MM-DD used to find the active block; omit to use today.'),
         view: readViewSchema,
       },
       title: 'Get Active Health Block',
@@ -315,7 +323,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       annotations: { idempotentHint: true, readOnlyHint: true },
       description: 'Fetch a saved Health block by id.',
       inputSchema: {
-        block_id: z.string(),
+        block_id: healthBlockIdInputSchema,
         view: readViewSchema,
       },
       title: 'Get Health Block',
@@ -338,9 +346,9 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
       description:
         'Project the current or requested Health week from the active block for fitness planning. This is text-first training context only, not medical diagnosis, treatment, or nutrition prescription.',
       inputSchema: {
-        block_id: z.string().optional(),
-        date: z.string().optional(),
-        week_start: z.string().optional(),
+        block_id: healthBlockIdInputSchema.optional().describe('Optional saved Health block ID; omit to use the active block for the requested date or week_start.'),
+        date: healthIsoDateInputSchema.optional().describe('Optional date formatted exactly as YYYY-MM-DD; use when projecting the week containing that date.'),
+        week_start: healthIsoDateInputSchema.optional().describe('Optional week start date formatted exactly as YYYY-MM-DD; takes precedence over date when both are provided.'),
         view: readViewSchema,
       },
       title: 'Get Health Block Projection',

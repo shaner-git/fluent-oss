@@ -7,6 +7,7 @@ import type {
   StyleCalibrationSignalRecord,
   StyleCalibrationSignalStatus,
   StyleExceptionRuleRecord,
+  StyleFitVerdict,
   StyleFitProfileRecord,
   StyleFormalityPreferenceRecord,
   StyleInferenceSource,
@@ -56,6 +57,40 @@ const STYLE_COMPARATOR_KEYS = [
   'mule',
   'other_shoe',
 ] as const satisfies readonly StyleComparatorKey[];
+
+// Onboarding canonical vocabularies (closet-onboarding-design.md §2). Closed sets so a host that ignores
+// the guidance still yields an item byte-identical to the imported 95.
+const STYLE_CATEGORIES = ['TOP', 'BOTTOM', 'OUTERWEAR', 'SHOE', 'ACCESSORY'] as const;
+
+// Color family vocabulary — lowercase (byte-parity with the imported closet; avoids splitting the
+// closet color facet into Navy/navy chips). Unmatched input normalizes to null; caller keeps the raw
+// value in colorName / field evidence (D4).
+const STYLE_COLOR_FAMILIES = [
+  'black', 'white', 'gray', 'navy', 'blue', 'beige', 'brown', 'green', 'red', 'olive',
+  'burgundy', 'cream', 'camel', 'khaki', 'silver', 'gold', 'pink', 'purple', 'yellow', 'orange', 'multi',
+] as const;
+
+const STYLE_COLOR_FAMILY_SYNONYMS: Record<string, string> = {
+  grey: 'gray', charcoal: 'gray', graphite: 'gray', slate: 'gray', stone: 'gray', 'charcoal grey': 'gray',
+  tan: 'camel', sand: 'beige', taupe: 'beige', oatmeal: 'beige', ecru: 'cream', ivory: 'cream', bone: 'cream', 'off white': 'cream',
+  maroon: 'burgundy', wine: 'burgundy', oxblood: 'burgundy', rust: 'brown',
+  denim: 'blue', indigo: 'blue', teal: 'green', forest: 'green', sage: 'green', 'hunter green': 'green',
+  terracotta: 'orange', mustard: 'yellow', mauve: 'purple', lavender: 'purple',
+  multicolor: 'multi', multicolour: 'multi', 'multi color': 'multi', print: 'multi', patterned: 'multi',
+};
+
+const STYLE_FIT_VERDICTS = ['true_to_size', 'runs_small', 'runs_large'] as const satisfies readonly StyleFitVerdict[];
+
+// Wardrobe-job styleRole vocabulary the comparator/closet reason over, + synonyms repairing the
+// casual/smart/lounge axis fluent-web emitted (which would silently degrade matching vs the 95) (D6).
+const STYLE_ROLES = ['workhorse', 'bridge', 'statement', 'anchor', 'dress', 'specialist'] as const;
+
+const STYLE_ROLE_SYNONYMS: Record<string, string> = {
+  casual: 'workhorse', everyday: 'workhorse', basic: 'workhorse', relaxed: 'workhorse',
+  smart: 'bridge', 'smart casual': 'bridge', versatile: 'bridge', business: 'bridge',
+  formal: 'dress',
+  lounge: 'specialist', loungewear: 'specialist', athletic: 'specialist', sport: 'specialist', outdoor: 'specialist', performance: 'specialist', specialty: 'specialist',
+};
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -479,6 +514,14 @@ function clampNullableConfidence(value: unknown): number | null {
   return Math.max(0, Math.min(1, Number(number.toFixed(2))));
 }
 
+function normalizeStyleFitVerdict(value: unknown): StyleFitVerdict | null {
+  const stringValue = asNullableString(value);
+  if (!stringValue) {
+    return null;
+  }
+  return STYLE_FIT_VERDICTS.includes(stringValue as StyleFitVerdict) ? stringValue as StyleFitVerdict : null;
+}
+
 function slugSignalValue(value: string): string {
   return value
     .trim()
@@ -504,10 +547,15 @@ export function normalizeStyleItemProfile(value: unknown): StyleItemProfileDocum
       : null,
     fabricHand: asNullableString(record.fabricHand),
     fitObservations: asStringArray(record.fitObservations),
+    fitVerdict: normalizeStyleFitVerdict(record.fitVerdict),
     itemType: asNullableString(record.itemType),
+    lengthNote: asNullableString(record.lengthNote),
+    ownedSize: asNullableString(record.ownedSize),
     pairingNotes: asNullableString(record.pairingNotes),
     polishLevel: asNullableString(record.polishLevel),
     qualityTier: asNullableString(record.qualityTier),
+    reanalyzePending: record.reanalyzePending === true,
+    reanalyzeRequestedAt: asNullableString(record.reanalyzeRequestedAt),
     seasonality: asStringArray(record.seasonality),
     silhouette: asNullableString(record.silhouette),
     styleRole: asNullableString(record.styleRole),
@@ -1049,16 +1097,23 @@ export function inferStyleComparatorKey(input: {
   }
 
   const category = normalizeStyleCategory(input.category);
-  const signals = collectComparatorSignals(input.subcategory, input.profile, input.tags, [
+
+  // Primary signals = the host's STRUCTURED fields (subcategory + profile.itemType/tags). Name/notes are
+  // free text and pollution-prone, so they are collected separately and DEMOTED by
+  // resolveComparatorWithNameDemotion — consulted only when they don't contradict a specific structured
+  // type. With no name/notes, allSignals === primarySignals and the result is unchanged from before.
+  const primarySignals = collectComparatorSignals(input.subcategory, input.profile, input.tags, []);
+  const nameSignals = collectComparatorSignals(undefined, null, undefined, [
     ...(input.extraSignals ?? []),
     input.name,
     input.notes,
   ]);
-  if (signals.length === 0) {
+  const allSignals = [...new Set([...primarySignals, ...nameSignals])];
+  if (allSignals.length === 0) {
     return 'unknown';
   }
 
-  const categorySpecific = inferComparatorKeyForCategory(category, signals);
+  const categorySpecific = resolveComparatorWithNameDemotion(category, primarySignals, allSignals);
   if (categorySpecific !== 'unknown') {
     return categorySpecific;
   }
@@ -1098,6 +1153,7 @@ export function normalizeStylePhotoView(value: unknown): string | null {
 
 export function inferStylePhotoKind(input: {
   isFit?: boolean;
+  is_fit?: boolean;
   kind?: unknown;
   view?: unknown;
 }): StylePhotoKind {
@@ -1120,6 +1176,32 @@ export function inferStylePhotoKind(input: {
     return 'detail';
   }
   return 'unknown';
+}
+
+export function isStyleFitPhoto(input: {
+  isFit?: boolean | null;
+  is_fit?: boolean | null;
+  kind?: unknown;
+  view?: unknown;
+}): boolean {
+  const view = normalizeStylePhotoView(input.view);
+  return Boolean(input.isFit ?? input.is_fit) || input.kind === 'fit' || view?.startsWith('fit_') === true;
+}
+
+export function isStyleDisplayPhoto(input: {
+  isFit?: boolean | null;
+  is_fit?: boolean | null;
+  kind?: unknown;
+  view?: unknown;
+}): boolean {
+  if (isStyleFitPhoto(input)) {
+    return false;
+  }
+  return inferStylePhotoKind({
+    isFit: Boolean(input.isFit ?? input.is_fit),
+    kind: input.kind,
+    view: input.view,
+  }) === 'product';
 }
 
 export function inferStylePhotoSource(input: {
@@ -1198,7 +1280,7 @@ export function isStylePurchaseEvalReady(
   return input.primaryPhotoCount > 0 && practicalConfirmed && tasteConfirmed;
 }
 
-function normalizeStyleCategory(value: unknown): string | null {
+export function normalizeStyleCategory(value: unknown): string | null {
   const category = asNullableString(value);
   if (!category) {
     return null;
@@ -1230,9 +1312,91 @@ function normalizeStyleCategory(value: unknown): string | null {
     case 'boot':
     case 'boots':
       return 'SHOE';
+    case 'accessory':
+    case 'accessories':
+      return 'ACCESSORY';
     default:
       return category.trim().toUpperCase();
   }
+}
+
+// Strict variant for the onboarding create path: returns a canonical category or null — never the
+// .toUpperCase() fallthrough — so a host sending a non-canonical category (fluent-web's BASE_LAYER,
+// "OTHER", "DRESS") is rejected rather than polluting the closed 5-category closet. Reuses the synonym
+// mapping above; existing callers keep the lenient normalizeStyleCategory. See design D3.
+export function normalizeStyleCategoryStrict(value: unknown): string | null {
+  const normalized = normalizeStyleCategory(value);
+  return normalized && (STYLE_CATEGORIES as readonly string[]).includes(normalized) ? normalized : null;
+}
+
+// Canonical color-family normalizer for onboarding: lowercase, synonym-mapped, restricted to the closed
+// STYLE_COLOR_FAMILIES set. Unmatched -> null (caller preserves the raw value in colorName / evidence). D4.
+export function normalizeStyleColorFamily(value: unknown): string | null {
+  const raw = asNullableString(value);
+  if (!raw) {
+    return null;
+  }
+  const key = raw.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+  const mapped = STYLE_COLOR_FAMILY_SYNONYMS[key] ?? key;
+  return (STYLE_COLOR_FAMILIES as readonly string[]).includes(mapped) ? mapped : null;
+}
+
+// Snap a host-supplied styleRole to the wardrobe-job vocabulary the comparator reasons over; repair
+// fluent-web's casual/smart/lounge axis. Unrecognized -> null rather than storing an off-axis value. D6.
+export function normalizeStyleRole(value: unknown): string | null {
+  const raw = asNullableString(value);
+  if (!raw) {
+    return null;
+  }
+  const key = raw.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+  if ((STYLE_ROLES as readonly string[]).includes(key)) {
+    return key;
+  }
+  return STYLE_ROLE_SYNONYMS[key] ?? null;
+}
+
+// Inherent "-ie" nouns whose plural is a plain "+s" ("Hoodies"->"Hoodie", "Booties"->"Bootie"). A blanket
+// -ies->y rule would wreck these (->"Hoody"/"Booty"), so the singularizer skips them and lets the lone-s
+// rule handle the trailing "s". Compared against the lowercased stem with the final "s" removed.
+const SUBCATEGORY_IE_NOUN_DENYLIST = new Set(['hoodie', 'bootie', 'beanie', 'movie', 'cookie', 'brownie']);
+
+// Singularize the head noun of a subcategory: (1) "-ies"->"y" for consonant+y stems, EXCEPT inherent -ie
+// nouns (Derbies->Derby, but Hoodies->Hoodie); (2) drop "-es" after a sibilant (Dresses->Dress,
+// Watches->Watch, Galoshes->Galosh); (3) else strip a lone trailing "s", never "ss" (Jeans->Jean, Dress
+// stays Dress). Short words (<=3) are left as-is ("Tee").
+function singularizeSubcategoryWord(word: string): string {
+  if (word.length <= 3) {
+    return word;
+  }
+  const lower = word.toLowerCase();
+  if (lower.endsWith('ies') && word.length > 4 && !SUBCATEGORY_IE_NOUN_DENYLIST.has(lower.slice(0, -1))) {
+    return `${word.slice(0, -3)}y`;
+  }
+  if (lower.endsWith('es') && /(ss|x|z|ch|sh)es$/.test(lower)) {
+    return word.slice(0, -2);
+  }
+  if (/[a-rt-z]s$/i.test(word)) {
+    return word.slice(0, -1);
+  }
+  return word;
+}
+
+// Normalize a subcategory to the closet's singular Title-Case form (the imported 95 store "Jean",
+// "Short", "Sneaker", "Camp Shirt"). Title-cases each space-separated word and singularizes the last
+// word. Required field — null when empty.
+export function normalizeStyleSubcategory(value: unknown): string | null {
+  const raw = asNullableString(value);
+  if (!raw) {
+    return null;
+  }
+  const cleaned = raw.trim().replace(/\s+/g, ' ');
+  if (!cleaned) {
+    return null;
+  }
+  const words = cleaned.split(' ').map((word) => (word.length > 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word));
+  const lastIndex = words.length - 1;
+  words[lastIndex] = singularizeSubcategoryWord(words[lastIndex]);
+  return words.join(' ');
 }
 
 function looksLikeImageUrl(value: string): boolean {
@@ -1301,15 +1465,9 @@ function normalizeComparatorText(value: unknown): string | null {
 
 function inferComparatorKeyForCategory(category: string | null, signals: string[]): StyleComparatorKey {
   if (category === 'TOP') {
-    if (matchesComparatorAlias(signals, ['polo', 'polo_shirt'])) return 'polo';
+    if (matchesComparatorAlias(signals, ['polo', 'polo_shirt', 'rugby', 'rugby_shirt'])) return 'polo';
     if (matchesComparatorAlias(signals, ['oxford_shirt', 'oxford', 'button_down', 'buttondown', 'ocbd'])) return 'oxford_shirt';
-    if (matchesComparatorAlias(signals, ['camp_shirt', 'camp_collar', 'camp_collar_shirt', 'resort_shirt', 'cabana_shirt'])) {
-      return 'camp_shirt';
-    }
-    if (
-      hasComparatorAlias(signals, ['shirt', 'button_up', 'buttonup', 'short_sleeve_button_up', 'short_sleeve_shirt']) &&
-      hasComparatorAlias(signals, ['linen', 'relaxed', 'casual', 'vacation', 'resort', 'summer'])
-    ) {
+    if (matchesComparatorAlias(signals, ['camp_shirt', 'camp', 'camp_collar', 'camp_collar_shirt', 'resort_shirt', 'cabana_shirt'])) {
       return 'camp_shirt';
     }
     if (matchesComparatorAlias(signals, ['henley', 'henley_shirt'])) return 'henley';
@@ -1333,39 +1491,67 @@ function inferComparatorKeyForCategory(category: string | null, signals: string[
     if (matchesComparatorAlias(signals, ['jersey'])) {
       return 'jersey';
     }
-    if (matchesComparatorAlias(signals, ['dress_shirt', 'shirt', 'button_up', 'buttonup'])) return 'dress_shirt';
+    // Vibe-based camp-shirt inference runs AFTER the hard type checks (polo/oxford/camp-direct/henley/
+    // tee/jersey): the loose `shirt` token also matches the fragment of a COMPOUND type like "t-shirt"
+    // or "Henley Shirt", so running it earlier mis-slotted casual tees/henleys as camp_shirt (#1/#6/#68).
+    // It is still gated so an explicit dress/oxford/flannel/plaid shirt wins, and still sits ABOVE
+    // overshirt/dress_shirt so a genuinely vibe-y button-up resolves to camp_shirt.
+    if (
+      hasComparatorAlias(signals, ['shirt', 'button_up', 'buttonup', 'short_sleeve_button_up', 'short_sleeve_shirt']) &&
+      hasComparatorAlias(signals, ['linen', 'relaxed', 'casual', 'vacation', 'resort', 'summer']) &&
+      !hasComparatorAlias(signals, ['dress_shirt', 'dress', 'oxford', 'oxford_shirt', 'flannel', 'plaid'])
+    ) {
+      return 'camp_shirt';
+    }
+    // overshirt/shacket before dress_shirt (a shacket is not a dress shirt). A sport coat/blazer and a
+    // down/puffer insulation layer are JACKETS — guard them before the coat AND sweater checks (a
+    // Patagonia-style "Down Sweater" filed under TOP must read jacket, matching OUTERWEAR). This guard is
+    // safe below dress_shirt: any button-down carries a `shirt` token and resolves there first, so the
+    // `down` fragment of "button-down" never reaches this line.
     if (matchesComparatorAlias(signals, ['overshirt', 'shirt_jacket', 'shacket'])) return 'overshirt';
-    if (matchesComparatorAlias(signals, ['sweater', 'jumper', 'crewneck', 'pullover', 'knit'])) return 'sweater';
-    if (matchesComparatorAlias(signals, ['hoodie', 'hooded', 'hooded_sweatshirt'])) return 'hoodie';
+    if (matchesComparatorAlias(signals, ['dress_shirt', 'shirt', 'button_up', 'buttonup'])) return 'dress_shirt';
+    if (matchesComparatorAlias(signals, ['sport_coat', 'sportcoat', 'blazer', 'down', 'puffer'])) return 'jacket';
+    // A hooded sweatshirt IS a hoodie, so hoodie is checked BEFORE sweater — whose alias holds
+    // sweatshirt/pullover and would otherwise swallow it (the `hooded_sweatshirt` alias was unreachable).
+    // cardigan stays above sweater (a knit cardigan is not a sweater); turtleneck/mock/roll-neck are sweaters.
     if (matchesComparatorAlias(signals, ['cardigan'])) return 'cardigan';
-    if (matchesComparatorAlias(signals, ['coat', 'overcoat', 'parka', 'trench', 'raincoat', 'mac'])) return 'coat';
-    if (matchesComparatorAlias(signals, ['jacket', 'blazer', 'sport_coat', 'bomber'])) return 'jacket';
+    if (matchesComparatorAlias(signals, ['hoodie', 'hooded', 'hooded_sweatshirt'])) return 'hoodie';
+    if (matchesComparatorAlias(signals, ['sweater', 'jumper', 'crewneck', 'pullover', 'knit', 'sweatshirt', 'crewneck_sweatshirt', 'turtleneck', 'mock_neck', 'roll_neck'])) {
+      return 'sweater';
+    }
+    if (matchesComparatorAlias(signals, ['coat', 'overcoat', 'parka', 'trench', 'raincoat', 'mac', 'topcoat', 'peacoat', 'greatcoat'])) return 'coat';
+    if (matchesComparatorAlias(signals, ['jacket', 'bomber', 'anorak'])) return 'jacket';
   }
 
   if (category === 'OUTERWEAR') {
-    if (matchesComparatorAlias(signals, ['coat', 'overcoat', 'parka', 'trench', 'raincoat', 'mac'])) return 'coat';
-    if (matchesComparatorAlias(signals, ['jacket', 'blazer', 'sport_coat', 'bomber', 'anorak'])) return 'jacket';
+    // overshirt before jacket (same CPO must not split by host label); sport coat/blazer is a jacket
+    // before the coat check; cardigan + a NARROW sweater alias have explicit OUTERWEAR slots.
     if (matchesComparatorAlias(signals, ['overshirt', 'shirt_jacket', 'shacket'])) return 'overshirt';
+    if (matchesComparatorAlias(signals, ['sport_coat', 'sportcoat', 'blazer'])) return 'jacket';
+    if (matchesComparatorAlias(signals, ['coat', 'overcoat', 'parka', 'trench', 'raincoat', 'mac', 'topcoat', 'peacoat', 'greatcoat'])) return 'coat';
+    if (matchesComparatorAlias(signals, ['jacket', 'bomber', 'anorak', 'down', 'puffer'])) return 'jacket';
+    if (matchesComparatorAlias(signals, ['cardigan'])) return 'cardigan';
+    if (matchesComparatorAlias(signals, ['sweater', 'jumper'])) return 'sweater';
     if (matchesComparatorAlias(signals, ['hoodie', 'hooded', 'hooded_sweatshirt'])) return 'hoodie';
   }
 
   if (category === 'BOTTOM') {
+    // A short is its own wardrobe slot regardless of fabric/cut (trouser/chino/denim short are all shorts),
+    // and a jogger is its own slot regardless of the "pant" token — both must be checked BEFORE
+    // jean/chino/trouser, which share a token with the descriptive subcategory and would otherwise win.
+    if (matchesComparatorAlias(signals, ['short', 'shorts'])) return 'short';
+    if (matchesComparatorAlias(signals, ['jogger', 'joggers', 'track_pant', 'track_pants', 'sweatpant', 'sweatpants', 'sweat_pant', 'sweat_pants'])) {
+      return 'jogger';
+    }
     if (matchesComparatorAlias(signals, ['jean', 'jeans', 'denim'])) return 'jean';
     if (matchesComparatorAlias(signals, ['chino', 'chinos'])) return 'chino';
     if (matchesComparatorAlias(signals, ['trouser', 'trousers', 'slack', 'slacks', 'pant', 'pants'])) return 'trouser';
-    if (matchesComparatorAlias(signals, ['jogger', 'joggers', 'track_pant', 'track_pants', 'sweatpant', 'sweatpants'])) {
-      return 'jogger';
-    }
-    if (matchesComparatorAlias(signals, ['short', 'shorts'])) return 'short';
   }
 
   if (category === 'SHOE') {
     if (matchesComparatorAlias(signals, ['loafer', 'loafers'])) return 'loafer';
     if (matchesComparatorAlias(signals, ['oxford', 'oxfords', 'cap_toe_oxford', 'oxford_derby'])) return 'oxford';
     if (matchesComparatorAlias(signals, ['derby', 'derbies', 'blucher'])) return 'derby';
-    if (signals.some((signal) => /(air_force_1|af1|air_max|stan_smith|common_projects|achilles)/.test(signal))) {
-      return 'sneaker';
-    }
     if (
       matchesComparatorAlias(signals, [
         'sneaker',
@@ -1385,6 +1571,12 @@ function inferComparatorKeyForCategory(category: string | null, signals: string[
     if (matchesComparatorAlias(signals, ['boot', 'boots', 'chelsea', 'chukka'])) return 'boot';
     if (matchesComparatorAlias(signals, ['mule', 'mules', 'clog', 'clogs'])) return 'mule';
     if (matchesComparatorAlias(signals, ['sandal', 'sandals', 'slides', 'slide', 'flip_flop'])) return 'sandal';
+    // A brand-only hint (Common Projects, AF1, Air Max, ...) implies a sneaker, but ONLY after every
+    // explicit shoe type above has had its say — otherwise a "Common Projects Chelsea Boot" becomes a
+    // sneaker because the brand token beats the type (#15).
+    if (signals.some((signal) => /(air_force_1|af1|air_max|stan_smith|common_projects|achilles)/.test(signal))) {
+      return 'sneaker';
+    }
   }
 
   return 'unknown';
@@ -1396,6 +1588,33 @@ function matchesComparatorAlias(signals: string[], aliases: string[]) {
 
 function hasComparatorAlias(signals: string[], aliases: string[]) {
   return matchesComparatorAlias(signals, aliases);
+}
+
+// Genus tokens are too generic to identify a wardrobe slot on their own — "Shirt" could be a dress shirt,
+// camp shirt, oxford, or overshirt; "Pants" could be trousers, chinos, or joggers. They are excluded when
+// testing whether the host's STRUCTURED fields already carry a SPECIFIC type (name-token demotion below),
+// so a genus token can't out-rank the real type by alias order.
+const GENUS_COMPARATOR_TOKENS = new Set<string>(['shirt', 'top', 'pant', 'pants', 'bottom', 'shoe', 'shoes', 'footwear']);
+
+// Two-tier resolution (#16/#17 structural fix). The host's STRUCTURED fields (subcategory + profile.itemType
+// + tags) classify first; the free-text name/notes are pollution-prone — a brand like "AG Jeans" or a color
+// like "Oxford Grey" injects a false type token — so they are folded into `allSignals` but DEMOTED. When the
+// structured-only and name-inclusive answers disagree, the structured answer wins iff it rests on a specific
+// (non-genus) token; otherwise the richer name/notes signal wins (a bare "Shirt" must not block a
+// "Relaxed Linen ... for summer" -> camp_shirt). With no name/notes the result is byte-identical to before.
+function resolveComparatorWithNameDemotion(
+  category: string | null,
+  primarySignals: string[],
+  allSignals: string[],
+): StyleComparatorKey {
+  const fullKey = inferComparatorKeyForCategory(category, allSignals);
+  const primaryKey = inferComparatorKeyForCategory(category, primarySignals);
+  if (primaryKey === fullKey) {
+    return fullKey;
+  }
+  const specificPrimary = primarySignals.filter((signal) => !GENUS_COMPARATOR_TOKENS.has(signal));
+  const specificKey = inferComparatorKeyForCategory(category, specificPrimary);
+  return specificKey !== 'unknown' ? specificKey : fullKey;
 }
 
 export function deriveBaselineStyleItemProfile(input: {

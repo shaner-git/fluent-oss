@@ -1,67 +1,76 @@
 ---
 name: fluent-style
-description: Use when the user wants Fluent Style purchase checks, Style setup or calibration, closet gaps, or saved items.
+description: Use when the user wants Fluent Style context, closet evidence, saved item reads, or media-backed style help.
 ---
 
 # Fluent Style
 
+Use this skill for Style help grounded in the canonical Fluent `/mcp` public vNext profile.
+
 ## Core Rules
 
-- Use `fluent-core` first when Style readiness or onboarding state is unclear.
-- Start Style setup, calibration, or confidence-sensitive work with `style_get_onboarding_calibration`. Use `style_get_context` or `style_get_profile` only after the calibration read model when broader closet detail is still needed.
+- Treat Fluent Style as context, evidence, saved items, and media. The host model owns styling judgment.
+- Fluent stores; the host reasons and may look things up. You are encouraged to web-search product info to enrich an owned closet item; Fluent never browses, scrapes, or inspects pixels. Tag host-found facts `url_scrape` or `host_text`, reserve `host_vision` for images you inspected, never invent (null beats a guess), and never auto-write an image you did not open and confirm. See `fluent://guidance/style-enrichment`.
+- Use the canonical hosted `/mcp` profile. It exposes the public vNext tools, not old Style purchase-analysis, setup-widget, Fluent-side product-page extraction, render, or arbitrary Style write tools.
+- The canonical public baseline is 26 tools with promoted grocery-list, budgets envelope setup, and Style closet manager widget resources only. The Style purchase verdict is prose and always leads from `fluent_get_context(domain="style", intent="purchase", candidate=..., amount=...)`; after that prose verdict, when you identify a true owned comparator, render `fluent_render_style_closet_surface` with `filter.item_ids` = those comparator items beneath it so the user sees what they already own, and otherwise use it for owned closet management — never render the whole resolved category as the verdict.
+- Do not switch to `/mcp/app`, `/mcp/chatgpt`, a legacy/full route, or any second user-facing route to get old Style tools.
+- Start broad Style asks with `fluent_get_context(domain="style", intent="closet")` when available; use `intent="purchase"` for purchase or evidence-boundary questions.
+- Use `fluent_list_items(domain="style", ...)` and `fluent_get_item(domain="style", ...)` only when the user asks for saved closet items or the context packet names a specific item needed for the answer.
+- Use `fluent_list_evidence(domain="style", ...)` when provenance, confidence, or evidence gaps matter.
+- Use `fluent_get_media_bundle(domain="style", ...)` for saved-item media outside the one-read purchase verdict flow. For purchase verdicts with a candidate, the context packet carries owned-category images.
+- For priced style-clothing candidates, pass `amount` to `fluent_get_context(domain="style", intent="purchase", candidate=..., amount=...)`; carry BudgetArithmeticFact as verified arithmetic, not as Fluent's final decision.
+- State a candidate price only when you have VERIFIED it from the actual product page or listing. If you do not have a verified price, ask the user for the price before any budget-sensitive verdict, then pass it as amount so BudgetArithmeticFact returns exact over/under arithmetic. Never state a typical, approximate, around, or from-memory price for the budget — an unverified estimate is not acceptable; ask instead.
+- For the buy -> onboard -> enrich loop, follow `fluent://guidance/style-shopping`: keep consideration ephemeral with no wishlist/closet row; on buy, call `fluent_create_style_item` and include `fit_assessment` in the same call when try-on or fit feedback exists; then use `fluent://guidance/style-enrichment` for post-onboard catalog facts, descriptors, and images.
+- For product URL closet adds, pass the product page URL in `source_snapshot.url`; Fluent resolves the product gallery server-side, sets the clean product photo as the display tile when it can, and returns gallery images for you to confirm or correct. Treat direct `image_url` as an optional hint, not the primary display decision.
+- Use `fluent_render_style_closet_surface` when the user asks to view or manage owned saved closet items and the host can mount MCP Apps resources. The closet widget may call `fluent_update_style_item_patch`, `fluent_set_style_item_image`, and `fluent_archive_item` for explicit user actions only; re-analyzing a saved item from its photo is a host handoff, not a direct widget call to `fluent_refresh_style_item_profile`.
+- For existing-item enrichment, route catalog facts to `fluent_update_style_item_patch`; descriptors/tags such as itemType, silhouette, fabricHand, styleRole, dressCode, seasonality, useCases, and pairingNotes to `fluent_refresh_style_item_profile`; fit facts to the refresh `fit_assessment`; and images to `fluent_set_style_item_image`.
+- For a saved-item photo re-analysis, call `fluent_get_media_bundle` for the item or use its stored image URL, inspect the pixels in the host, then split descriptor, catalog, and fit updates across `fluent_refresh_style_item_profile`, `fluent_update_style_item_patch`, and refresh `fit_assessment`. Use `host_vision` with `has_image:true` only when the host actually inspected the image this turn; if the image is unavailable, use `host_text`, do not infer from the item name, and say the photo was not available.
+- Use `fluent_update_style_item_patch` only for sparse user-approved catalog/details on an existing Style item. Use `fluent_refresh_style_item_profile` for explicit user-approved host/user evidence refreshes on an existing Style item, including durable tags and descriptors; provide field source/confidence and do not claim image-derived evidence unless an image was actually inspected. Use `fluent_set_style_item_image` only for a host-inspected image URL for an existing Style item. To add a NEW closet item, use `fluent_create_style_item` for explicit, user-approved onboarding — you produce the structured profile from the garment photos, then present the draft for the user to confirm or correct; never create items through the patch or image tools.
+- Use `fluent_archive_item` when the user says a saved item was returned, sold, donated, gifted, worn out, never purchased, duplicate, gone, or no longer owned; include the best disposition and report read-after-write proof.
+- Do not claim Fluent inspected pixels. If images are returned, the host must inspect them before making visual claims.
+- If the canonical Fluent tools are unavailable in the current session, say that the Fluent read is unavailable and do not answer from prior memory as if it came from Fluent.
+- Do not call, name as active guidance, or wait for old tools such as `style_prepare_purchase_analysis`, `style_render_purchase_analysis`, `style_show_purchase_analysis_widget`, setup widgets, or arbitrary Fluent-side product-page extraction. Answer Phase 1 purchase verdicts in prose from the one ContextPacket.
+- Do not save broad Style profile facts through public vNext. Public Style item writes are limited to explicit, user-approved onboarding via `fluent_create_style_item` (you produce the profile from photos and the user confirms the draft), existing-item profile refreshes via `fluent_refresh_style_item_profile`, detail/photo updates via `fluent_update_style_item_patch` and `fluent_set_style_item_image`, and the non-destructive `fluent_archive_item`. Budget envelope/spend writes are limited to the `style-clothing` declared-envelope category and do not create closet memory.
+- Keep finance and checkout out of Style. Use `fluent_get_purchase_context`, `fluent_set_budget_envelope`, and `fluent_log_budget_spend` only for explicit style-clothing budget envelope/spend context; do not use them for dashboards, category taxonomies, Plaid, retailer automation, or final purchase judgment.
+- Public Style purchase verdicts read the declared style-clothing budget arithmetic through `fluent_get_context` with `amount`; the host decides how that fact affects the verdict.
 - Treat broad asks like "what do you think of my shoe game?" or "how is my style looking?" as closet-analysis requests first, not as image-upload requests.
 - Only ask for an uploaded image when the answer depends on a specific unsupplied candidate item, fit photo, or missing visual evidence that Fluent does not already have.
-- Ask for images only when specific missing visual evidence matters. Do not turn correction tools into shopping automation.
-- Distinguish closet evidence from taste. Ownership can suggest a pattern, but only explicit user confirmation should be described as preference.
-- Treat category counts as closet coverage evidence, not taste or aesthetic signals.
-- Use "your closet suggests..." for inferred signals and "you said..." only for user-confirmed taste. Avoid second-person taste phrasing such as "you're going for..." or "you lean..." until the user confirms it.
-- Treat `purchaseAnalysisReadiness.readinessLevel: "not_ready"` as candidate-only, not wardrobe-fit ready. Treat `"provisional"` as usable but not calibrated. Keep buy/skip language cautious and use the returned `calibrationPrompts` for one high-leverage confirm/correct question.
+- Do not claim a Style write succeeded unless the mutation returned successfully and a follow-up read confirms the state you intended to set.
 
-## Purchase Analysis
+## Purchase Or Outfit Questions
 
-Confirm candidate evidence, use purchase-analysis tools, inspect available imagery, compare against the actual closet, give a clear point of view, and ask before logging or saving.
+For prompts like "should I buy this?", "does this work?", or "compare this to my closet":
 
-For ordinary buy/skip prompts, use the staged path: prepare the purchase analysis, gather candidate image evidence only through tools exposed in the current host, get the purchase vision packet, inspect images, make the stylist call yourself, submit visual observations with `stylist_judgment`, then render the purchase-analysis surface or structured fallback. The curated ChatGPT v2 profile does not expose arbitrary product-page extraction; for product links there, ask for or use a direct product image/upload before making the final call. Do not use `style_analyze_purchase` as the normal final path.
+1. Read Style context first with `fluent_get_context(domain="style", intent="purchase", candidate={name, category?, subcategory?, image_urls?, price_text?}, amount=priced_amount)` when a candidate has a price.
+2. Inspect the candidate image or user-provided candidate details directly in the host; ask for one compact missing input when the candidate is not grounded enough.
+3. Judge from CategoryResolution, StylePurchaseOwnedSlice, StylePurchaseCompleteness, and BudgetArithmeticFact in that one packet. Cite owned items by name; if `complete:false`, say the slice is incomplete and offer to look wider.
+4. Give the host-owned stylist judgment with clear uncertainty when media, closet coverage, calibration, or budget arithmetic is thin; use same wardrobe job and adjacent style context wording, not lane, same role, Yes if, or No if.
+5. Do not call `fluent_get_media_bundle` or `fluent_get_purchase_context` as the default second/third step for Phase 1 purchase verdicts.
+6. Answer in prose. Budget is a fact, not a cap or override.
+7. For returned, sold, donated, gifted, worn-out, never-purchased, duplicate, gone, or no-longer-owned items, call `fluent_archive_item` with disposition and read-after-write proof.
 
-Purchase analysis should inherit the calibration state. If Fluent has no closet or a thin closet, judge the candidate only and ask for starter/import confirmation evidence before making wardrobe-fit claims. If Fluent has imported-but-unconfirmed evidence or inferred-but-unconfirmed preferences, say so plainly and keep the recommendation provisional.
+## Closet Management
 
-Do not let host memory, prior chat context, or an earlier unsaved recommendation determine the buy/wait/skip call unless the user confirms it in the current turn or Fluent state/tool evidence supports it. You may mention it only as outside Fluent state.
+For prompts like "show my closet", "replace this saved photo", "fix this item size", or "mark this no longer owned":
 
-In MCP Apps-capable hosts, a regular "should I buy this?" prompt is enough intent to open the native purchase-analysis surface after the staged visual flow succeeds. Do not wait for the user to explicitly ask for a card, widget, or MCP app.
+1. Read Style context or list Style items when the host cannot mount MCP Apps resources.
+2. If the host can mount MCP Apps resources, render `fluent_render_style_closet_surface` with a single `filter` object, cursor, and limit.
+3. Let the widget call `fluent_update_style_item_patch`, `fluent_set_style_item_image`, or `fluent_archive_item` only after an explicit user action; for photo re-analysis, the widget asks the host to inspect media and the host calls `fluent_refresh_style_item_profile`.
+4. Require provenance, report read-after-write proof, and refresh through the render adapter after writes.
+5. Do not provide scores, ratings, verdicts, or judgment language inside closet management.
 
-If accepted visual observations return or display `style_show_purchase_analysis_widget`, make the actual `style_show_purchase_analysis_widget` tool call. Do not merely mention the tool name in prose, and do not treat the card as rendered until the tool call is made or the host visibly mounts the native card.
+Good answer shape:
 
-`stylist_judgment` is the agent-owned decision the native card renders. Include `verdict`, `headline`, `rationale`, `decisionBasis`, `wardrobeImpact`, `whatItAdds`, `whereItOverlaps`, `pairingOpportunities`, `caveats`, and `referencedComparatorIds` when the evidence supports them. Same category and subcategory are only starting points; true substitutes must share the same wardrobe job. Use broad same-category matches as adjacent context or rejected comparators, and use cross-category items as adjacent context or pairing candidates, not primary duplicates. Do not call a jersey the closest comparator for a tee, do not invent item facts, and keep internal comparator labels out of user-facing prose. Prefer plain stylist wording such as same wardrobe job, adjacent style context, stronger case when, and weaker case when. Never use lane language in user-facing purchase prose, including casual idioms such as opens a lane, tee lane, loafer lane, or same lane; say wardrobe job, closet gap, part of the wardrobe, slot, or role instead.
+- what Fluent knows
+- what is confirmed versus inferred
+- what media/evidence is missing
+- the host's provisional style read
+- budget context, when priced
+- the next useful user action
 
-## Closet And Onboarding
+## Boundaries
 
-For wardrobe-level questions, analyze before asking for more photos. Treat missing photos, thin closet coverage, stale items, or unconfirmed imported data as confidence limits.
-
-When the user explicitly wants to set up Style, or a Style task depends on readiness that is missing:
-
-1. Use `fluent-core` to confirm Style is enabled or begin onboarding.
-2. Call `style_get_onboarding_calibration`; this is the setup/readiness read model. Do not use `style_get_context` for ordinary setup summaries, confirm/correct prompts, starter closet additions, or stale/accidental phrase calibration.
-3. If `style_show_setup_calibration_widget` is visible in an MCP Apps-capable host, call it for the native setup surface only after `style_get_onboarding_calibration` has already run in the same turn and only when the host can visibly mount Fluent `ui://` resources. Never call the widget as the first setup/calibration tool, even for native-render probes. A tool call alone is not proof that the widget rendered. In Claude.ai text fallback, Codex, plain MCP, and other text hosts, do not call the setup widget; use the read model, explicit write tools, and a compact text answer.
-4. Ask only the smallest high-value question or request the smallest useful starter item set.
-5. Use `style_add_starter_closet_item` when the user provides an item photo, link, or description they clearly want saved; do not route starter onboarding items through `style_upsert_item`.
-6. Use `style_record_calibration_response` only after explicit user intent for confirmed/rejected/corrected preference signals or active/stale/accidental item markings. Do not pass a returned `calibrationPrompt` object directly as tool input. Confirm/reject writes must use `source: "user_confirmed"`; corrected writes also require a user-provided `corrected_value`. For phrase-level feedback without a stable item match, record a rejected signal instead of fabricating an item ID. If the user says a named item or phrase is stale/accidental and should not count as style preference, and you cannot match a stable item ID, immediately record the phrase as a rejected `aesthetic` signal with a note. Use `hard_avoid` only when the user explicitly says it is a hard avoid; do not route stale/accidental preference exclusion through `style_upsert_item`.
-
-Do not pretend Fluent found a closet when the closet is empty. Let the user skip setup and continue with lower-confidence Style help.
-Do not say "you prefer" unless the user confirmed it; for inferred signals say "your closet suggests" and avoid second-person taste phrasing like "you lean" or "you're going for."
-
-## Calibration Signals
-
-The calibration read model separates:
-
-- `closetCoverageConfidence`: active closet evidence.
-- `visualEvidenceConfidence`: item/photo evidence.
-- `preferenceCalibrationConfidence`: user-confirmed taste.
-- `shoppingDecisionConfidence`: how strong a purchase recommendation can be.
-
-Use `calibrationPrompts` as the guided setup path: confirm closet-suggested signals, ask for corrected text before writing corrections, save one constraint, set budget, or add one starter item. Do not treat imported closet data as fully calibrated style truth. Do not mark onboarding complete just because items exist if the calibration model still shows unresolved preference questions.
-
-## Safety
-
-Do not claim a Style write succeeded unless the mutation returned successfully and a follow-up read confirms the state you intended to set.
-
-Do not expose raw provenance, internal IDs, logs, traces, or storage URLs unless explicitly debugging. Keep purchase decisions and checkout separate.
+- Fluent remembers closet context; it does not make the final buy/skip call.
+- Ownership suggests patterns, but only explicit user confirmation is preference.
+- Do not launder prior chat memory into "what Fluent knows."
+- Do not claim a Style write, widget render, or Fluent-side product-page extraction unless the visible public tool profile actually supports it.

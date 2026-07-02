@@ -181,6 +181,12 @@ export interface PurchaseAnalysisShoppingAnswerViewModel {
   whatWouldChangeVerdict: string[];
 }
 
+export interface PurchaseAnalysisBudgetChipViewModel {
+  caveats: string[];
+  line: string;
+  signal: 'comfortable' | 'tight';
+}
+
 export interface PurchaseAnalysisViewModel {
   id: string;
   item: PurchaseAnalysisItemViewModel;
@@ -203,6 +209,7 @@ export interface PurchaseAnalysisViewModel {
   stylistJudgment: PurchaseAnalysisStylistJudgmentViewModel | null;
   generatedAt: string | null;
   actions: PurchaseAnalysisActionViewModel[];
+  budgetChip?: PurchaseAnalysisBudgetChipViewModel;
 }
 
 export interface PurchaseAnalysisWidgetViewModel extends Omit<PurchaseAnalysisViewModel, 'actions'> {
@@ -228,14 +235,21 @@ export function buildPurchaseAnalysisViewModel(
   const stylistJudgment = suppressWardrobeFitCopy ? null : rawStylistJudgment;
   const judgmentSource: PurchaseAnalysisJudgmentSource = stylistJudgment ? 'host_stylist_judgment' : 'computed_fallback';
   const rawVerdict = stylistJudgment ? mapStylistJudgmentVerdictToPurchaseVerdict(stylistJudgment.verdict) : deriveVerdict(analysis);
-  const verdict = capPurchaseVerdictForCalibration(rawVerdict, analysis);
+  const calibrationVerdict = capPurchaseVerdictForCalibration(rawVerdict, analysis);
+  // D16: Fluent never overrides a model-supplied judgment. The budget cap applies only to
+  // Fluent's own computed-fallback verdict; a host stylist judgment is annotated, not vetoed.
+  const budgetAdjustment = budgetModifier(calibrationVerdict, analysis.budgetContext, {
+    capAllowed: !stylistJudgment,
+  });
+  const budgetChip = buildBudgetChipViewModel(analysis.budgetContext, budgetAdjustment.budgetLine);
+  const verdict = budgetAdjustment.verdict;
   const confidencePercent = capConfidencePercentForCalibration(deriveConfidencePercent(analysis), analysis);
   const confidence = confidencePercent >= 76 ? 'high' : confidencePercent >= 56 ? 'medium' : 'low';
   const item = buildItemViewModel(analysis.candidate, options?.imageHints);
   const visualGrounding = buildVisualGroundingViewModel(analysis);
   const overlap = suppressWardrobeFitCopy ? [] : buildOverlapViewModel(analysis);
   const reasons = [
-    ...calibrationReasonNotes(analysis, rawVerdict, verdict),
+    ...calibrationReasonNotes(analysis, rawVerdict, calibrationVerdict),
     ...(suppressWardrobeFitCopy
       ? buildCandidateOnlyReasons(analysis, verdict)
       : stylistJudgment
@@ -269,6 +283,7 @@ export function buildPurchaseAnalysisViewModel(
     confidence,
     confidenceLabel: `Confidence · ${titleCase(confidence)}`,
     confidencePercent,
+    ...(budgetChip ? { budgetChip } : {}),
     context: {
       calibrationLabel: analysis.calibration.purchaseAnalysisReadiness.label,
       calibrationNotes: analysis.calibration.purchaseAnalysisReadiness.notes,
@@ -296,6 +311,7 @@ export function buildPurchaseAnalysisViewModel(
       options?.comparatorItemIdMode ?? 'canonical',
       stylistJudgment,
       suppressWardrobeFitCopy,
+      budgetChip ? null : budgetAdjustment.budgetLine,
     ),
     stylistJudgment,
     verdict,
@@ -322,6 +338,7 @@ export function buildPurchaseAnalysisStructuredContent(viewModel: PurchaseAnalys
     findingCount: widget.findings.length,
     gapCount: widget.gaps.length,
     judgmentSource: widget.judgmentSource,
+    ...(widget.budgetChip ? { budgetChip: widget.budgetChip } : {}),
     overlapCount: widget.overlap.length,
     purchaseAnalysis: widget,
     recommendationTrust: widget.context,
@@ -338,6 +355,7 @@ export function buildPurchaseAnalysisMetadata(viewModel: PurchaseAnalysisViewMod
     actionInvocations: viewModel.actions,
     analysisId: viewModel.id,
     experience: 'purchase_analysis_widget',
+    ...(viewModel.budgetChip ? { budgetChip: viewModel.budgetChip } : {}),
     purchaseAnalysis: buildPurchaseAnalysisWidgetViewModel(viewModel),
     judgmentSource: viewModel.judgmentSource,
     shoppingAnswer: viewModel.shoppingAnswer,
@@ -424,6 +442,62 @@ function capPurchaseVerdictForCalibration(verdict: PurchaseVerdict, analysis: St
   return verdict;
 }
 
+export function budgetModifier(
+  verdict: PurchaseVerdict,
+  context: StylePurchaseAnalysis['budgetContext'] | null | undefined,
+  options?: { capAllowed?: boolean },
+): { budgetLine: string | null; verdict: PurchaseVerdict } {
+  if (!context || context.purchaseSignal === 'no_signal' || !context.targetSetup) {
+    return { budgetLine: null, verdict };
+  }
+  const budgetLine = buildBudgetLine(context);
+  // D16: capAllowed=false means a host model supplied this verdict with the budget facts in
+  // view; Fluent attaches the proven line but the model's judgment stands.
+  const capAllowed = options?.capAllowed !== false;
+  if (!capAllowed || context.purchaseSignal !== 'tight' || verdict !== 'recommend') {
+    return { budgetLine, verdict };
+  }
+  const projectedRatio = typeof context.projectedRatio === 'number' && Number.isFinite(context.projectedRatio)
+    ? context.projectedRatio
+    : null;
+  return {
+    budgetLine,
+    verdict: projectedRatio != null && projectedRatio > 1 ? 'wait' : 'consider',
+  };
+}
+
+export interface BudgetLineContext {
+  projectedRatio?: number | null;
+  targetSetup: { category: string; monthlyAmount: number; spentThisPeriod: number } | null;
+}
+
+export function buildBudgetLine(context: BudgetLineContext): string | null {
+  const target = context.targetSetup;
+  if (!target) {
+    return null;
+  }
+  const exceedsTarget = typeof context.projectedRatio === 'number' && context.projectedRatio > 1;
+  return `Budget: ${formatBudgetDollars(target.spentThisPeriod)} of ${formatBudgetDollars(target.monthlyAmount)} ${target.category} spent this month${exceedsTarget ? '; this purchase would exceed the target' : ''}`;
+}
+
+export function buildBudgetChipViewModel(
+  context: StylePurchaseAnalysis['budgetContext'] | null | undefined,
+  budgetLine: string | null,
+): PurchaseAnalysisBudgetChipViewModel | null {
+  if (!budgetLine || !context || !context.targetSetup || context.purchaseSignal === 'no_signal') {
+    return null;
+  }
+  return {
+    caveats: context.caveats,
+    line: budgetLine,
+    signal: context.purchaseSignal,
+  };
+}
+
+function formatBudgetDollars(value: number): string {
+  return Number.isInteger(value) ? `$${value}` : `$${value.toFixed(2)}`;
+}
+
 function capConfidencePercentForCalibration(percent: number, analysis: StylePurchaseAnalysis): number {
   const basis = analysis.calibration.purchaseAnalysisReadiness.basis;
   if (basis === 'no_closet') return Math.min(percent, 45);
@@ -442,7 +516,9 @@ function calibrationReasonNotes(
   if (readiness.basis === 'no_closet') {
     notes.push('I can judge the item itself, but I do not know your wardrobe yet.');
   } else if (readiness.basis === 'thin_closet') {
-    notes.push('This is based on early closet signal, not a fully learned wardrobe.');
+    notes.push('Cautious read: add at least three starter closet anchors before I make wardrobe-fit claims.');
+  } else if (readiness.basis === 'starter_closet') {
+    notes.push('Cautious read from starter closet anchors; add more and I get sharper.');
   } else if (readiness.basis === 'imported_unconfirmed') {
     notes.push('Your imported closet suggests this, but those items have not been confirmed as active taste yet.');
   } else if (readiness.basis === 'closet_inferred') {
@@ -1044,6 +1120,40 @@ export function getPurchaseAnalysisWidgetHtml(): string {
     margin-bottom: 5px;
     text-transform: uppercase;
   }
+  .pa-budget-chip {
+    align-items: flex-start;
+    background: #FAF9F6;
+    border: 1px solid rgba(124, 45, 62, 0.14);
+    border-left: 4px solid #D4C4A8;
+    border-radius: 8px;
+    display: grid;
+    gap: 5px;
+    margin: 12px 0 0;
+    padding: 10px 12px;
+  }
+  .pa-budget-chip[data-signal="tight"] {
+    border-left-color: #7C2D3E;
+  }
+  .pa-budget-chip-label {
+    color: #6D6254;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+  .pa-budget-chip-line {
+    color: #2F2A24;
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.35;
+  }
+  .pa-budget-chip-caveat {
+    color: #6D6254;
+    font-size: 11px;
+    line-height: 1.35;
+  }
   .pa-editorial-decision {
     background: var(--pa-surface-alt);
     border-radius: 9px;
@@ -1250,6 +1360,7 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         findings: toArray(value.findings),
         overlap: toArray(value.overlap),
         gaps: toArray(value.gaps),
+        budgetChip: normalizeBudgetChip(value.budgetChip),
         judgmentSource: typeof value.judgmentSource === 'string' ? value.judgmentSource : 'computed_fallback',
         reasons: toArray(value.reasons).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
         shoppingAnswer: normalizeShoppingAnswer(value.shoppingAnswer),
@@ -1273,6 +1384,15 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         verdict: typeof value.verdict === 'string' ? value.verdict : 'consider',
         verdictEmphasis: typeof value.verdictEmphasis === 'string' ? value.verdictEmphasis : null,
         verdictHeadline: typeof value.verdictHeadline === 'string' ? value.verdictHeadline : 'Consider',
+      };
+    }
+    function normalizeBudgetChip(value) {
+      if (!value || typeof value !== 'object' || typeof value.line !== 'string' || !value.line) return null;
+      var signal = value.signal === 'tight' ? 'tight' : 'comfortable';
+      return {
+        caveats: toArray(value.caveats).filter(function (entry) { return typeof entry === 'string' && entry.length > 0; }),
+        line: value.line,
+        signal: signal,
       };
     }
     function normalizeStylistJudgment(value) {
@@ -1345,7 +1465,11 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         tone: value.tone === 'warn' ? 'warn' : 'neutral',
       };
     }
-    function extract(candidate) {
+    window.addEventListener('resize', notifyHeight, { passive: true });
+
+    function extract(candidate, depth) {
+      var currentDepth = typeof depth === 'number' ? depth : 0;
+      if (currentDepth > 4) return null;
       if (!candidate || typeof candidate !== 'object') return null;
       if (candidate.purchaseAnalysis) {
         var direct = normalize(candidate.purchaseAnalysis);
@@ -1358,7 +1482,7 @@ export function getPurchaseAnalysisWidgetHtml(): string {
       var keys = ['structuredContent', 'output', 'result', 'data', 'value', 'params'];
       for (var i = 0; i < keys.length; i += 1) {
         if (candidate[keys[i]]) {
-          var sub = extract(candidate[keys[i]]);
+          var sub = extract(candidate[keys[i]], currentDepth + 1);
           if (sub) return sub;
         }
       }
@@ -1702,6 +1826,15 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         : '';
       return '<div class="pa-editorial-decision"><div class="pa-editorial-insight-title">The decision</div><div class="pa-editorial-decision-row"><strong>' + escapeHtml(call[0]) + '</strong> — ' + escapeHtml(call[1]) + '</div>' + caveatHtml + '</div>';
     }
+    function renderBudgetChip(vm) {
+      var chip = vm.budgetChip;
+      if (!chip || !chip.line) return '';
+      var caveats = toArray(chip.caveats).filter(Boolean);
+      var caveatHtml = caveats.length
+        ? '<div class="pa-budget-chip-caveat">' + caveats.map(function (entry) { return escapeHtml(String(entry).replace(/_/g, ' ')); }).join(' · ') + '</div>'
+        : '';
+      return '<aside class="pa-budget-chip" data-budget-chip data-signal="' + escapeHtml(chip.signal === 'tight' ? 'tight' : 'comfortable') + '"><div class="pa-budget-chip-label">Fluent budget · verified</div><div class="pa-budget-chip-line">' + escapeHtml(chip.line) + '</div>' + caveatHtml + '</aside>';
+    }
     function renderEditorialInsights(vm) {
       return '<section class="pa-editorial-insights"><div><div class="pa-editorial-insight-title">What it unlocks</div><div class="pa-editorial-insight-copy">' + escapeHtml(buildWhatAdds(vm)) + '</div></div><div><div class="pa-editorial-insight-title">What it competes with</div><div class="pa-editorial-insight-copy">' + escapeHtml(buildWhereOverlaps(vm)) + '</div></div></section>';
     }
@@ -1769,6 +1902,7 @@ export function getPurchaseAnalysisWidgetHtml(): string {
         '<article class="pa-card pa-editorial"><div class="pa-card-inner">'
         + '<header class="pa-editorial-head"><div class="pa-thumb">' + renderThumb(vm.item) + '</div><div><div class="pa-editorial-kicker">Should I buy this?</div><h2 class="pa-editorial-title pa-title">' + escapeHtml(vm.item.name) + '</h2>' + (productMeta(vm.item) ? '<div class="pa-editorial-meta">' + escapeHtml(productMeta(vm.item)) + '</div>' : '') + '<div class="pa-editorial-verdict">' + escapeHtml(renderEditorialVerdictLabel(vm)) + '</div><p class="pa-editorial-headline">' + escapeHtml(vm.verdictHeadline) + '</p></div></header>'
         + '<section class="pa-editorial-section"><div class="pa-editorial-label">The call</div><p class="pa-take-copy">' + escapeHtml(buildEditorialTake(vm)) + '</p></section>'
+        + renderBudgetChip(vm)
         + renderEditorialPhotoRead(vm)
         + renderEditorialWhy(vm)
         + renderEditorialCloset(vm)
@@ -1832,6 +1966,7 @@ function buildPurchaseAnalysisWidgetViewModel(viewModel: PurchaseAnalysisViewMod
     confidence: viewModel.confidence,
     confidenceLabel: viewModel.confidenceLabel,
     confidencePercent: viewModel.confidencePercent,
+    ...(viewModel.budgetChip ? { budgetChip: viewModel.budgetChip } : {}),
     context: viewModel.context,
     findings: viewModel.findings,
     gaps: viewModel.gaps,
@@ -2112,6 +2247,7 @@ function buildShoppingAnswerViewModel(
   comparatorItemIdMode: 'canonical' | 'handles' = 'canonical',
   stylistJudgment?: PurchaseAnalysisStylistJudgmentViewModel | null,
   suppressWardrobeFitCopy = false,
+  budgetLine: string | null = null,
 ): PurchaseAnalysisShoppingAnswerViewModel {
   const closestComparators = suppressWardrobeFitCopy ? [] : buildShoppingClosestComparators(analysis, imageHints, comparatorItemIdMode);
   return {
@@ -2121,16 +2257,25 @@ function buildShoppingAnswerViewModel(
     evidence: suppressWardrobeFitCopy ? buildCandidateOnlyShoppingEvidence(analysis) : buildShoppingEvidence(analysis),
     rejectedComparators: suppressWardrobeFitCopy ? [] : buildShoppingRejectedComparators(analysis, comparatorItemIdMode),
     verdict: mapShoppingVerdict(verdict),
-    verdictReason:
+    verdictReason: appendBudgetLine(
       cleanPurchasePresentationCopy(
         suppressWardrobeFitCopy ? buildCandidateOnlySummary(analysis, verdict) : stylistJudgment?.rationale ?? buildSummary(analysis, verdict),
       ) ?? '',
+      budgetLine,
+    ),
     whatWouldChangeVerdict: stylistJudgment?.caveats.length
       ? stylistJudgment.caveats
       : cleanPurchasePresentationCopyArray(
           suppressWardrobeFitCopy ? buildCandidateOnlyVerdictChangers(analysis) : buildShoppingVerdictChangers(analysis, verdict),
         ),
   };
+}
+
+function appendBudgetLine(value: string, budgetLine: string | null): string {
+  if (!budgetLine) {
+    return value;
+  }
+  return value ? `${value} ${budgetLine}` : budgetLine;
 }
 
 function buildShoppingClosestComparators(
@@ -2305,6 +2450,9 @@ function isMissingEvidenceNote(note: string) {
 
 function buildShoppingVerdictChangers(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict): string[] {
   const changes: string[] = [];
+  const overlapNames = buildNamedOverlapList(analysis);
+  const ownedOverlapPhrase = buildOwnedOverlapCountPhrase(analysis);
+  const itemKind = describeCandidateItemKind(analysis);
   if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
     changes.push('A host-inspected candidate image showing a materially different silhouette, material, colorway, or role.');
   }
@@ -2312,11 +2460,21 @@ function buildShoppingVerdictChangers(analysis: StylePurchaseAnalysis, verdict: 
     changes.push('Images for the closest closet comparators confirming they are less visually similar than the current closet evidence suggests.');
   }
   if (verdict === 'skip') {
-    changes.push('A clear reason this would replace a worn-out closet item rather than add another near-duplicate.');
+    if (overlapNames.length > 0) {
+      changes.push(`A clear reason this would replace ${overlapNames[0]} instead of adding another similar ${itemKind}.`);
+    } else if (ownedOverlapPhrase) {
+      changes.push(`A clear replacement need despite the fact that ${ownedOverlapPhrase}.`);
+    } else {
+      changes.push('A clear reason this would replace a worn-out closet item rather than add another near-duplicate.');
+    }
   } else if (verdict === 'recommend') {
-    changes.push('Finding an active closet item in the same category, silhouette, color role, and use case.');
+    if (analysis.laneAssessment.introduces) {
+      changes.push(`Finding active closet items already covering the ${formatJudgmentAreaLabel(analysis.laneAssessment.introduces)} role.`);
+    } else {
+      changes.push('Finding an active closet item in the same category, silhouette, color role, and use case.');
+    }
   } else {
-    changes.push(`A clearer replacement need or a distinct use case for this ${describeCandidateItemKind(analysis)}.`);
+    changes.push(`A clearer replacement need or a distinct use case for this ${itemKind}.`);
   }
   return uniqueStrings(changes).slice(0, 4);
 }
@@ -2326,7 +2484,7 @@ function buildCandidateOnlyVerdictChangers(analysis: StylePurchaseAnalysis): str
   if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
     changes.push('A host-inspected candidate image showing concrete silhouette, material, colorway, and detail.');
   }
-  changes.push('A few starter closet anchors or confirmed active closet items before making wardrobe-fit claims.');
+  changes.push('At least three starter closet anchors before making wardrobe-fit claims; five anchors makes the read sharper.');
   return uniqueStrings(changes).slice(0, 4);
 }
 
@@ -2339,8 +2497,14 @@ function mapShoppingVerdict(verdict: PurchaseVerdict): PurchaseAnalysisShoppingV
 function buildReasons(analysis: StylePurchaseAnalysis, verdict: PurchaseVerdict): string[] {
   const reasons: string[] = [];
   const overlapNames = buildNamedOverlapList(analysis);
+  const ownedOverlapPhrase = buildOwnedOverlapCountPhrase(analysis);
   if (verdict === 'skip' && overlapNames.length > 0) {
-    reasons.push(`Your closet already covers this wardrobe job, especially with ${overlapNames.slice(0, 2).join(' and ')}.`);
+    const namedExamples = overlapNames.slice(0, 2).join(' and ');
+    reasons.push(
+      ownedOverlapPhrase
+        ? `Your closet already covers this wardrobe job: ${ownedOverlapPhrase}, including ${namedExamples}.`
+        : `Your closet already covers this wardrobe job, especially with ${namedExamples}.`,
+    );
   } else if (analysis.comparatorReasoning.notes.length > 0) {
     reasons.push(...analysis.comparatorReasoning.notes.slice(0, 2));
   }
@@ -2381,9 +2545,12 @@ function buildFindings(analysis: StylePurchaseAnalysis): PurchaseAnalysisFinding
   const findings: PurchaseAnalysisFindingViewModel[] = [];
   if (analysis.contextBuckets.exactComparatorItems.length > 0) {
     const overlapNames = buildNamedOverlapList(analysis);
+    const ownedOverlapPhrase = buildOwnedOverlapCountPhrase(analysis);
     findings.push({
       body:
-        overlapNames.length > 0
+        ownedOverlapPhrase && overlapNames.length > 0
+          ? `${sentenceCase(ownedOverlapPhrase)}; closest overlaps: ${overlapNames.join(' and ')}.`
+          : overlapNames.length > 0
           ? `Closest overlaps: ${overlapNames.join(' and ')}.`
           : `You already own direct overlaps in this kind of ${describeCandidateItemKind(analysis)}.`,
       bodySecondary: cleanPurchasePresentationCopy(analysis.contextBuckets.exactComparatorItems[0]?.reasons[0] ?? null),
@@ -2535,6 +2702,27 @@ function uniqueStrings(values: string[]): string[] {
   return result;
 }
 
+function buildOwnedOverlapCountPhrase(analysis: StylePurchaseAnalysis): string | null {
+  const count = analysis.contextBuckets.exactComparatorItems.length;
+  if (count < 2) return null;
+  const rawKind = describeCandidateItemKind(analysis);
+  const kind = pluralizeItemKind(rawKind, count);
+  const color = analysis.candidate.colorFamily?.trim().toLowerCase();
+  const descriptor = color && !kind.toLowerCase().startsWith(`${color} `) ? `${color} ${kind}` : kind;
+  return `you already own ${count} ${descriptor}`;
+}
+
+function pluralizeItemKind(kind: string, count: number): string {
+  if (count === 1) return kind;
+  if (/[^aeiou]y$/i.test(kind)) return `${kind.slice(0, -1)}ies`;
+  if (/(s|x|z|ch|sh)$/i.test(kind)) return `${kind}es`;
+  return `${kind}s`;
+}
+
+function sentenceCase(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 function buildNamedOverlapList(analysis: StylePurchaseAnalysis): string[] {
   return selectVisibleComparisons(analysis)
     .map((entry) => formatOwnedOverlapName(analysis.itemsById[entry.itemId]))
@@ -2595,7 +2783,7 @@ function formatRelationLabel(relation: StylePurchaseComparisonRelation): string 
 function describeCandidateItemKind(analysis: StylePurchaseAnalysis): string {
   const subcategory = analysis.candidate.subcategory?.trim().toLowerCase();
   if (subcategory) {
-    if (subcategory.endsWith('s')) return subcategory.slice(0, -1);
+    if (subcategory.endsWith('s') && !subcategory.endsWith('ss')) return subcategory.slice(0, -1);
     return subcategory;
   }
 

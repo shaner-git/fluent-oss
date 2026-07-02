@@ -5,6 +5,7 @@ import { createFluentMcpServer } from '../mcp';
 import { runWithFluentAuthProps } from '../auth';
 import { authorizeLocalBearer, defaultLocalScopes, LOCAL_AUTH_MODEL } from '../local/auth';
 import { maybeHandleStyleImageRequest } from '../style-image-handler';
+import { isProfiledMcpPath, resolveMcpRuntimeProfileForRequest } from '../chatgpt-profile-routing';
 import {
   checkExperimentalRuntime,
   createExperimentalRuntime,
@@ -69,7 +70,7 @@ async function main(): Promise<void> {
       return writeFetchResponse(res, styleImageResponse);
     }
 
-    if (url.pathname === '/mcp' || url.pathname === '/mcp/chatgpt') {
+    if (url.pathname === '/mcp' || isProfiledMcpPath(url.pathname)) {
       const tokenState = authorizeLocalBearer(runtime.paths.rootDir, req.headers.authorization);
       if (!tokenState) {
         res.statusCode = 401;
@@ -96,9 +97,9 @@ async function main(): Promise<void> {
         return;
       }
 
-      const route = url.pathname === '/mcp/chatgpt' ? '/mcp/chatgpt' : '/mcp';
+      const route = isProfiledMcpPath(url.pathname) ? url.pathname.replace(/\/$/, '') : '/mcp';
       const mcpServer = createFluentMcpServer(runtime.env, origin, {
-        profile: route === '/mcp/chatgpt' ? 'chatgpt_app' : 'full',
+        profile: resolveMcpRuntimeProfileForRequest(route),
       });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       await mcpServer.connect(transport);

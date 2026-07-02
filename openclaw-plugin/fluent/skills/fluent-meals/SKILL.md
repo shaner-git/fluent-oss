@@ -1,197 +1,103 @@
 ---
 name: fluent-meals
-description: Use when the user wants Meals help on top of Fluent MCP, such as planning dinners for the week, checking kitchen inventory, generating a grocery list, fixing meal data, or placing a grocery order from a plan.
+description: Use when the user wants Fluent Meals planning, recipes, grocery currentness, or pantry context.
 ---
 
 # Fluent Meals
 
-Use this skill for Fluent Meals workflows on top of Fluent MCP.
+Use this skill for Meals help grounded in the canonical Fluent `/mcp` public vNext profile.
 
-## When to Use This
-
-Use this skill when the user wants Meals help that depends on Fluent meal state, such as:
-
-- planning meals for the week
-- checking kitchen inventory
-- generating a grocery list from a plan
-- fixing recipe, grocery, or inventory state
-- ordering groceries from a hosted plan with current inventory truth
-
-## What This Skill Does
-
-- Reads canonical meal state from Fluent MCP.
-- Handles meals first-use onboarding when the meals domain is not ready.
-- Orchestrates weekly planning, grocery generation, inventory work, and recipe reads.
-- Keeps browser ordering outside Fluent Core and stops at plan or preflight state in this package unless an operator-owned execution path is explicitly available outside the package.
-- Requires a hosted order preflight before retailer automation.
+See [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md) for host-specific rendering rules.
 
 ## Core Rules
 
-- Use `fluent-core` patterns for readiness and lifecycle checks.
-- If capability discovery is deferred in the client, use `meals_list_tools` as the fallback directory.
-- Follow the host routing matrix in [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md) before choosing a rich render path.
-- Start setup, calibration, confidence-sensitive planning, inferred-food-pattern confirmation, and "what do you know about how we eat?" turns with `meals_get_onboarding_calibration`.
-- In OpenClaw, do not assume a Fluent widget or Claude-style visual surface. Default to canonical data and text unless an operator has explicitly provided a host-specific visual equivalent.
-- Prefer summary reads first.
-- If a summary read already answers the user's question, stop there unless the next step needs detail the summary did not provide.
-- Avoid duplicate reads in the same turn unless the user asks for a refresh.
-- Use writes only when the user clearly intends to change meal state.
-- Treat short grocery-status updates such as "Got Greek yogurt", "bought salmon", "picked up avocado", "we have garlic", or "I have enough Caesar dressing" as write intents, not acknowledgements. Resolve the item against the current week's grocery plan, call `meals_upsert_grocery_plan_action`, then acknowledge the persisted result.
-- Keep retailer ordering and local browser execution outside Fluent Core.
-- Keep final recommendations and prioritization in the agent.
-- Treat the grocery plan as planning state, not the final order list.
-- For pantry-style blockers, prefer lightweight sufficiency confirmation for the full week plan instead of inventing exact quantities.
-- Receipt-backed `purchased` actions should refresh future durable-coverage evidence, but should not invent exact quantities.
-- When the user explicitly wants meals to support a training week, read Health context and use its `trainingSupportSummary` as guidance only.
-- During explicit weekly meal planning or revision, pass that compact Health summary into `meals_generate_plan` or `meals_accept_plan_candidate` as `training_context`.
-- Do not read Health just because it exists. Only cross over when the current user request includes a clear training signal such as workouts, training, fitness, cutting, bulking, recovery, or a request to make meals support a training week.
-- When surfacing calories, protein, fiber, or similar totals from a generated meal plan, describe them as plan estimates or plan totals, not personalized dietary targets.
-
-## First-Use Flow
-
-When the user explicitly wants to set up Meals, or a Meals task needs state that is not ready:
-
-1. Use the `fluent-core` flow to confirm Meals is enabled and onboarding is in progress.
-2. Call `meals_get_onboarding_calibration` to separate confirmed preferences, pantry evidence, meal-history inference, grocery readiness, and unresolved questions.
-3. If capability discovery is deferred, call `meals_list_tools` and use its grouped output as the fallback directory.
-4. Ask only the minimum setup questions needed for the current request: usually household shape, allergies or hard avoids, cooking cadence, weeknight time, and grocery expectation for new users, or 1-3 confirm/correct questions for returning/imported users.
-5. Use `meals_record_calibration_response` only after explicit confirmation, rejection, correction, starter preference input, or pantry stale/accidental marking.
-6. When setup is complete, finish onboarding through the `fluent-core` flow.
-
-Treat Meals as ready only when Fluent marks it ready.
-
-Do not infer onboarding readiness from prior conversation state, cached client state, or local package state.
-
-Calibration language:
-
-- Pantry ownership, old plans, accepted recipes, and grocery actions are evidence, not confirmed preference.
-- Say "your pantry suggests" or "your meal history suggests" for inferred patterns. Do not say "you like X" unless the user confirmed it.
-- Allergies, medical restrictions, dietary constraints, and hard avoids require explicit user confirmation.
-- If calibration is thin, offer a starter plan or grocery list with lower confidence instead of forcing a long quiz.
+- Use the canonical hosted `/mcp` public profile. It exposes the vNext assistant tools, not old Meals-specific plan, preferences, inventory, history, grocery-generation, render, order-preflight, or retailer-execution tools.
+- Start broad planning, currentness, "what does Fluent know?", and weeknight-dinner turns with `fluent_get_context(domain="meals", intent="planning")` when available.
+- For planning, the context packet now carries the durable meal memory you plan from: a saved-recipe index grouped by meal type, confirmed preferences and hard avoids, soft likes/dislikes for ranking, and an on-hand inventory summary. Build the requested meals from those saved recipes by name — do not invent recipes when the index has matching saved ones.
+- The packet may include a `MealsHardConstraints` block of confirmed Tier-1 exclusions (allergies, hard avoids) — authoritative; never draft/suggest/save a meal/recipe/grocery item containing one, even when a saved recipe, a liked food, or a fresh-vs-frozen distinction seems to permit it; Fluent does not filter recipes, you must honor these when you draft.
+- The packet may include a `MealsSoftPreferences` block of confirmed soft likes/dislikes. These are SOFT signals, not rules: lean toward `likes` and away from `dislikes` when choosing among otherwise-acceptable options, but never hard-exclude or refuse a recipe/ingredient solely for a soft preference, never override an explicit in-turn user request, and never silently drop a user's choice. Hard constraints always outrank soft preferences; soft preferences shape ranking/variety, not gating.
+- Use the returned recipe index, knowledge summary (preferences and avoids), inventory summary, currentness, evidence gaps, suggested writebacks, and response guidance as the answer boundary.
+- Do not chain legacy detail reads to make a tentative suggestion — the planning memory is already in the packet. Only read a recipe or item in full when the user names it or asks to page beyond the index.
+- Keep prior chat/model memory separate from Fluent knowledge.
+- If grocery currentness is stale, missing, or incomplete, still give one safe tentative planning framework built from the saved recipe index and confirmed/inferred Meals facts when available, then ask one compact refresh or confirmation question before making a grocery-dependent plan.
+- Never stop a broad planning/currentness first response at only an intake question, multiple-choice card, or state dump. The first response must include the tentative non-grocery-dependent planning move before the question.
+- Always include the boundary sentence "I did not read outside meals or cross-domain Fluent context for this turn" unless you separately read shared or cross-domain context.
+- Always state "Nothing has been saved" in the first response unless a public write returned success and read-after-write evidence.
+- The host model drafts the plan. Fluent remembers context and evidence.
+- Public vNext writes are limited to `fluent_update_shared_profile_patch` for explicit shared or Meals profile facts, the named recipe tools (`fluent_save_recipe`, `fluent_update_recipe_patch`, `fluent_record_recipe_feedback`), `fluent_save_meal_plan` for one explicit user-approved host-authored meal plan, `fluent_apply_grocery_list_change` for one explicit current-list change, and the narrow budget writes (`fluent_set_budget_envelope`, `fluent_log_budget_spend`) for declared `style-clothing` or `meals-groceries` envelopes/spend.
+- Use `fluent_save_meal_plan` only after drafting the plan in conversation and receiving explicit user approval to save it. Then read back with `fluent_get_item(domain="meals", item_type="meal_plan", ...)` before claiming the plan is saved.
+- Use `fluent_apply_grocery_list_change` only after reading the current grocery list and getting explicit approval for one manual add, existing plan-item status, substitution, or manual item update. Do not use it for carts, checkout, orders, recipes, inventory truth, or broad preferences.
+- For saved-plan grocery deltas, make the grocery-list week explicit and consistent: read the grocery list for the week you intend to update, pass the same week as `week_start`, and omit `target_window` unless it exactly matches that readback week. Do not claim a grocery item was added until the same-week read-after-write shows it.
+- Do not use `fluent_save_meal_plan` for tentative drafts, server-side plan generation, hidden generated candidates, grocery-list deltas, pantry/fridge quantity truth, cooking events, inventory, or generic items.
+- Do not run retailer automation, checkout, browser execution, or grocery ordering from Fluent Core.
+- Do not use OpenClaw visualizer widgets, MCP Apps resources, or render adapters as public vNext behavior.
+- If OpenClaw cannot access canonical Fluent tools in the current session, say the Fluent read is unavailable and do not answer from prior memory as if it came from Fluent.
+- If the connected runtime only shows old `meals_*` detail tools for this public flow, treat the connection as stale or pre-vNext. Do not call those tools; ask the user to reconnect or refresh Fluent.
 
 ## Normal Operating Pattern
 
-Default to this pattern:
+1. Read `fluent_get_context(domain="meals", intent="planning")`.
+2. Answer from the packet's saved recipe index, confirmed preferences and avoids, MealsSoftPreferences as ranking/variety input only, on-hand inventory summary, currentness, and evidence gaps — grounding the plan in saved recipes, not generic ideas.
+3. Use `fluent_list_items(domain="meals", item_type="recipe")` only when the user names a specific recipe or asks to see more recipes than the packet's index lists (it is filtered by meal type and paginated).
+4. Use `fluent_list_items(domain="meals", item_type="meal_plan")` or `fluent_get_item(domain="meals", item_type="meal_plan")` when the user asks for current or saved meal plans.
+5. Use `fluent_list_items(domain="meals", item_type="grocery_list")` only when the user asks for the grocery list itself.
+6. Use `fluent_get_item` only for a specific saved item.
+7. Use `fluent_list_evidence` only when provenance or an evidence gap matters.
+8. Save only explicit durable shared or Meals facts through `fluent_update_shared_profile_patch`, then read back before claiming success.
+9. Save user-approved reusable recipes with `fluent_save_recipe`; include only fields the user supplied or approved, and do not invent missing quantities, servings, nutrition, cost, or timing.
+10. Save an approved host-authored meal plan with `fluent_save_meal_plan` only after the user approves the exact plan.
+11. Update saved recipes with `fluent_update_recipe_patch` only after identifying the saved recipe ID, then read back before claiming success.
+12. Record tried-it notes and recipe-specific outcomes with `fluent_record_recipe_feedback`; do not turn recipe feedback into global preferences unless the user separately approves that memory.
+13. Apply grocery-list changes with `fluent_apply_grocery_list_change` only for the four bounded list operations, using IDs or item keys from the current list readback and read-after-write proof. For plan-derived items, keep `week_start`, `target_window`, and the readback list on the same week.
 
-1. Use fresh Fluent capability state when readiness matters.
-2. Recover the surface with `meals_list_tools` only when capability discovery is deferred.
-3. Start with summary reads.
-4. Escalate to full documents only when the next step depends on missing detail.
-5. Prefer compact write acknowledgements unless the next step needs the full mutated document.
+## Cooking State
 
-Default low-cost tools:
+When the user says they are already cooking, have cooked, ate, or tried a meal:
 
-- `meals_get_onboarding_calibration` for setup, calibration, and confidence-sensitive planning or grocery turns
-- `meals_get_plan` with `view: "summary"`
-- `meals_list_plan_history`
-- `meals_get_preferences` with `view: "summary"`
-- `meals_get_inventory_summary`
-- `meals_generate_plan`
-- `meals_generate_grocery_plan`
-- `meals_get_current_grocery_list` with `view: "summary"` for ordinary grocery-list/status asks
-- `meals_get_grocery_plan` with `view: "summary"` only for explicit week-scoped/raw plan detail
-- `meals_prepare_order`
+- if it maps to a saved recipe, make a brief explicit offer in the same reply to record it (e.g. "Want me to log that to Fluent?") — do not end the turn without offering; on the user's yes, call `fluent_record_recipe_feedback` (approval="explicit_user_approved"; taste, difficulty, repeat), then cite read-after-write; the public vNext profile has no cooked-state tool, so feedback is the durable capture
+- do not imply the plan was refreshed from a new cooked state, and do not record anything the user did not confirm
 
-When the user says they are already cooking a planned meal or have started prep:
+When the user narrates other real-world state, proactively offer the matching capture (confirm first, then cite read-after-write): an approved drafted plan → `fluent_save_meal_plan`; a confirmed single bought or already-have item for the current week → `fluent_apply_grocery_list_change` (currentness_confirmed=true); a whole finished shop ("I went shopping", "got everything") → `fluent_apply_grocery_shopping_result` (mark_all_to_buy_bought=true or specific bought_items, currentness_confirmed=true), which marks the current list's bought items purchased and refreshes inventory presence (presence only, no quantity inference) in one approved action.
 
-- call `meals_mark_meal_cooked` before refreshing plan reads
-- if the meal was planned for a later day in the same week, Fluent can pull it forward and shift the remaining same-type schedule automatically
-- after the write, refresh with `meals_get_today_context` or `meals_get_plan` only if the user still needs the updated view
+Writes need `approval="explicit_user_approved"` and the host may also ask the user to approve the action; get an explicit yes before calling, and never fire a write off a bare narration. If a write is not approved (for example a "no approval received" result), say plainly that it needs the user's approval and re-offer it — never blame session tokens, write permissions, connectivity, or a fresh session.
 
-Use higher-detail reads only when needed:
+## Capture (write-acquisition)
 
-- `meals_get_recipe`
-- `meals_get_today_context`
-- `meals_get_inventory`
-- `meals_get_recipe_book`
+- **New facts stated this turn are the highest-priority capture.** If the user reveals a new durable food identity, pattern, or restriction in the current turn (e.g. "I've gone plant-forward", "I'm vegetarian now", "I'm gluten-free", a new allergy or hard avoid), offer to capture it as a portable Fluent fact BEFORE ending the turn - and prioritize that offer over offering to save a recipe or meal plan. A recipe/plan save lasts one week; a portable person-fact follows the user to every assistant they connect.
+- When a durable cross-domain person-fact surfaces during the task (an allergy, a hard avoid, a dietary pattern, an anti-favorite, a strong taste like/dislike), proactively offer ONE task-bound capture in the same reply - never a survey, at most one capture question per turn.
+- Never re-ask a fact already present in the context packet (compactFacts / shared person facts).
+- Apply the membership test: portable cross-domain facts -> capture via `fluent_update_shared_profile_patch` (they become available to every assistant the user connects); single-consumer Meals operational levers (grocery day, weeknight time limit, batch size) stay domain-local - do not frame those as portable.
+- For confirmed standing vegetarian, vegan, or pescatarian identities, include the canonical `pattern` enum in `fluent_update_shared_profile_patch` even when the user's wording is not a literal label. Never set `pattern` for hedged, leaning, mostly, trying, flexitarian, negated, or no-longer statements; leave those unset and do not capture them as standing exclusions.
+- At capture, state portability + action in one line ("kept in your Fluent profile so any assistant you connect can act on it, and Meals will plan around it"). Lead with action + cross-host, never "remembers."
+- The write still needs `approval="explicit_user_approved"` and read-after-write proof; offer proactively, get an explicit yes, then cite read-after-write.
 
-Recipe-book setup and browsing:
+## Answer Shape
 
-- use `meals_get_recipe_book` for shelves, why-shown reasons, catalog gaps, and safe recipe-specific actions
-- use `meals_apply_recipe_book_action` only after explicit user intent
-- treat Want to try, Favorite, and Not for us as recipe-specific evidence, not broad household preference, allergy, dietary restriction, or hard avoid
-- treat Pin to week as a week-scoped planning intent, not a durable preference
+For planning/currentness turns:
 
-Host presentation rule:
+- what Fluent can trust
+- what is inferred
+- what is stale, missing, or needs confirmation
+- one useful tentative next move when currentness allows it; for stale grocery state, make it explicitly not based on current groceries
+- exclude anything conflicting with a `MealsHardConstraints` entry and say why; if the user explicitly overrides a confirmed exclusion this turn, surface the conflict + get one confirmation before including it, then offer to update the fact
+- weight otherwise-acceptable options toward `MealsSoftPreferences.likes` and away from `MealsSoftPreferences.dislikes`, but never exclude, refuse, or silently drop a user choice solely for a soft preference
+- one compact question when currentness blocks a concrete plan
+- if the user revealed a new durable cross-domain food fact this turn, one portable-capture offer for it - before any recipe or meal-plan save offer
+- the exact boundary sentence "I did not read outside meals or cross-domain Fluent context for this turn" unless you separately read shared or cross-domain context
+- the exact write boundary "Nothing has been saved" unless a public write returned success and read-after-write evidence
 
-- OpenClaw does not ship a documented Fluent visual equivalent by default in this package.
-- For recipe-first turns, prefer `meals_get_recipe` and answer in text.
-- For grocery-list-first turns, prefer `meals_get_current_grocery_list` and answer in text.
-- Do not default to `meals_render_recipe_card` or `meals_render_grocery_list_v2` in OpenClaw.
-- For simple data questions, do not over-render.
+For recipe or grocery-list turns:
 
-Recipe presentation pattern:
+- use canonical item data when visible
+- give a complete text answer
+- do not imply a widget, card, checkout, or live grocery refresh happened unless the public tool result proves it
+- distinguish saved recipe state from recipe-specific feedback and broader food preferences
 
-- start with `meals_get_recipe`
-- if the user names a specific saved recipe or clearly refers to one, prefer Fluent recipe reads over generic cooking knowledge
-- treat asks like "show me the recipe", "how do I make X", "what's in X", "pull up X", and "walk me through X" as recipe-first turns when `X` matches a saved recipe
-- if the user is asking "which one is X" right after recipe discovery or list output, stay in recipe-disambiguation flow with `meals_list_recipes` or `meals_get_recipe`; do not jump to `meals_get_today_context` unless the user is explicitly asking about today's plan
-- for clearly recipe-centric turns, prefer canonical recipe data plus a structured text answer
-- do not call `meals_render_recipe_card` by default in OpenClaw
-- keep the text answer truthful and complete even when you expect the host to render the recipe card
-- if a saved recipe lookup succeeds, do not answer from prior knowledge unless the user explicitly asks for a generic version instead of the saved Fluent recipe
+## Boundaries
 
-Grocery-list presentation pattern:
-
-- when the user is asking for the actionable grocery view itself, such as "What's on my grocery list?", "What do I still need to buy?", or "Show me this week's grocery list", prefer `meals_get_current_grocery_list` and answer in text
-- do not require a raw grocery-plan read first for those ordinary grocery-list asks when a summary read is enough
-- gather or reconcile extra grocery state first only when the turn specifically needs underlying plan detail, reconciliation detail, or intent reconciliation:
-  - `meals_get_current_grocery_list`
-  - `meals_get_grocery_plan`
-  - `meals_prepare_order`
-  - `meals_list_grocery_intents`
-- do not require the user to ask for a "card" or "surface" explicitly when the turn is clearly grocery-list-first
-- do not use `meals_render_grocery_list_v2` by default in OpenClaw
-- for simple data questions such as quantities, ingredient checks, or pantry facts, do not jump to a render tool
-- keep the text answer truthful and complete even when you expect the host to render the grocery list
-
-## Weekly Planning Loop
-
-For explicit weekly planning:
-
-1. Confirm meals is ready.
-2. Read planning inputs with summary-first calls:
-   - `meals_get_preferences`
-   - `meals_get_inventory_summary`
-   - `meals_list_plan_history`
-3. Read more detail only if needed.
-4. Call `meals_generate_plan`.
-5. Present the candidate and collect approval or revisions.
-6. On approval, call `meals_accept_plan_candidate`.
-7. Generate the grocery plan with `meals_generate_grocery_plan`.
-8. Before any retailer ordering, run `meals_prepare_order` to reconcile what still needs to be bought right now.
-9. Hand off the reconciled `remainingToBuy` artifact instead of attempting local export or browser ordering from this package.
-
-When the user names a specific weekday or date for a meal during planning or revision:
-
-- treat that as a slot-level constraint, not a soft preference
-- pass it into `meals_generate_plan` as `overrides.pinnedMeals`
-- use one entry per fixed slot with `{ date, mealType, recipeId }`
-- prefer this for requests like "make Friday spaghetti", "put salmon on Wednesday lunch", or "move tacos to Apr 17 dinner"
-- if the recipe is not identified yet, resolve the recipe first, then regenerate with the pinned slot
-- do not rely on the planner's default dinner ordering to preserve a named weekday
-- when multiple explicit weekday requests exist, include all of them in the same `pinnedMeals` array so the candidate is generated around the full set of constraints
-
-When Meals is supporting a training week:
-
-- read Health summary context, not raw training internals
-- only do that when the current prompt clearly contains a training signal
-- bias the whole day around harder training days, with dinner complexity as the strongest lever
-- use `training_context` only for explicit planning or revision workflows, not casual meal chat
-- let `nutritionSupportMode` and `weekComplexity` shape choices, but do not let Health overwrite canonical meal state
-- keep food execution canonical in Meals
-
-Do not run the full planning loop for ordinary chat unless the user is clearly planning or revising a week.
-
-## Ordering Execution Boundary
-
-- Fluent MCP owns canonical meal plans, preferences, grocery plans, inventory, recipes, and feedback state.
-- Fluent Core owns lifecycle and onboarding truth.
-- This skill provides workflow guidance for first-use wording, planning orchestration, and the ordering handoff.
-- Keep retailer credentials out of Fluent MCP, D1, and hosted profile metadata.
-- Before any retailer handoff, use `meals_prepare_order` to reconcile what still needs to be bought right now.
-- Do not complete checkout inside OpenClaw. Stop at a reconciled list, cart/preflight handoff, or explicit external runner boundary.
-- If the user says they already bought items and inventory may be stale, pause ordering until inventory is updated.
-- Describe ordering state in these buckets when relevant: still need to buy, already have, already in cart, needs review.
-- Use pantry-first sufficiency confirmations only for low-risk pantry blockers. Do not use them for proteins, dairy, eggs, bread/wraps, fresh produce, or other items that still need quantity-aware review.
-- Treat retailer order details as the post-checkout source of truth. Do not infer `skipped` from omission, and preserve confirmed ordered extras as inventory evidence instead of fabricating grocery-plan history.
+- Pantry ownership, old plans, accepted recipes, and grocery actions are evidence, not confirmed preference.
+- Say "your pantry suggests" or "your meal history suggests" for inferred signals.
+- Allergies, medical restrictions, dietary constraints, and hard avoids require explicit user confirmation.
+- Once confirmed and present in `MealsHardConstraints`, treat allergies/hard-avoids as hard exclusions you must not plan around; a soft dislike (anti-favorite, taste dislike) is a preference to weight, NOT a hard exclusion.
+- `MealsSoftPreferences` are SOFT signals, not rules. Lean toward `likes` and away from `dislikes` when choosing among otherwise-acceptable options - but they are NOT exclusions: never hard-exclude or refuse a recipe/ingredient solely for a soft preference, never override an explicit in-turn user request (if the user asks for a disliked food, plan it), and never silently drop a user's choice. Hard constraints (`MealsHardConstraints`) always outrank soft preferences. A soft preference shapes ranking/variety, it does not gate.
+- Do not claim Fluent saved or updated anything without a successful public write and read-after-write proof.

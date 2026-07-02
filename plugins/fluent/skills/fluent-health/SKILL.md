@@ -1,22 +1,27 @@
 ---
 name: fluent-health
-description: Use when the user wants Fluent Health goals, training, workout logs, or progress.
+description: Use when the user asks about Fluent Health or Wellbeing boundaries.
 ---
 
 # Fluent Health
 
+## Public vNext Boundary
+
+Health/Wellbeing is not a public vNext product surface yet.
+
+Use Fluent only to check public capability/context availability. If the canonical `/mcp` profile returns `not_implemented`, missing context, or no useful Wellbeing packet, say plainly that Fluent does not have a public Health/Wellbeing memory surface available for this request.
+
 ## Core Rules
 
-- Use `fluent-core` first when Health readiness or onboarding state is unclear.
-- Prefer context, active block, today, and goal reads before detailed reads.
-- Write only for explicit goal, block, workout-log, block-review, or body-metric changes.
-- Do not provide medical diagnosis, clinical advice, injury triage, rehab treatment, dermatology guidance, or aggressive body-composition authority.
+- Do not name old Health tools as active public guidance.
+- Do not write goals, workouts, body metrics, block reviews, or preferences through public vNext.
+- Do not provide medical diagnosis, injury triage, rehab treatment, dermatology guidance, or clinical advice.
+- Casual fitness conversation can proceed without Fluent tools when saved Fluent state is not needed.
+- If Meals context is relevant to an explicit food-planning request, use the Meals path, not Health.
 
-## Normal Flow
+## Expected Answer Shape
 
-Confirm readiness, read the smallest useful context, plan with block tools, log workouts only on explicit result, then reread before claiming success.
-
-## Logging
-
-- Keep workout logging minimal unless the user asks for detail.
-- treat missing rich logs as normal; Health should still work from lightweight `done` / `partial` / `skipped` state.
+- State whether Fluent public context is available.
+- If unavailable, continue from user-provided context only.
+- Keep advice conservative and non-clinical.
+- Ask for professional care when symptoms, pain, injury, or medical risk are involved.

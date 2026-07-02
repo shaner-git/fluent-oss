@@ -147,12 +147,12 @@ export function buildFluentHomeWidgetMeta(origin: string) {
       'Fluent Home check-in with meals, style, and health context for the current account.',
     'openai/widgetDomain': origin,
     'openai/widgetPrefersBorder': true,
+    // MCP Apps `ui.domain` is host-provisioned (Claude rejects a server-supplied origin).
     ui: {
       csp: {
         connectDomains: [],
         resourceDomains: [],
       },
-      domain: origin,
       prefersBorder: true,
     },
   } as const;
@@ -516,7 +516,10 @@ export function getFluentHomeWidgetHtml() {
           return true;
         }
         if (getBridgeTargets().length) {
-          bridgeNotify('ui/message', { role: 'user', content: [{ type: 'text', text: trimmed }] });
+          // MCP Apps 'ui/message' (SEP-1865) is a JSON-RPC REQUEST the host adds to the conversation, not a
+          // notification. claude.ai routes it via the request path (like tools/call); the id-less notification
+          // form is dropped. Send it as a request so the host-turn handoff actually fires.
+          bridgeRequest('ui/message', { role: 'user', content: { type: 'text', text: trimmed } }, 20000).catch(function () {});
           return true;
         }
       } catch (error) {}

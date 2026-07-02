@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
 export const provenanceInputSchema = {
-  confidence: z.number().min(0).max(1).optional(),
-  session_id: z.string().optional(),
-  source_agent: z.string().optional(),
-  source_skill: z.string().optional(),
-  source_type: z.string().optional(),
+  confidence: z.number().min(0).max(1).optional().describe('Optional host confidence for this explicit write, from 0 to 1.'),
+  session_id: z.string().optional().describe('Optional host session or conversation identifier for provenance.'),
+  source_agent: z.string().optional().describe('Optional host, assistant, or client name that initiated the write.'),
+  source_skill: z.string().optional().describe('Optional skill, workflow, or verifier name that initiated the write.'),
+  source_type: z.string().optional().describe('Optional provenance source type. Use acceptance_test only for non-durable verifier writes.'),
 };
 
 export const readViewSchema = z.enum(['summary', 'full']).optional();

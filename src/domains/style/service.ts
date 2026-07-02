@@ -1,4 +1,5 @@
 import type { MutationProvenance } from '../../auth';
+import type { InternalPurchaseContext } from '../budgets/service';
 import path from 'node:path';
 import type { FluentBlobStore, FluentDatabase } from '../../storage';
 import { StyleRepository } from './repository';
@@ -13,12 +14,18 @@ import {
   inferStyleOnboardingMode,
   inferStylePhotoKind,
   inferStylePhotoSource,
+  isStyleDisplayPhoto,
+  isStyleFitPhoto,
   isStylePurchaseEvalReady,
   mergeStyleProfile,
   normalizePhotoInput,
   normalizeStyleItemStatus,
   normalizeStyleItemInput,
   normalizeStyleItemProfile,
+  normalizeStyleCategoryStrict,
+  normalizeStyleColorFamily,
+  normalizeStyleRole,
+  normalizeStyleSubcategory,
   normalizeStyleProfile,
   normalizeStyleProfilePatch,
   normalizeStyleComparatorKey,
@@ -71,6 +78,7 @@ import type {
   StylePurchaseAnalysis,
   StylePurchaseCandidate,
   StylePurchaseAnalysisItemMatch,
+  StylePurchaseBudgetContext,
   StylePurchaseVisualEvidence,
   StyleComparatorCoverage,
   StyleCalibrationSignalKind,
@@ -376,6 +384,116 @@ function isAcceptanceTestCalibrationWrite(provenance: MutationProvenance): boole
   return new Set(['acceptance_test', 'acceptance-test', 'verifier_acceptance_test']).has(provenance.sourceType.trim().toLowerCase());
 }
 
+type StyleItemProfileField = keyof StyleItemProfileDocument;
+
+export const STYLE_ITEM_FIT_FIELDS = ['fitObservations', 'fitVerdict', 'ownedSize', 'lengthNote'] as const satisfies readonly StyleItemProfileField[];
+
+export interface StyleItemProfileMergeAuditEntry {
+  changed: boolean;
+  field: StyleItemProfileField;
+  fromSource: string | null;
+  toSource: string | null;
+}
+
+export type StyleItemProfileMergeResult = StyleItemProfileRecord & {
+  mergeAudit: StyleItemProfileMergeAuditEntry[];
+};
+
+const STYLE_ITEM_PROFILE_FIELDS: StyleItemProfileField[] = [
+  'avoidOccasions',
+  'bestOccasions',
+  'confidence',
+  'descriptorConfidence',
+  'dressCode',
+  'fabricHand',
+  'fitObservations',
+  'fitVerdict',
+  'itemType',
+  'lengthNote',
+  'ownedSize',
+  'pairingNotes',
+  'polishLevel',
+  'qualityTier',
+  'reanalyzePending',
+  'reanalyzeRequestedAt',
+  'seasonality',
+  'silhouette',
+  'styleRole',
+  'structureLevel',
+  'tags',
+  'texture',
+  'useCases',
+  'avoidUseCases',
+  'visualWeight',
+];
+
+const STYLE_ITEM_PROFILE_CONTROL_FIELDS = new Set<StyleItemProfileField>([
+  'reanalyzePending',
+  'reanalyzeRequestedAt',
+]);
+
+export const STYLE_ITEM_PROFILE_SOURCE_RANK: Record<string, number> = {
+  host_fit_vision: 3,
+  host_text: 1,
+  host_vision: 3,
+  host_visual_inspection: 3,
+  heuristic_bootstrap: 0,
+  inferred: 0,
+  editor: 5,
+  manual_enrichment: 5,
+  starter_closet_description: 1,
+  style_auto_bootstrap: 0,
+  style_starter_closet: 1,
+  stylist_visual: 3,
+  tag_ocr: 4,
+  test: 1,
+  url_scrape: 2,
+  user: 5,
+  user_correction: 5,
+};
+
+// Generic garment-type, cut/fit, and color words used by findStyleItemDuplicates to stop-word the
+// name-overlap signal. These carry no item identity (color is already scored on its own axis), so a
+// shared generic word like "short"/"black"/"slim" must NOT earn the +0.05 name-match weight and tip a
+// brandless type+color coincidence to the 0.70 duplicate gate.
+const STYLE_GENERIC_NAME_TOKENS = new Set<string>([
+  // garment types (incl. de-punctuated forms, since tokens are punctuation-stripped before lookup:
+  // "t-shirt" -> "tshirt", "long-sleeve" -> "longsleeve")
+  'short', 'shorts', 'tee', 'tees', 'shirt', 'shirts', 'tshirt', 'tshirts', 'jean', 'jeans', 'pant',
+  'pants', 'sweatpant', 'sweatpants', 'trouser', 'trousers', 'chino', 'chinos', 'sneaker', 'sneakers',
+  'shoe', 'shoes', 'boot', 'boots', 'loafer', 'loafers', 'sandal', 'sandals', 'jacket', 'coat', 'blazer',
+  'sweater', 'sweatshirt', 'hoodie', 'cardigan', 'dress', 'skirt', 'top', 'tank', 'polo', 'henley',
+  'overshirt', 'vest', 'crewneck', 'vneck', 'longsleeve', 'pullover',
+  // cuts / fits / generic descriptors
+  'slim', 'regular', 'relaxed', 'straight', 'skinny', 'tapered', 'cropped', 'oversized', 'classic',
+  'standard', 'fitted', 'loose', 'athletic', 'performance', 'essential', 'basic', 'original',
+  // colors (already scored on the color axis — must not double-count)
+  'black', 'white', 'navy', 'blue', 'gray', 'grey', 'green', 'red', 'brown', 'tan', 'beige', 'olive',
+  'khaki', 'pink', 'purple', 'orange', 'yellow', 'cream', 'charcoal', 'denim', 'ivory', 'burgundy', 'maroon',
+]);
+
+// Compact per-candidate discriminators surfaced on a duplicate warning so the HOST can decide
+// same-vs-different from concrete signals (Fluent surfaces, host decides). Only present (non-empty)
+// fields are included. No photo URLs — the host inspects photos via the canonical media/render path.
+export interface StyleDuplicateCandidateSignals {
+  brand?: string;
+  colorFamily?: string;
+  colorName?: string;
+  itemType?: string;
+  size?: string;
+  styleRole?: string;
+  subcategory?: string;
+  tags?: string[];
+}
+
+export interface StyleDuplicateCandidate {
+  id: string;
+  name: string | null;
+  reason: string;
+  score: number;
+  signals: StyleDuplicateCandidateSignals;
+}
+
 export class StyleService {
   private readonly repository: StyleRepository;
 
@@ -383,6 +501,12 @@ export class StyleService {
     private readonly db: FluentDatabase,
     private readonly options: {
       artifacts?: FluentBlobStore;
+      budgets?: {
+        getPurchaseContext: (input: {
+          amount?: number | null;
+          category: 'style-clothing';
+        }) => Promise<InternalPurchaseContext | StylePurchaseBudgetContext>;
+      } | null;
       imageDeliverySecret?: string | null;
       origin?: string | null;
     } = {},
@@ -432,6 +556,7 @@ export class StyleService {
     let profileCount = 0;
     let primaryPhotoCount = 0;
     let deliverablePhotoCount = 0;
+    let pendingReanalyzeCount = 0;
     let usableProfileCount = 0;
     let stylistDescriptorCount = 0;
 
@@ -460,6 +585,7 @@ export class StyleService {
       profileCount += item.profile ? 1 : 0;
       primaryPhotoCount += item.photos.some((photo) => photo.isPrimary) ? 1 : 0;
       deliverablePhotoCount += item.photos.some((photo) => photo.delivery) ? 1 : 0;
+      pendingReanalyzeCount += item.profile?.raw.reanalyzePending === true ? 1 : 0;
       usableProfileCount += hasUsableStyleProfileEvidence(item.profile?.raw ?? null) ? 1 : 0;
       stylistDescriptorCount += hasStyleDescriptors(item.profile?.raw ?? null) ? 1 : 0;
     }
@@ -487,6 +613,11 @@ export class StyleService {
         .sort((left, right) => right.count - left.count || left.status.localeCompare(right.status)),
       itemCount: activeItems.length,
       onboardingMode: inferStyleOnboardingMode(activeItems.length),
+      pendingReanalyzeCount,
+      pendingReanalyzeItemIds: activeItems
+        .filter((item) => item.profile?.raw.reanalyzePending === true)
+        .map((item) => item.id)
+        .slice(0, 3),
       photoCount,
       profile,
       profileCount,
@@ -859,6 +990,320 @@ export class StyleService {
     return after;
   }
 
+  // Onboarding create path (tasks/closet-onboarding-design.md §3). A thin create-only front door over
+  // upsertItem that adds what onboarding needs: server-side normalization (strict category, colorFamily,
+  // styleRole — D3/D4/D6), CREATE-correct comparatorKey inference (upsertItem reads before?.profile which
+  // is null on create — H2/R3), dedup-on-add, client_token idempotency (D13), the host-vision profile
+  // (replacing the heuristic stub), and the review block. Rich metadata + the review flag ride in the
+  // provenance columns because normalizeStyleItemProfile strips unknown keys from profile.raw (D2/R1).
+  async createItem(input: {
+    item: unknown;
+    profile?: unknown;
+    technicalMetadata?: unknown;
+    fieldEvidence?: unknown;
+    overallConfidence?: number | null;
+    hostModel?: string | null;
+    hasImage?: boolean;
+    onDuplicate?: 'warn' | 'force' | 'skip';
+    clientToken?: string | null;
+    batchId?: string | null;
+    provenance: MutationProvenance;
+    sourceSnapshot?: unknown;
+  }): Promise<{
+    duplicateCandidates: StyleDuplicateCandidate[];
+    idempotentReplay: boolean;
+    item: StyleItemRecord | null;
+    lowConfidenceFields: string[];
+    normalizationNotes: string[];
+    profileMethod: 'heuristic_bootstrap' | 'host_text' | 'host_vision';
+    status: 'created' | 'duplicate_warning' | 'skipped_duplicate';
+  }> {
+    const raw = normalizeStyleItemInput(input.item);
+    const notes: string[] = [];
+
+    const category = normalizeStyleCategoryStrict(raw.category);
+    if (!category) {
+      throw new Error(
+        `fluent_create_style_item: category ${JSON.stringify(asNullableString(raw.category))} is not canonical (expected one of TOP, BOTTOM, OUTERWEAR, SHOE, ACCESSORY).`,
+      );
+    }
+    const subcategory = normalizeStyleSubcategory(raw.subcategory);
+    if (!subcategory) {
+      throw new Error('fluent_create_style_item: subcategory is required (a short garment type such as Tee, Jean, Sneaker).');
+    }
+    const brand = asNullableString(raw.brand);
+    const name = asNullableString(raw.name);
+    const size = asNullableString(raw.size);
+
+    const rawColorFamily = asNullableString(raw.color_family ?? raw.colorFamily);
+    const colorFamily = normalizeStyleColorFamily(rawColorFamily);
+    if (rawColorFamily && !colorFamily) {
+      notes.push(`colorFamily ${JSON.stringify(rawColorFamily)} is not canonical; preserved as colorName`);
+    }
+    const colorName = asNullableString(raw.color_name ?? raw.colorName) ?? (rawColorFamily && !colorFamily ? rawColorFamily : null);
+
+    let colorHex = asNullableString(raw.color_hex ?? raw.colorHex);
+    if (colorHex) {
+      const hex = colorHex.startsWith('#') ? colorHex : `#${colorHex}`;
+      colorHex = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex.toLowerCase() : null;
+      if (!colorHex) notes.push('colorHex was not a valid #RRGGBB value; dropped');
+    }
+
+    const formalityRaw = asNullableNumber(raw.formality);
+    const formality = formalityRaw === null ? null : Math.min(5, Math.max(1, Math.round(formalityRaw)));
+
+    // Host profile (the 20 stored fields). Distinguish "host supplied a profile" from "omitted": when it
+    // is omitted we must NOT overwrite upsertItem's heuristic bootstrap with an empty host profile
+    // (design §3 step 9). styleRole is snapped to the wardrobe-job vocabulary.
+    const hostProfileRecord = asRecord(parseJsonLike(input.profile));
+    const hasHostProfile = hostProfileRecord !== null && Object.keys(hostProfileRecord).length > 0;
+    const profileDoc = normalizeStyleItemProfile(input.profile ?? {});
+    if (profileDoc.styleRole) {
+      const snapped = normalizeStyleRole(profileDoc.styleRole);
+      if (snapped !== profileDoc.styleRole) {
+        notes.push(`styleRole ${JSON.stringify(profileDoc.styleRole)} normalized to ${JSON.stringify(snapped)}`);
+      }
+      profileDoc.styleRole = snapped;
+    }
+
+    // CREATE-correct comparatorKey: infer from category/subcategory + the host's profile signals
+    // (itemType/tags), but WITHOUT the host's comparator_key hint — a wrong hint must not be able to save
+    // a jean as a polo (D8). The hint is advisory: used only to break a tie that inference leaves 'unknown'.
+    let comparatorKey = inferStyleComparatorKey({
+      category,
+      name,
+      profile: { itemType: profileDoc.itemType, styleRole: profileDoc.styleRole, tags: profileDoc.tags },
+      subcategory,
+      tags: profileDoc.tags,
+    });
+    if (comparatorKey === 'unknown') {
+      const hint = normalizeStyleComparatorKey(raw.comparator_key ?? raw.comparatorKey);
+      if (hint !== 'unknown') {
+        comparatorKey = hint;
+      }
+    }
+
+    // Provenance honesty (GAP-4/R9): with no image delivered, a host_vision claim is impossible.
+    const hasImage = input.hasImage === true;
+    const fieldEvidence = downgradeOnboardingFieldEvidence(input.fieldEvidence, hasImage);
+    const hasFieldEvidence = fieldEvidence !== null && Object.keys(fieldEvidence).length > 0;
+    const profileMethod: 'heuristic_bootstrap' | 'host_text' | 'host_vision' = !hasHostProfile
+      ? 'heuristic_bootstrap'
+      : hasImage
+        ? 'host_vision'
+        : 'host_text';
+    const lowConfidenceFields = computeLowConfidenceOnboardingFields(fieldEvidence, 0.6);
+    // Flag for review when a field is low-confidence, OR overall confidence is low, OR the item is thin
+    // (no host profile and no evidence) — a bare create must not look review-clean (Codex review).
+    const overallConfidence = typeof input.overallConfidence === 'number' ? input.overallConfidence : null;
+    const needsReview =
+      lowConfidenceFields.length > 0 ||
+      (overallConfidence !== null && overallConfidence < 0.6) ||
+      (!hasHostProfile && !hasFieldEvidence);
+
+    // Idempotency (D13) FIRST, before dedup: a client_token maps to a deterministic id (hash of the EXACT
+    // token — collision-safe, unlike sanitize+truncate), so a retried create returns the SAME row rather
+    // than minting a new uuid or being flagged as a duplicate of itself.
+    const itemId = input.clientToken
+      ? `style-item:ct:${await hashClientToken(input.clientToken)}`
+      : `style-item:${crypto.randomUUID()}`;
+    if (input.clientToken) {
+      const existing = await this.getItem(itemId);
+      if (existing) {
+        return { duplicateCandidates: [], idempotentReplay: true, item: existing, lowConfidenceFields, normalizationNotes: notes, profileMethod, status: 'created' };
+      }
+    }
+
+    // Dedup-on-add: warn (default) writes nothing; skip returns the match; force creates anyway.
+    const duplicateCandidates = await this.findStyleItemDuplicates({ brand, colorFamily: colorFamily ?? colorName, comparatorKey, name });
+    const onDuplicate = input.onDuplicate ?? 'warn';
+    if (duplicateCandidates.length > 0 && onDuplicate !== 'force') {
+      return {
+        duplicateCandidates,
+        idempotentReplay: false,
+        item: onDuplicate === 'skip' ? await this.getItem(duplicateCandidates[0].id) : null,
+        lowConfidenceFields,
+        normalizationNotes: notes,
+        profileMethod,
+        status: onDuplicate === 'skip' ? 'skipped_duplicate' : 'duplicate_warning',
+      };
+    }
+
+    // Review block + technical metadata -> provenance columns (profile.raw strips unknown keys, D2).
+    const technicalMetadata = {
+      ...(asRecord(parseJsonLike(input.technicalMetadata)) ?? {}),
+      review: {
+        batchId: input.batchId ?? null,
+        clientToken: input.clientToken ?? null,
+        hostModel: input.hostModel ?? null,
+        lowConfidenceFields,
+        needsReview,
+        onboardingSource: profileMethod,
+        overallConfidence,
+      },
+    };
+
+    const created = await this.upsertItem({
+      item: {
+        brand,
+        category,
+        color_family: colorFamily,
+        color_hex: colorHex,
+        color_name: colorName,
+        comparator_key: comparatorKey,
+        field_evidence: fieldEvidence,
+        formality,
+        id: itemId,
+        name,
+        size,
+        status: 'active',
+        subcategory,
+        technical_metadata: technicalMetadata,
+      },
+      provenance: input.provenance,
+      sourceSnapshot: {
+        ...(asRecord(parseJsonLike(input.sourceSnapshot)) ?? {}),
+        createdVia: 'fluent_create_style_item',
+        hostModel: input.hostModel ?? null,
+        onboardingSource: profileMethod,
+        source: hasImage ? 'host_vision' : 'host_text',
+      },
+    });
+
+    // Replace upsertItem's heuristic bootstrap with the host understanding ONLY when the host supplied a
+    // profile; otherwise the bootstrap stands (design §3 step 9 — never overwrite it with an empty doc).
+    if (hasHostProfile) {
+      await this.upsertItemProfile({
+        fieldEvidence,
+        hasImage,
+        itemId: created.id,
+        method: hasImage ? 'host_vision' : 'host_text',
+        profile: profileDoc,
+        provenance: input.provenance,
+        source: 'style_host_onboarding',
+      });
+    }
+
+    return {
+      duplicateCandidates: [],
+      idempotentReplay: false,
+      item: await this.getItem(created.id),
+      lowConfidenceFields,
+      normalizationNotes: notes,
+      profileMethod,
+      status: 'created',
+    };
+  }
+
+  // Dedup-on-add scoring: same comparatorKey 0.5 + same brand 0.3 + same color 0.15 + a shared MEANINGFUL
+  // name token 0.05; >= 0.7 is a candidate (gate raised from the design's 0.6 per Codex — at 0.6 a second
+  // different-brand navy jean, comparator+color = 0.65, would be wrongly blocked; 0.7 needs same type AND
+  // same brand, or type+color+name). Generic garment/cut/color words ("short", "black", "slim", …) carry
+  // no identity, so they are stop-worded OUT of the name-token signal — otherwise a brandless type+color
+  // coincidence plus a generic word (e.g. "short") would tip exactly to 0.70 and wrongly block a distinct
+  // item (the Nike-SB-vs-black-performance-short false positive). Returns up to 5, highest first.
+  async findStyleItemDuplicates(draft: {
+    brand: string | null;
+    colorFamily: string | null;
+    comparatorKey: string;
+    name: string | null;
+  }): Promise<StyleDuplicateCandidate[]> {
+    const norm = (value: string | null | undefined) => (value ?? '').trim().toLowerCase();
+    // Tokenize a name to lowercased, PUNCTUATION-STRIPPED tokens so hyphenated/punctuated generic words
+    // ("t-shirt" -> "tshirt") get caught by the stop-word lookup instead of slipping through as
+    // "meaningful" (Codex review). A token is meaningful only if > 2 chars and not a generic
+    // garment-type/cut/color word (color scores on its own axis, so color words must not double-count).
+    const tokenize = (value: string | null | undefined) => norm(value).split(/\s+/).map((token) => token.replace(/[^a-z0-9]+/g, '')).filter(Boolean);
+    // Brand match key: punctuation/connector-insensitive so spelling variants are the SAME brand
+    // ("A.P.C."=="APC", "Rag & Bone"=="Rag and Bone", "Levi's"=="Levis") for both the brand axis and the
+    // brand-conflict gate — otherwise a re-add with a differently-spelled brand wrongly slips (Codex review).
+    const brandKey = (value: string | null | undefined) => norm(value).replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '');
+    const isMeaningfulNameToken = (token: string) => token.length > 2 && !STYLE_GENERIC_NAME_TOKENS.has(token);
+    // Canonical name key for the exact-name fallback: crudely singularize each token and order-insensitively
+    // join, so trivial variants ("Black Performance Short" vs "…Shorts") of an all-generic name still match.
+    const canonicalNameKey = (value: string | null | undefined) => tokenize(value)
+      .map((token) => (token.length > 3 && token.endsWith('s') ? token.slice(0, -1) : token))
+      .sort()
+      .join(' ');
+    const draftNameTokens = new Set(tokenize(draft.name).filter(isMeaningfulNameToken));
+    const candidates: StyleDuplicateCandidate[] = [];
+    const trimmedOrNull = (value: unknown): string | null =>
+      typeof value === 'string' && value.trim() ? value.trim() : null;
+    for (const item of await this.listItems()) {
+      if (item.status !== 'active') continue;
+      let score = 0;
+      const reasons: string[] = [];
+      if (draft.comparatorKey !== 'unknown' && item.comparatorKey === draft.comparatorKey) {
+        score += 0.5;
+        reasons.push('same type');
+      }
+      const draftBrandKey = brandKey(draft.brand);
+      const itemBrandKey = brandKey(item.brand);
+      let brandAxisMatched = false;
+      if (draftBrandKey && draftBrandKey === itemBrandKey) {
+        score += 0.3;
+        reasons.push('same brand');
+        brandAxisMatched = true;
+      }
+      if (draft.colorFamily && norm(item.colorFamily ?? item.colorName) === norm(draft.colorFamily)) {
+        score += 0.15;
+        reasons.push('same color');
+      }
+      // The whole NAME signal (token overlap + exact-name) is gated on brand compatibility: if BOTH sides
+      // carry explicit brand fields that DISAGREE, the name can't contribute — different brands are
+      // different items, even when type/color/(generic) name coincide. This kills the brand-mismatch
+      // false-positive class (e.g. Nike "Short" vs Adidas "Shorts"; "Red Wing" vs "Wing + Horns") in one
+      // rule; the host can still force-add if they truly are the same. (Codex review.)
+      const brandsConflict = Boolean(itemBrandKey && draftBrandKey && itemBrandKey !== draftBrandKey);
+      const itemMatchTokens = new Set(tokenize(item.name));
+      const draftMatchTokens = new Set(draftNameTokens);
+      // Asymmetric brand recovery: when exactly one side carries a brand FIELD (the other has the brand in
+      // its NAME), fold that brand's MEANINGFUL tokens into the name match so e.g. existing "Nike" +
+      // "SB Chino Short" vs draft "Nike SB Chino Short" (no brand field) is still caught.
+      if (!brandAxisMatched && (!itemBrandKey || !draftBrandKey)) {
+        for (const brandToken of tokenize(item.brand)) {
+          if (isMeaningfulNameToken(brandToken)) itemMatchTokens.add(brandToken);
+        }
+        for (const brandToken of tokenize(draft.brand)) {
+          if (isMeaningfulNameToken(brandToken)) draftMatchTokens.add(brandToken);
+        }
+      }
+      // An IDENTICAL canonical name (punctuation/plural-insensitive) is a name signal even when every token
+      // is generic, so re-adding the exact same all-generic-named item still warns.
+      const draftCanonicalName = canonicalNameKey(draft.name);
+      const exactNameMatch = draftCanonicalName.length > 0 && draftCanonicalName === canonicalNameKey(item.name);
+      const meaningfulNameOverlap = draftMatchTokens.size > 0 && [...draftMatchTokens].some((token) => itemMatchTokens.has(token));
+      if (!brandsConflict && (exactNameMatch || meaningfulNameOverlap)) {
+        score += 0.05;
+        reasons.push(exactNameMatch ? 'same name' : 'name overlap');
+      }
+      if (score >= 0.7) {
+        const raw = item.profile?.raw;
+        const signals: StyleDuplicateCandidateSignals = {};
+        const brand = trimmedOrNull(item.brand);
+        if (brand) signals.brand = brand;
+        const colorFamily = trimmedOrNull(item.colorFamily);
+        if (colorFamily) signals.colorFamily = colorFamily;
+        const colorName = trimmedOrNull(item.colorName);
+        if (colorName) signals.colorName = colorName;
+        const itemType = trimmedOrNull(raw?.itemType);
+        if (itemType) signals.itemType = itemType;
+        const size = trimmedOrNull(item.size);
+        if (size) signals.size = size;
+        const styleRole = trimmedOrNull(raw?.styleRole);
+        if (styleRole) signals.styleRole = styleRole;
+        const subcategory = trimmedOrNull(item.subcategory);
+        if (subcategory) signals.subcategory = subcategory;
+        const tags = Array.isArray(raw?.tags)
+          ? raw.tags.map((tag) => trimmedOrNull(tag)).filter((tag): tag is string => tag !== null).slice(0, 6)
+          : [];
+        if (tags.length) signals.tags = tags;
+        candidates.push({ id: item.id, name: item.name, reason: reasons.join(', '), score: Math.round(score * 100) / 100, signals });
+      }
+    }
+    return candidates.sort((left, right) => right.score - left.score).slice(0, 5);
+  }
+
   async archiveItem(input: {
     itemId?: string | null;
     itemName?: string | null;
@@ -956,14 +1401,22 @@ export class StyleService {
       normalizePhotoInput(input.photos).map(async (photo, index) => {
         const photoId = asNullableString(photo.id) ?? `style-photo:${input.itemId}:${index + 1}`;
         const sourceUrl = asNullableString(photo.source_url ?? photo.sourceUrl ?? photo.url);
-        const ownedAsset = await this.ingestPhotoAsset({
-          dataBase64: asNullableString(photo.data_base64 ?? photo.dataBase64 ?? photo.base64),
-          dataUrl: asNullableString(photo.data_url ?? photo.dataUrl),
-          itemId: input.itemId,
-          mimeType: asNullableString(photo.mime_type ?? photo.mimeType),
-          photoId,
-          sourceUrl,
-        });
+        // Store-by-reference for host-inspected closet photos (the public fluent_set_style_item_image
+        // path): the host already has/inspected the image and the widget renders it via the
+        // adapter CSP, so DO NOT server-side fetch the caller-supplied URL — that would be an SSRF
+        // surface on a public write. Mirrors fluent_get_media_bundle, which provides URLs, never
+        // fetches pixels. Legacy/owned ingestion (other sources) keeps fetching as before.
+        const referenceOnly = asNullableString(photo.source) === 'host_inspected';
+        const ownedAsset = referenceOnly
+          ? null
+          : await this.ingestPhotoAsset({
+              dataBase64: asNullableString(photo.data_base64 ?? photo.dataBase64 ?? photo.base64),
+              dataUrl: asNullableString(photo.data_url ?? photo.dataUrl),
+              itemId: input.itemId,
+              mimeType: asNullableString(photo.mime_type ?? photo.mimeType),
+              photoId,
+              sourceUrl,
+            });
         if (!ownedAsset && isHostedLocalUploadReference(sourceUrl)) {
           throw new Error(
             'Hosted Style photo writes cannot ingest local upload paths directly. Provide image bytes via data_url/data_base64 or a fetchable remote image URL.',
@@ -1030,33 +1483,145 @@ export class StyleService {
   }
 
   async upsertItemProfile(input: {
+    fieldEvidence?: unknown;
+    hasImage?: boolean;
     itemId: string;
     legacyProfileId?: number | null;
     method?: string | null;
     profile: unknown;
     provenance: MutationProvenance;
     source?: string | null;
-  }): Promise<StyleItemProfileRecord> {
+    sourceSnapshot?: unknown;
+  }): Promise<StyleItemProfileMergeResult> {
     const item = await this.getItem(input.itemId);
     if (!item) {
       throw new Error(`Unknown style item: ${input.itemId}`);
     }
     const before = await this.getItemProfile(input.itemId);
-    const raw = normalizeStyleItemProfile(input.profile);
+    const beforeProvenance = await this.getItemProvenance(input.itemId);
+    const incomingRecord = asRecord(parseJsonLike(input.profile)) ?? {};
+    const incomingFields = STYLE_ITEM_PROFILE_FIELDS.filter((field) =>
+      Object.prototype.hasOwnProperty.call(incomingRecord, field),
+    );
+    const incomingRaw = normalizeStyleItemProfile(input.profile);
+    const nextRaw: StyleItemProfileDocument = before ? { ...before.raw } : normalizeStyleItemProfile({});
+    const hasImage = input.hasImage === true;
+    const method = downgradeStyleItemProfileSource(input.method ?? null, hasImage);
+    const source =
+      input.source === 'style_host_onboarding'
+        ? 'style_host_onboarding'
+        : downgradeStyleItemProfileSource(input.source ?? null, hasImage);
+    const inheritedMethod = method ?? before?.method ?? null;
+    const inheritedSource = source ?? before?.source ?? null;
+    const defaultIncomingSource = canonicalStyleItemProfileSource(inheritedSource, inheritedMethod, hasImage);
+    const storedEvidence = asRecord(beforeProvenance?.fieldEvidence) ?? {};
+    const incomingEvidence = downgradeOnboardingFieldEvidence(input.fieldEvidence, hasImage) ?? {};
+    const nextEvidence: Record<string, unknown> = { ...storedEvidence };
+    const mergeAudit: StyleItemProfileMergeAuditEntry[] = [];
+    let incomingWon = false;
+
+    for (const field of incomingFields) {
+      if (STYLE_ITEM_PROFILE_CONTROL_FIELDS.has(field)) {
+        const beforeValue = nextRaw[field];
+        const incomingValue = incomingRaw[field];
+        nextRaw[field] = incomingValue as never;
+        incomingWon = true;
+        mergeAudit.push({
+          changed: !styleItemProfileValuesEqual(beforeValue, nextRaw[field]),
+          field,
+          fromSource: null,
+          toSource: null,
+        });
+        continue;
+      }
+      const evidence = asRecord(incomingEvidence[field]);
+      const incomingSource = canonicalStyleItemProfileSource(
+        asNullableString(evidence?.source) ?? defaultIncomingSource,
+        inheritedMethod,
+        hasImage,
+      );
+      const storedSource = styleItemProfileStoredSource(field, storedEvidence, before);
+      const incomingRank = styleItemProfileSourceRank(incomingSource, inheritedMethod);
+      const storedRank = styleItemProfileSourceRank(storedSource, before?.method ?? null);
+      const beforeValue = nextRaw[field];
+      const incomingValue = incomingRaw[field];
+      const shouldApply = incomingRank >= storedRank || isEmptyStyleItemProfileValue(beforeValue);
+
+      if (shouldApply) {
+        nextRaw[field] = incomingValue as never;
+        if (evidence) {
+          nextEvidence[field] = buildStyleItemProfileFieldEvidence({
+            baseEvidence: evidence,
+            confidence: asNullableNumber(evidence?.confidence) ?? input.provenance.confidence ?? null,
+            source: incomingSource,
+            value: incomingValue,
+          });
+        }
+        incomingWon = true;
+      } else if (!asRecord(nextEvidence[field]) && before) {
+        nextEvidence[field] = buildStyleItemProfileFieldEvidence({
+          confidence: null,
+          source: storedSource,
+          value: beforeValue,
+        });
+      }
+
+      mergeAudit.push({
+        changed: !styleItemProfileValuesEqual(beforeValue, nextRaw[field]),
+        field,
+        fromSource: storedSource,
+        toSource: shouldApply ? incomingSource : storedSource,
+      });
+    }
+
+    const nextMethod = incomingWon ? (method ?? before?.method ?? null) : (before?.method ?? method ?? null);
+    const nextSource = incomingWon ? (source ?? before?.source ?? null) : (before?.source ?? source ?? null);
+    // PROVENANCE PIN (G1): when the row scalar is about to change, freeze each untouched,
+    // un-evidenced, non-empty field's provenance at its PRE-write resolved floor, so the scalar
+    // bump can never retroactively promote a field this write did not supply.
+    const scalarWillMove =
+      before != null &&
+      (nextSource !== (before.source ?? null) || nextMethod !== (before.method ?? null));
+    if (scalarWillMove) {
+      const incomingFieldSet = new Set(incomingFields);
+      for (const field of STYLE_ITEM_PROFILE_FIELDS) {
+        if (incomingFieldSet.has(field)) continue; // win / reject-stamp path already handled it
+        if (asRecord(nextEvidence[field])) continue; // already has explicit evidence - never clobber
+        if (isEmptyStyleItemProfileValue(nextRaw[field])) continue; // nothing to protect
+        const floor = styleItemProfileStoredSource(field, storedEvidence, before);
+        if (!floor) continue;
+        nextEvidence[field] = buildStyleItemProfileFieldEvidence({
+          confidence: null,
+          source: floor,
+          value: nextRaw[field],
+        });
+      }
+    }
+    const mergedEvidenceJson =
+      Object.keys(nextEvidence).length > 0 ? stringifyJson(nextEvidence) : stringifyJson(beforeProvenance?.fieldEvidence);
 
     await this.repository.upsertItemProfile({
       itemId: input.itemId,
-      legacyProfileId: input.legacyProfileId ?? null,
-      method: input.method ?? null,
-      rawJson: JSON.stringify(raw),
-      source: input.source ?? null,
+      legacyProfileId: input.legacyProfileId ?? before?.legacyProfileId ?? null,
+      method: nextMethod,
+      rawJson: JSON.stringify(nextRaw),
+      source: nextSource,
     });
+
+    if (mergedEvidenceJson || beforeProvenance) {
+      await this.repository.upsertProvenance({
+        fieldEvidenceJson: mergedEvidenceJson,
+        itemId: input.itemId,
+        sourceSnapshotJson: stringifyJson(input.sourceSnapshot ?? beforeProvenance?.sourceSnapshot),
+        technicalMetadataJson: stringifyJson(beforeProvenance?.technicalMetadata),
+      });
+    }
 
     const inferredComparatorKey = inferStyleComparatorKey({
       category: item.category,
-      profile: raw,
+      profile: nextRaw,
       subcategory: item.subcategory,
-      tags: raw.tags,
+      tags: nextRaw.tags,
     });
     if (inferredComparatorKey !== item.comparatorKey) {
       await this.repository.updateItemComparatorKey(input.itemId, inferredComparatorKey);
@@ -1068,14 +1633,14 @@ export class StyleService {
     }
 
     await this.recordDomainEvent({
-      after,
+      after: { ...after, mergeAudit },
       before,
       entityId: input.itemId,
       entityType: 'style_item_profile',
       eventType: before ? 'style.item_profile_updated' : 'style.item_profile_created',
       provenance: input.provenance,
     });
-    return after;
+    return { ...after, mergeAudit };
   }
 
   async listEvidenceGaps(input: {
@@ -1086,6 +1651,8 @@ export class StyleService {
     const itemsWithGaps: StyleEvidenceGapRecord[] = [];
     const countsByType: Record<StyleEvidenceGapType, number> = {
       missing_primary_photo_delivery: 0,
+      missing_display_photo: 0,
+      missing_fit_photo: 0,
       missing_typed_profile: 0,
       weak_descriptor_coverage: 0,
       weak_comparator_identity: 0,
@@ -1103,6 +1670,16 @@ export class StyleService {
       } else {
         gapTypes.push('missing_primary_photo_delivery');
         notes.push('item has no deliverable Fluent image');
+      }
+      if (item.status === 'active') {
+        if (!item.photos.some(isStyleDisplayPhoto)) {
+          gapTypes.push('missing_display_photo');
+          notes.push('active item has no product/display photo for closet surfaces');
+        }
+        if (!item.photos.some(isStyleFitPhoto)) {
+          gapTypes.push('missing_fit_photo');
+          notes.push('active item has no worn fit photo for fit assessment');
+        }
       }
       if (item.profile) {
         typedProfileCount += 1;
@@ -1845,8 +2422,10 @@ export class StyleService {
         itemsById,
       }),
     ];
+    const budgetContext = await this.getStylePurchaseBudgetContext(candidate);
 
     const analysis: StylePurchaseAnalysis = {
+      budgetContext,
       calibration,
       candidate,
       candidateDescriptorSummary,
@@ -1917,16 +2496,55 @@ export class StyleService {
     return analysis;
   }
 
+  private async getStylePurchaseBudgetContext(candidate: StylePurchaseCandidate): Promise<StylePurchaseBudgetContext | null> {
+    const amount = purchaseCandidateAmount(candidate);
+    if (amount == null) {
+      return null;
+    }
+    try {
+      const context = await this.options.budgets?.getPurchaseContext({
+        amount,
+        category: 'style-clothing',
+      });
+      if (!context || context.purchaseSignal === 'no_signal') {
+        return null;
+      }
+      return {
+        category: 'style-clothing',
+        categoryPressure: context.categoryPressure,
+        caveats: context.caveats,
+        liquidityFloor: null,
+        projectedRatio: context.projectedRatio ?? null,
+        purchaseSignal: context.purchaseSignal,
+        targetSetup: context.targetSetup && context.targetSetup.category === 'style-clothing'
+          ? {
+              category: 'style-clothing',
+              currency: context.targetSetup.currency,
+              monthlyAmount: context.targetSetup.monthlyAmount,
+              periodStart: context.targetSetup.periodStart,
+              remainingThisPeriod: context.targetSetup.remainingThisPeriod,
+              spentThisPeriod: context.targetSetup.spentThisPeriod,
+              updatedAt: context.targetSetup.updatedAt,
+            }
+          : null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async getVisualBundle(input: {
     candidate?: unknown;
     deliveryMode?: StyleVisualBundleDeliveryMode | null;
     includeComparators?: boolean | null;
     itemIds?: string[] | null;
     maxImages?: number | null;
+    photoPreference?: 'product' | 'fit' | null;
   }): Promise<StyleVisualBundleRecord> {
     const deliveryMode = input.deliveryMode === 'authenticated_only' ? 'authenticated_only' : 'authenticated_with_signed_fallback';
     const includeComparators = input.includeComparators !== false;
     const maxImages = clampVisualBundleMaxImages(input.maxImages);
+    const photoPreference: 'product' | 'fit' = input.photoPreference === 'product' ? 'product' : 'fit';
     const requestedItemIds = Array.from(new Set((input.itemIds ?? []).map((itemId) => itemId.trim()).filter(Boolean)));
     const [items, analysis] = await Promise.all([
       this.listItems(),
@@ -1952,7 +2570,7 @@ export class StyleService {
         evidenceWarnings.push(`Item ${itemId} is not present in the current closet state.`);
         return;
       }
-      const bundlePhoto = selectBestVisualBundlePhoto(item.photos);
+      const bundlePhoto = selectBestVisualBundlePhoto(item.photos, photoPreference);
       if (!bundlePhoto) {
         evidenceWarnings.push(`${item.name ?? item.id} has no saved Style photo.`);
         return;
@@ -2116,14 +2734,26 @@ export class StyleService {
 
   async getItemProvenance(itemId: string) {
     const row = await this.repository.getProvenanceRow(itemId);
-    return row
-      ? {
-          fieldEvidence: safeParseJson(row.field_evidence_json),
-          sourceSnapshot: safeParseJson(row.source_snapshot_json),
-          technicalMetadata: safeParseJson(row.technical_metadata_json),
-          updatedAt: row.updated_at,
-        }
-      : null;
+    if (!row) {
+      return null;
+    }
+    // Control flags (reanalyzePending/reanalyzeRequestedAt) live in the profile document, not as evidenced
+    // descriptors — strip them from the provenance fieldEvidence surface so they never leak into
+    // fieldEvidenceKeys / list_evidence, and so they don't accumulate into stored evidence via the merge's
+    // beforeProvenance read.
+    const parsedEvidence = safeParseJson(row.field_evidence_json);
+    const evidenceRecord = asRecord(parsedEvidence);
+    const fieldEvidence = evidenceRecord
+      ? Object.fromEntries(
+          Object.entries(evidenceRecord).filter(([key]) => !STYLE_ITEM_PROFILE_CONTROL_FIELDS.has(key as StyleItemProfileField)),
+        )
+      : parsedEvidence;
+    return {
+      fieldEvidence,
+      sourceSnapshot: safeParseJson(row.source_snapshot_json),
+      technicalMetadata: safeParseJson(row.technical_metadata_json),
+      updatedAt: row.updated_at,
+    };
   }
 
   async getPhotoDeliveryAsset(photoId: string): Promise<{
@@ -2543,7 +3173,10 @@ function clampVisualBundleMaxImages(value: number | null | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return 8;
   }
-  return Math.min(12, Math.max(1, Math.trunc(value)));
+  // Ceiling raised 12 -> 120 so the full closet viewer can sign every shown item (it requests
+  // maxImages = page size, up to 120). Comparator/purchase-analysis callers request <= 8, so this
+  // does not change their behaviour.
+  return Math.min(120, Math.max(1, Math.trunc(value)));
 }
 
 function buildVisualBundleItemContext(item: StyleItemRecord): StyleVisualBundleItemContext {
@@ -2706,14 +3339,15 @@ function rankStyleArchiveNameCandidates(items: StyleItemRecord[], requestedName:
     .map((entry) => entry.item);
 }
 
-function selectBestVisualBundlePhoto(photos: StylePhotoRecord[]): StylePhotoRecord | null {
-  if (photos.length === 0) {
+function selectBestVisualBundlePhoto(photos: StylePhotoRecord[], preference: 'product' | 'fit' = 'fit'): StylePhotoRecord | null {
+  const candidates = preference === 'product' ? photos.filter(isStyleDisplayPhoto) : photos;
+  if (candidates.length === 0) {
     return null;
   }
 
-  const sorted = [...photos].sort((left, right) => {
-    const leftScore = scoreVisualBundlePhoto(left);
-    const rightScore = scoreVisualBundlePhoto(right);
+  const sorted = [...candidates].sort((left, right) => {
+    const leftScore = scoreVisualBundlePhoto(left, preference);
+    const rightScore = scoreVisualBundlePhoto(right, preference);
     if (rightScore !== leftScore) {
       return rightScore - leftScore;
     }
@@ -2725,15 +3359,20 @@ function selectBestVisualBundlePhoto(photos: StylePhotoRecord[]): StylePhotoReco
   return sorted[0] ?? null;
 }
 
-function scoreVisualBundlePhoto(photo: StylePhotoRecord): number {
+function scoreVisualBundlePhoto(photo: StylePhotoRecord, preference: 'product' | 'fit' = 'fit'): number {
   const hasArtifact = Boolean(photo.artifactId || photo.delivery);
-  const isFit = photo.isFit || photo.kind === 'fit' || photo.view?.startsWith('fit_') === true;
-  const isProduct = photo.kind === 'product' || photo.view === 'front' || photo.view === 'back' || photo.view === 'side';
+  const isFit = isStyleFitPhoto(photo);
+  const isProduct = isStyleDisplayPhoto(photo);
+
+  // Default ('fit') keeps the purchase-analysis/comparator behaviour where worn/fit imagery is
+  // richer for silhouette reasoning. The closet viewer passes 'product' to prefer clean studio shots.
+  const preferred = preference === 'product' ? isProduct : isFit;
+  const secondary = preference === 'product' ? isFit : isProduct;
 
   let score = 0;
-  if (isFit) {
+  if (preferred) {
     score = hasArtifact ? 10 : 6;
-  } else if (isProduct) {
+  } else if (secondary) {
     score = hasArtifact ? 8 : 3;
   } else {
     score = hasArtifact ? 7 : 2;
@@ -2957,6 +3596,155 @@ function descriptorSummaryFromCandidate(
   };
 }
 
+function styleItemProfileSourceRank(source: string | null | undefined, method?: string | null): number {
+  const normalized = source?.trim() ?? '';
+  if (normalized === 'style_host_onboarding') {
+    return styleItemProfileSourceRank(method, null);
+  }
+  const sourceRank = STYLE_ITEM_PROFILE_SOURCE_RANK[normalized];
+  if (sourceRank !== undefined) {
+    return sourceRank;
+  }
+  const normalizedMethod = method?.trim() ?? '';
+  if (!normalizedMethod || normalizedMethod === normalized) {
+    return -1;
+  }
+  return STYLE_ITEM_PROFILE_SOURCE_RANK[normalizedMethod] ?? -1;
+}
+
+function canonicalStyleItemProfileSource(
+  source: string | null | undefined,
+  method: string | null | undefined,
+  hasImage: boolean,
+): string | null {
+  const normalized = source?.trim() || null;
+  if (normalized === 'style_host_onboarding') {
+    return downgradeStyleItemProfileSource(method ?? null, hasImage);
+  }
+  return downgradeStyleItemProfileSource(normalized ?? method ?? null, hasImage);
+}
+
+function downgradeStyleItemProfileSource(source: string | null | undefined, hasImage: boolean): string | null {
+  const normalized = source?.trim() || null;
+  if (!normalized) {
+    return null;
+  }
+  if (!hasImage && (normalized === 'host_vision' || normalized === 'host_visual_inspection' || normalized === 'host_fit_vision')) {
+    return 'host_text';
+  }
+  return normalized;
+}
+
+function styleItemProfileStoredSource(
+  field: StyleItemProfileField,
+  storedEvidence: Record<string, unknown>,
+  before: StyleItemProfileRecord | null,
+): string | null {
+  const evidence = asRecord(storedEvidence[field]);
+  const evidenceSource = asNullableString(evidence?.source);
+  if (evidenceSource) {
+    return evidenceSource;
+  }
+  const source = before?.source ?? null;
+  const method = before?.method ?? null;
+  if (source === 'style_host_onboarding') {
+    return canonicalStyleItemProfileSource(source, method, true);
+  }
+  if (method && styleItemProfileSourceRank(source, null) < 0 && styleItemProfileSourceRank(method, null) >= 0) {
+    return method;
+  }
+  return source ?? method ?? null;
+}
+
+function buildStyleItemProfileFieldEvidence(input: {
+  baseEvidence?: Record<string, unknown> | null;
+  confidence: number | null;
+  source: string | null;
+  value: unknown;
+}): Record<string, unknown> {
+  return {
+    ...(input.baseEvidence ?? {}),
+    confidence: input.confidence,
+    source: input.source,
+    value: input.value,
+  };
+}
+
+function isEmptyStyleItemProfileValue(value: unknown): boolean {
+  if (value == null) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0;
+  }
+  if (typeof value === 'string') {
+    return value.trim().length === 0;
+  }
+  const record = asRecord(value);
+  if (record) {
+    return Object.values(record).every((entry) => entry == null);
+  }
+  return false;
+}
+
+function styleItemProfileValuesEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+// Collision-safe deterministic id segment for client_token idempotency: SHA-256 of the EXACT token
+// (no lossy sanitize/truncate that could map two distinct tokens to one id). Portable across the Worker
+// runtime and Node via the global Web Crypto SubtleCrypto.
+async function hashClientToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+    .slice(0, 40);
+}
+
+// Onboarding provenance honesty (GAP-4/R9): with no image delivered, downgrade any host_vision field
+// evidence to host_text — a host with zero pixels could not have vision-sourced a field.
+function downgradeOnboardingFieldEvidence(fieldEvidence: unknown, hasImage: boolean): Record<string, unknown> | null {
+  const record = asRecord(parseJsonLike(fieldEvidence));
+  if (!record) {
+    return null;
+  }
+  if (hasImage) {
+    return record;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(record)) {
+    const evidence = asRecord(value);
+    if (evidence && (evidence.source === 'host_vision' || evidence.source === 'host_fit_vision')) {
+      out[field] = { ...evidence, downgradedReason: 'no_image_supplied', source: 'host_text' };
+    } else {
+      out[field] = value;
+    }
+  }
+  return out;
+}
+
+// Server-computed low-confidence fields (design §6, threshold 0.6). A tag_ocr-sourced field is trusted
+// even at moderate confidence (mirrors fluent-web's brandStrong), so it is never flagged.
+function computeLowConfidenceOnboardingFields(fieldEvidence: unknown, threshold: number): string[] {
+  const record = asRecord(parseJsonLike(fieldEvidence));
+  if (!record) {
+    return [];
+  }
+  const low: string[] = [];
+  for (const [field, value] of Object.entries(record)) {
+    const evidence = asRecord(value);
+    if (!evidence || asNullableString(evidence.source) === 'tag_ocr') {
+      continue;
+    }
+    const confidence = asNullableNumber(evidence.confidence);
+    if (confidence !== null && confidence < threshold) {
+      low.push(field);
+    }
+  }
+  return low.sort();
+}
+
 function matchesTypedRoleCandidate(candidate: StylePurchaseAnalysis['candidate'], item: StyleItemRecord): boolean {
   const candidateSubcategory = candidate.subcategory?.trim().toLowerCase();
   const itemType = item.profile?.raw.itemType?.trim().toLowerCase() ?? null;
@@ -2982,16 +3770,12 @@ function inferTopWardrobeJobFromCandidate(candidate: StylePurchaseAnalysis['cand
   if (candidate.category !== 'TOP') {
     return 'unknown';
   }
-  return inferTopWardrobeJob([
-    candidate.name,
-    candidate.subcategory,
-    candidate.notes,
-    candidate.fabricHand,
-    candidate.fitType,
-    candidate.silhouette,
-    ...(candidate.useCases ?? []),
-    ...(candidate.avoidUseCases ?? []),
-  ]);
+  return inferTopWardrobeJob({
+    descriptorSignals: [candidate.notes, candidate.fabricHand, candidate.fitType, candidate.silhouette],
+    garmentTypeSignals: [candidate.subcategory],
+    identitySignals: [candidate.name, candidate.comparatorKey],
+    useCases: candidate.useCases ?? [],
+  });
 }
 
 function inferTopWardrobeJobFromItem(item: StyleItemRecord): StyleTopWardrobeJob {
@@ -2999,51 +3783,74 @@ function inferTopWardrobeJobFromItem(item: StyleItemRecord): StyleTopWardrobeJob
     return 'unknown';
   }
   const profile = item.profile?.raw;
-  return inferTopWardrobeJob([
-    item.name,
-    item.subcategory,
-    item.comparatorKey,
-    profile?.itemType,
-    profile?.styleRole,
-    profile?.fabricHand,
-    profile?.silhouette,
-    profile?.texture,
-    ...(profile?.tags ?? []),
-    ...(profile?.useCases ?? []),
-    ...(profile?.avoidUseCases ?? []),
-  ]);
+  return inferTopWardrobeJob({
+    descriptorSignals: [profile?.fabricHand, profile?.silhouette, profile?.texture],
+    garmentTypeSignals: [item.subcategory, profile?.itemType],
+    identitySignals: [item.name, item.comparatorKey, profile?.styleRole],
+    tags: profile?.tags ?? [],
+    useCases: profile?.useCases ?? [],
+  });
 }
 
-function inferTopWardrobeJob(signals: Array<string | null | undefined>): StyleTopWardrobeJob {
-  const text = signals.filter(Boolean).join(' ').toLowerCase();
-  if (!text.trim()) {
+type TopWardrobeJobSignalInput = {
+  descriptorSignals?: Array<string | null | undefined>;
+  garmentTypeSignals?: Array<string | null | undefined>;
+  identitySignals?: Array<string | null | undefined>;
+  tags?: Array<string | null | undefined>;
+  useCases?: Array<string | null | undefined>;
+};
+
+function inferTopWardrobeJob(input: TopWardrobeJobSignalInput): StyleTopWardrobeJob {
+  const identityText = joinTopWardrobeSignals([
+    ...(input.identitySignals ?? []),
+    ...(input.garmentTypeSignals ?? []),
+    ...(input.tags ?? []),
+    ...(input.useCases ?? []),
+  ]);
+  const descriptorText = joinTopWardrobeSignals(input.descriptorSignals ?? []);
+  const positiveText = joinTopWardrobeSignals([identityText, descriptorText]);
+  const garmentTypeText = joinTopWardrobeSignals(input.garmentTypeSignals ?? []);
+  if (!positiveText.trim()) {
     return 'unknown';
   }
-  if (/\b(basketball|nba|nhl|nfl|mlb|fanwear|hardwood classics|team jersey|game jersey)\b/.test(text)) {
+  if (hasFanwearTopSignal({ garmentTypeText, positiveText })) {
     return 'jersey_fanwear';
   }
-  if (
-    /\bjersey\b/.test(text) &&
-    !/\b(cotton jersey|jersey cotton|jersey knit|knit jersey|jersey-knit|jersey tee|jersey t-shirt|jersey t shirt)\b/.test(text)
-  ) {
-    return 'jersey_fanwear';
-  }
-  if (/\b(undershirt|under shirt|base layer|baselayer|thermal base|compression top)\b/.test(text)) {
+  if (/\b(undershirt|under shirt|base layer|baselayer|thermal base|compression top)\b/.test(positiveText)) {
     return 'undershirt_base_layer';
   }
-  if (/\b(tour|concert|band|merch|merchandise)\s+(?:tee|t-shirt|t shirt)\b/.test(text)) {
+  if (/\b(tour|concert|band|merch|merchandise)\s+(?:tee|t-shirt|t shirt)\b/.test(positiveText)) {
     return 'merch_tour_tee';
   }
-  if (/\b(training|performance|athletic|workout|running|dri-fit|dry-fit|technical tee|tech tee|gym|deltapeak)\b/.test(text)) {
+  if (/\b(training|performance|athletic|workout|running|dri-fit|dry-fit|technical tee|tech tee|gym|deltapeak)\b/.test(positiveText)) {
     return 'athletic_training_performance_tee';
   }
-  if (/\b(graphic|statement|printed|print|logo|art)\s+(?:tee|t-shirt|t shirt)\b/.test(text)) {
+  if (/\b(graphic|statement|printed|print|logo|art)\s+(?:tee|t-shirt|t shirt)\b/.test(positiveText)) {
     return 'graphic_statement_tee';
   }
-  if (/\b(tee|t-shirt|t shirt|crewneck t|short sleeve)\b/.test(text)) {
+  if (/\b(tee|t-shirt|t shirt|crewneck t|short sleeve)\b/.test(positiveText)) {
     return 'lifestyle_plain_tee';
   }
   return 'non_tee_top';
+}
+
+function joinTopWardrobeSignals(signals: Array<string | null | undefined>): string {
+  return signals
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+}
+
+function hasFanwearTopSignal(input: { garmentTypeText: string; positiveText: string }): boolean {
+  if (/\b(basketball|nba|nhl|nfl|mlb|fanwear|hardwood classics|team jersey|game jersey|swingman|throwback jersey)\b/.test(input.positiveText)) {
+    return true;
+  }
+  return (
+    /\bjersey\b/.test(input.garmentTypeText) &&
+    !/\b(cotton jersey|jersey cotton|jersey knit|knit jersey|jersey-knit|jersey tee|jersey t-shirt|jersey t shirt|jersey top)\b/.test(
+      input.garmentTypeText,
+    )
+  );
 }
 
 function topWardrobeJobsMatch(candidate: StylePurchaseAnalysis['candidate'], item: StyleItemRecord): boolean {
@@ -3164,17 +3971,16 @@ function resolveStyleItemComparatorKey(item: StyleItemRecord) {
 
 function looksLikeJerseyItem(item: StyleItemRecord): boolean {
   const profile = item.profile?.raw;
-  return /\b(jersey|basketball jersey|nba jersey|hardwood classics)\b/i.test(
-    [
-      item.name,
-      item.subcategory,
-      profile?.itemType,
-      profile?.styleRole,
-      ...(profile?.tags ?? []),
-    ]
-      .filter(Boolean)
-      .join(' '),
-  );
+  const positiveText = joinTopWardrobeSignals([
+    item.name,
+    item.subcategory,
+    profile?.itemType,
+    profile?.styleRole,
+    ...(profile?.tags ?? []),
+    ...(profile?.useCases ?? []),
+  ]);
+  const garmentTypeText = joinTopWardrobeSignals([item.subcategory, profile?.itemType]);
+  return hasFanwearTopSignal({ garmentTypeText, positiveText });
 }
 
 function looksLikeTeeItem(item: StyleItemRecord): boolean {
@@ -4643,6 +5449,15 @@ function isAthleticStyleItem(item: StyleItemRecord): boolean {
     return true;
   }
   return (profile?.dressCode?.max ?? null) === 1 && (profile?.bestOccasions ?? []).includes('athletic');
+}
+
+function purchaseCandidateAmount(candidate: StylePurchaseCandidate): number | null {
+  const estimatedPrice = candidate.estimatedPrice;
+  if (!estimatedPrice) {
+    return null;
+  }
+  const amount = estimatedPrice.max ?? estimatedPrice.min;
+  return typeof amount === 'number' && Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
 function isCoherentPairingCandidate(input: {

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { LOCAL_TOKEN_ENV, OSS_TOKEN_ENV, readLocalTokenState } from '../src/local/auth';
+import { cliString, parseCliArgs, resolveCliBaseUrl, resolveCliRoot } from '../src/local/cli';
 
 export type McpClient = 'claude' | 'codex' | 'openclaw';
 export type McpTrack = 'cloud' | 'oss';
@@ -54,9 +55,9 @@ export function generateMcpConfig(options: ScaffoldOptions): Record<string, unkn
 }
 
 function main(): void {
-  const args = parseArgs(process.argv.slice(2));
-  const client = normalizeClient(args.client);
-  const track = normalizeTrack(args.track);
+  const args = parseCliArgs(process.argv.slice(2));
+  const client = normalizeClient(cliString(args, 'client'));
+  const track = normalizeTrack(cliString(args, 'track'));
   if (!client) {
     throw new Error('Missing --client. Expected codex, claude, or openclaw.');
   }
@@ -66,18 +67,19 @@ function main(): void {
 
   const output = JSON.stringify(
     generateMcpConfig({
-      baseUrl: args['base-url'] ?? args.baseUrl,
+      baseUrl: resolveCliBaseUrl({ args, defaultBaseUrl: track === 'cloud' ? '' : DEFAULT_OSS_BASE_URL }),
       client,
-      out: args.out,
-      root: args.root,
-      token: args.token,
+      out: cliString(args, 'out'),
+      root: resolveCliRoot({ args }),
+      token: cliString(args, 'token'),
       track,
     }),
     null,
     2,
   );
 
-  const outPath = args.out ? path.resolve(process.cwd(), args.out) : null;
+  const out = cliString(args, 'out');
+  const outPath = out ? path.resolve(process.cwd(), out) : null;
   if (outPath) {
     mkdirSync(path.dirname(outPath), { recursive: true });
     writeFileSync(outPath, `${output}\n`, 'utf8');
@@ -119,7 +121,7 @@ function resolveOssToken(options: Pick<ScaffoldOptions, 'root' | 'token'>): stri
     return envToken;
   }
 
-  const rootDir = path.resolve(options.root ?? path.join(homedir(), '.fluent'));
+  const rootDir = path.resolve(options.root ?? process.env.FLUENT_OSS_ROOT ?? process.env.FLUENT_LOCAL_ROOT ?? path.join(homedir(), '.fluent'));
   const tokenState = readLocalTokenState(rootDir);
   if (!tokenState?.token) {
     throw new Error(
@@ -129,19 +131,3 @@ function resolveOssToken(options: Pick<ScaffoldOptions, 'root' | 'token'>): stri
   return tokenState.token;
 }
 
-function parseArgs(argv: string[]): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (!token.startsWith('--')) continue;
-    const key = token.slice(2);
-    const next = argv[index + 1];
-    if (next && !next.startsWith('--')) {
-      result[key] = next;
-      index += 1;
-    } else {
-      result[key] = 'true';
-    }
-  }
-  return result;
-}

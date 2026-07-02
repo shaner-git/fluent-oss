@@ -1,0 +1,316 @@
+{
+  "id": "oss-demo-profile-v1",
+  "description": "Public OSS demo fixture for clone-and-run evaluation.",
+  "style": {
+    "profile": {
+      "aestheticKeywords": ["clean casual", "quiet texture", "easy layering"],
+      "brandAffinities": [
+        { "brand": "Uniqlo", "stance": "like", "note": "Reliable basics and relaxed layers." },
+        { "brand": "Nike", "stance": "like", "note": "Everyday sneaker baseline." }
+      ],
+      "budgetProfile": {
+        "everydayTier": "mid",
+        "investmentTier": "selective",
+        "splurgeCategories": ["outerwear", "shoes"]
+      },
+      "colorPreferences": [
+        { "value": "navy", "weight": "high", "note": "Useful anchor color." },
+        { "value": "olive", "weight": "medium", "note": "Works with neutral basics." },
+        { "value": "cream", "weight": "medium", "note": "Softens darker outfits." }
+      ],
+      "contextRules": ["Prefer pieces that can work for casual office days and weekend errands."],
+      "fitNotes": ["Relaxed but not oversized tops.", "Straight or gently tapered pants."],
+      "hardAvoids": ["very skinny fits", "loud logos"],
+      "preferredSilhouettes": ["straight leg", "boxy overshirt", "low-profile sneaker"],
+      "practicalCalibrationConfirmed": true,
+      "tasteCalibrationConfirmed": true
+    },
+    "items": [
+      {
+        "item": {
+          "id": "style-item:oss-demo:navy-overshirt",
+          "brand": "Uniqlo",
+          "category": "TOP",
+          "color_family": "navy",
+          "color_name": "Dark Navy",
+          "comparator_key": "overshirt",
+          "formality": 2,
+          "name": "Navy Brushed Cotton Overshirt",
+          "size": "M",
+          "status": "active",
+          "subcategory": "Overshirt"
+        },
+        "profile": {
+          "bestOccasions": ["casual office", "weekend"],
+          "confidence": 0.84,
+          "descriptorConfidence": 0.78,
+          "dressCode": { "min": 1, "max": 3 },
+          "fabricHand": "soft brushed cotton",
+          "fitObservations": ["boxy layer", "works open over tees"],
+          "itemType": "navy cotton overshirt",
+          "ownedSize": "M",
+          "pairingNotes": "Pairs with cream tees, straight chinos, and white sneakers.",
+          "polishLevel": "casual-polished",
+          "qualityTier": "mid",
+          "seasonality": ["fall", "spring"],
+          "silhouette": "boxy overshirt",
+          "styleRole": "bridge",
+          "structureLevel": "soft structured",
+          "tags": ["layer", "navy", "smart casual"],
+          "texture": "brushed",
+          "useCases": ["office casual", "travel layer", "dinner"],
+          "visualWeight": "medium"
+        }
+      },
+      {
+        "item": {
+          "id": "style-item:oss-demo:cream-tee",
+          "brand": "Kotn",
+          "category": "TOP",
+          "color_family": "cream",
+          "color_name": "Warm Cream",
+          "comparator_key": "tee",
+          "formality": 1,
+          "name": "Cream Heavyweight Tee",
+          "size": "M",
+          "status": "active",
+          "subcategory": "T-Shirt"
+        },
+        "profile": {
+          "bestOccasions": ["weekend", "layering"],
+          "confidence": 0.8,
+          "descriptorConfidence": 0.74,
+          "dressCode": { "min": 0, "max": 2 },
+          "fabricHand": "heavy cotton jersey",
+          "fitObservations": ["clean collar", "not clingy"],
+          "itemType": "cream heavyweight tee",
+          "ownedSize": "M",
+          "pairingNotes": "Useful base layer under overshirts and jackets.",
+          "polishLevel": "casual",
+          "qualityTier": "mid",
+          "seasonality": ["spring", "summer", "fall"],
+          "silhouette": "relaxed straight tee",
+          "styleRole": "workhorse",
+          "structureLevel": "soft",
+          "tags": ["basic", "cream", "layering"],
+          "texture": "smooth jersey",
+          "useCases": ["errands", "casual office base", "travel"],
+          "visualWeight": "light"
+        }
+      },
+      {
+        "item": {
+          "id": "style-item:oss-demo:olive-chino",
+          "brand": "Everlane",
+          "category": "BOTTOM",
+          "color_family": "olive",
+          "color_name": "Washed Olive",
+          "comparator_key": "chino",
+          "formality": 2,
+          "name": "Olive Straight Chino",
+          "size": "32",
+          "status": "active",
+          "subcategory": "Chino"
+        },
+        "profile": {
+          "bestOccasions": ["casual office", "weekend"],
+          "confidence": 0.82,
+          "descriptorConfidence": 0.76,
+          "dressCode": { "min": 1, "max": 3 },
+          "fabricHand": "washed cotton twill",
+          "fitObservations": ["straight leg", "not skinny"],
+          "fitVerdict": "true_to_size",
+          "itemType": "olive straight chino",
+          "ownedSize": "32",
+          "pairingNotes": "Grounds navy and cream tops without reading too formal.",
+          "polishLevel": "casual-polished",
+          "qualityTier": "mid",
+          "seasonality": ["spring", "fall"],
+          "silhouette": "straight leg",
+          "styleRole": "anchor",
+          "structureLevel": "medium",
+          "tags": ["olive", "straight leg", "chino"],
+          "texture": "twill",
+          "useCases": ["office casual", "weekend dinner"],
+          "visualWeight": "medium"
+        }
+      },
+      {
+        "item": {
+          "id": "style-item:oss-demo:white-sneaker",
+          "brand": "Nike",
+          "category": "SHOE",
+          "color_family": "white",
+          "color_name": "White",
+          "comparator_key": "sneaker",
+          "formality": 1,
+          "name": "White Low-Profile Sneaker",
+          "size": "10",
+          "status": "active",
+          "subcategory": "Sneaker"
+        },
+        "profile": {
+          "bestOccasions": ["daily wear", "travel"],
+          "confidence": 0.86,
+          "descriptorConfidence": 0.8,
+          "dressCode": { "min": 0, "max": 2 },
+          "fitObservations": ["comfortable daily baseline"],
+          "itemType": "white low-profile sneaker",
+          "ownedSize": "10",
+          "pairingNotes": "Default shoe for casual outfits; avoid adding near-duplicates.",
+          "polishLevel": "casual",
+          "qualityTier": "mid",
+          "seasonality": ["spring", "summer", "fall"],
+          "silhouette": "low-profile sneaker",
+          "styleRole": "workhorse",
+          "structureLevel": "structured",
+          "tags": ["white sneaker", "daily", "duplicate-sensitive"],
+          "texture": "smooth leather",
+          "useCases": ["daily wear", "travel", "errands"],
+          "visualWeight": "light"
+        }
+      }
+    ]
+  },
+  "budgets": {
+    "envelopes": [
+      {
+        "category": "style-clothing",
+        "currency": "CAD",
+        "monthlyAmount": 450,
+        "targetSpent": 185,
+        "spendNote": "Demo spend: linen shirt and socks."
+      }
+    ]
+  },
+  "meals": {
+    "recipes": [
+      {
+        "id": "recipe:oss-demo:lemon-herb-chicken-bowls",
+        "name": "Lemon Herb Chicken Bowls",
+        "meal_type": "dinner",
+        "servings": 4,
+        "total_time": 35,
+        "active_time": 20,
+        "cost_per_serving_cad": 5.75,
+        "kid_friendly": true,
+        "ingredients": [
+          { "item": "chicken thighs", "quantity": 1.2, "unit": "kg", "ordering_policy": "direct_match" },
+          { "item": "rice", "quantity": 2, "unit": "cups", "ordering_policy": "pantry_item" },
+          { "item": "lemon", "quantity": 2, "unit": "each", "ordering_policy": "direct_match" },
+          { "item": "cucumber", "quantity": 1, "unit": "each", "ordering_policy": "direct_match" }
+        ],
+        "instructions": [
+          "Season chicken with lemon, garlic, and dried oregano.",
+          "Roast chicken while rice cooks.",
+          "Serve over rice with cucumber and yogurt sauce."
+        ],
+        "tags": ["weeknight", "protein", "bowl"]
+      },
+      {
+        "id": "recipe:oss-demo:turkey-taco-rice",
+        "name": "Turkey Taco Rice Skillet",
+        "meal_type": "dinner",
+        "servings": 4,
+        "total_time": 30,
+        "active_time": 20,
+        "cost_per_serving_cad": 4.5,
+        "kid_friendly": true,
+        "ingredients": [
+          { "item": "ground turkey", "quantity": 700, "unit": "g", "ordering_policy": "direct_match" },
+          { "item": "rice", "quantity": 1.5, "unit": "cups", "ordering_policy": "pantry_item" },
+          { "item": "black beans", "quantity": 1, "unit": "can", "ordering_policy": "direct_match" },
+          { "item": "salsa", "quantity": 1, "unit": "jar", "ordering_policy": "direct_match" }
+        ],
+        "instructions": [
+          "Brown turkey with taco seasoning.",
+          "Fold in cooked rice, black beans, and salsa.",
+          "Top with yogurt, cheese, or avocado if available."
+        ],
+        "tags": ["weeknight", "leftovers", "budget"]
+      },
+      {
+        "id": "recipe:oss-demo:tofu-veggie-noodles",
+        "name": "Tofu Veggie Noodles",
+        "meal_type": "dinner",
+        "servings": 3,
+        "total_time": 25,
+        "active_time": 20,
+        "cost_per_serving_cad": 4.25,
+        "kid_friendly": false,
+        "ingredients": [
+          { "item": "extra-firm tofu", "quantity": 450, "unit": "g", "ordering_policy": "direct_match" },
+          { "item": "noodles", "quantity": 300, "unit": "g", "ordering_policy": "direct_match" },
+          { "item": "broccoli", "quantity": 1, "unit": "head", "ordering_policy": "direct_match" },
+          { "item": "soy sauce", "quantity": 3, "unit": "tbsp", "ordering_policy": "pantry_item" }
+        ],
+        "instructions": [
+          "Crisp tofu in a hot pan.",
+          "Steam broccoli and boil noodles.",
+          "Toss everything with soy, lime, and a little sesame oil."
+        ],
+        "tags": ["quick", "vegetarian", "noodles"]
+      }
+    ],
+    "plan": {
+      "id": "plan:oss-demo:current-week",
+      "status": "active",
+      "entries": [
+        {
+          "dayOffset": 0,
+          "dayLabel": "Monday",
+          "mealType": "dinner",
+          "recipeId": "recipe:oss-demo:lemon-herb-chicken-bowls",
+          "recipeNameSnapshot": "Lemon Herb Chicken Bowls",
+          "serves": 4,
+          "prepMinutes": 20,
+          "totalMinutes": 35,
+          "leftoversExpected": true
+        },
+        {
+          "dayOffset": 2,
+          "dayLabel": "Wednesday",
+          "mealType": "dinner",
+          "recipeId": "recipe:oss-demo:turkey-taco-rice",
+          "recipeNameSnapshot": "Turkey Taco Rice Skillet",
+          "serves": 4,
+          "prepMinutes": 20,
+          "totalMinutes": 30,
+          "leftoversExpected": true
+        },
+        {
+          "dayOffset": 4,
+          "dayLabel": "Friday",
+          "mealType": "dinner",
+          "recipeId": "recipe:oss-demo:tofu-veggie-noodles",
+          "recipeNameSnapshot": "Tofu Veggie Noodles",
+          "serves": 3,
+          "prepMinutes": 20,
+          "totalMinutes": 25,
+          "leftoversExpected": false
+        }
+      ],
+      "requirements": {
+        "demo": true,
+        "notes": ["Weeknight-friendly dinners", "Keep grocery list realistic"]
+      },
+      "summary": {
+        "title": "OSS demo week",
+        "planningBrief": {
+          "evidenceNotes": ["Seeded OSS demo fixture"],
+          "strategy": "Simple dinners with leftovers."
+        },
+        "planReview": {
+          "watchouts": ["Check pantry rice before shopping."]
+        }
+      }
+    },
+    "inventory": [
+      { "name": "rice", "status": "in_stock", "quantity": 3, "unit": "cups", "location": "pantry" },
+      { "name": "soy sauce", "status": "in_stock", "quantity": 1, "unit": "bottle", "location": "pantry" },
+      { "name": "Greek yogurt", "status": "in_stock", "quantity": 1, "unit": "tub", "location": "fridge" },
+      { "name": "lemons", "status": "low", "quantity": 1, "unit": "each", "location": "fridge" },
+      { "name": "black beans", "status": "in_stock", "quantity": 1, "unit": "can", "location": "pantry" }
+    ]
+  }
+}

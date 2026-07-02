@@ -213,8 +213,10 @@ export function buildMealsOnboardingCalibration(input: {
     groceryReadiness,
     hostGuidance: {
       answerMode: 'text_first',
+      broadPlanningFirstTool: 'fluent_get_context',
       copyGuardrails: [
-        'Start Meals setup and confidence-sensitive planning with meals_get_onboarding_calibration.',
+        'Start broad Meals planning, currentness checks, and "what Fluent knows" prompts with fluent_get_context(domain="meals", intent="planning") when available.',
+        'Use meals_get_onboarding_calibration for explicit setup/calibration details, not as the first broad planning read when vNext context is available.',
         'At-home food ownership is evidence, not preference. Say "your kitchen inventory suggests" for inventory-derived patterns.',
         'Meal history and accepted plans can suggest patterns, but do not say "you like" unless the user confirmed it.',
         'Allergies, medical restrictions, and hard avoids require explicit user confirmation.',
@@ -455,6 +457,7 @@ export function applyMealsCalibrationResponse(input: {
   }
 
   applyPreferencePatch(nextRaw, input.response.preferencePatch ?? null, now);
+  applyRejectedCalibrationSignals(nextRaw, input.response.signals ?? [], now);
 
   const mergedSignals = mergeMealsCalibrationSignals(nextSignals);
   nextRaw.calibration = {
@@ -1111,21 +1114,6 @@ function applyPreferencePatch(
   const shopping = { ...(asRecord(raw.shopping) ?? {}) };
 
   if (patch.householdShape?.trim()) household.shape = patch.householdShape.trim();
-  if (patch.hardAvoids != null) {
-    coreRules.hard_avoids = patch.hardAvoids.length > 0 ? mergeStringArray(asStringArray(coreRules.hard_avoids), patch.hardAvoids) : [];
-    coreRules.hard_avoids_confirmed_at = now;
-  }
-  if (patch.dislikes) coreRules.dislikes = mergeStringArray(asStringArray(coreRules.dislikes), patch.dislikes);
-  if (patch.favoriteFoods) coreRules.favorite_foods = mergeStringArray(asStringArray(coreRules.favorite_foods), patch.favoriteFoods);
-  if (patch.allergies != null) {
-    coreRules.allergies = patch.allergies.length > 0 ? mergeStringArray(asStringArray(coreRules.allergies), patch.allergies) : [];
-    coreRules.allergies_confirmed_at = now;
-  }
-  if (patch.dietaryConstraints != null) {
-    coreRules.dietary_constraints =
-      patch.dietaryConstraints.length > 0 ? mergeStringArray(asStringArray(coreRules.dietary_constraints), patch.dietaryConstraints) : [];
-    coreRules.dietary_constraints_confirmed_at = now;
-  }
   if (patch.preferredCuisines) {
     coreRules.preferred_cuisines = mergeStringArray(asStringArray(coreRules.preferred_cuisines), patch.preferredCuisines);
   }
@@ -1193,6 +1181,24 @@ function applyPreferencePatch(
   raw.updated_at = now;
 }
 
+function applyRejectedCalibrationSignals(
+  raw: Record<string, unknown>,
+  signals: NonNullable<MealsCalibrationResponseInput['signals']>,
+  now: string,
+): void {
+  const rejectedSignals = signals.filter((signal) => signal.status === 'rejected');
+  if (rejectedSignals.length === 0) return;
+
+  const coreRules = { ...(asRecord(raw.core_rules) ?? {}) };
+  for (const signal of rejectedSignals) {
+    if (signal.kind === 'preferred_cuisine') {
+      coreRules.preferred_cuisines = removeStringArrayValue(asStringArray(coreRules.preferred_cuisines), signal.value);
+    }
+  }
+  raw.core_rules = coreRules;
+  raw.updated_at = now;
+}
+
 function inferStarterPreferencePatch(text: string): MealsCalibrationResponseInput['preferencePatch'] {
   const value = text.trim();
   if (!value) return null;
@@ -1210,21 +1216,7 @@ function inferStarterPreferencePatch(text: string): MealsCalibrationResponseInpu
     patch.householdShape = value;
   }
 
-  if (/\bno (?:known )?(?:food )?allerg(?:y|ies)\b/.test(lower)) {
-    patch.allergies = [];
-  } else {
-    const allergyMatch = lower.match(/\ballerg(?:y|ic|ies)?(?:\s+to)?\s+([^.;]+)/);
-    if (allergyMatch?.[1]) patch.allergies = splitStarterList(allergyMatch[1]);
-  }
-
-  if (/\bno (?:known )?(?:hard )?(?:avoids?|foods? to avoid)\b/.test(lower)) {
-    patch.hardAvoids = [];
-  } else {
-    const avoidMatch = lower.match(/\b(?:avoid|hard avoid|never)\s+([^.;]+)/);
-    if (avoidMatch?.[1] && !avoidMatch[1].includes('allerg')) {
-      patch.hardAvoids = splitStarterList(avoidMatch[1]);
-    }
-  }
+  // D16: free-text inference must not create or clear Tier-1 safety, dietary-pattern, or taste facts.
 
   const cadenceMatch =
     lower.match(/\b(\d+)\s+(?:weeknight\s+)?(?:dinners?|meals?|nights?)\b/) ??
@@ -1245,10 +1237,6 @@ function inferStarterPreferencePatch(text: string): MealsCalibrationResponseInpu
   if (/\bleftovers?\b/.test(lower)) {
     patch.leftoverPreference = value;
   }
-  const favoriteMatch = lower.match(/\b(?:like|love|favorite|favourite|prefer|go[- ]?to)\s+([^.;]+)/);
-  if (favoriteMatch?.[1]) {
-    patch.favoriteFoods = splitStarterList(favoriteMatch[1]);
-  }
   if (/\b(mild|medium spice|spicy|heat|no spice|not spicy)\b/.test(lower)) {
     patch.spicePreference = value;
   }
@@ -1259,19 +1247,7 @@ function inferStarterPreferencePatch(text: string): MealsCalibrationResponseInpu
     patch.budgetSensitivity = value;
   }
 
-  const dietWords = ['vegetarian', 'vegan', 'gluten-free', 'gluten free', 'dairy-free', 'dairy free', 'halal', 'kosher', 'pescatarian'];
-  const dietaryConstraints = dietWords.filter((word) => lower.includes(word));
-  if (dietaryConstraints.length > 0) patch.dietaryConstraints = dietaryConstraints;
-
   return Object.keys(patch).length > 0 ? patch : null;
-}
-
-function splitStarterList(text: string): string[] {
-  return text
-    .split(/,|\band\b|\bor\b/)
-    .map((entry) => entry.trim().replace(/\b(?:for|with|please|but|except)\b.*$/i, '').trim())
-    .filter((entry) => entry.length > 0)
-    .slice(0, 8);
 }
 
 function normalizeStringArrayRecord(value: Record<string, string[]>): Record<string, string[]> {
@@ -1378,6 +1354,11 @@ function topCounts(values: string[]): Array<{ count: number; value: string }> {
 
 function mergeStringArray(existing: string[], incoming: string[]): string[] {
   return Array.from(new Set([...existing, ...incoming].map((entry) => entry.trim()).filter(Boolean)));
+}
+
+function removeStringArrayValue(existing: string[], value: string): string[] {
+  const normalizedValue = normalizeText(value);
+  return existing.filter((entry) => normalizeText(entry) !== normalizedValue);
 }
 
 function cloneRecord(value: Record<string, unknown>): Record<string, unknown> {

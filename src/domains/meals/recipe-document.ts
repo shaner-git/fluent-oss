@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { parseJsonLike } from './helpers';
 
-const recipeInstructionSchema = z.union([
+export const recipeInstructionSchema = z.union([
   z.string(),
   z
     .object({
@@ -15,15 +15,15 @@ const recipeInstructionSchema = z.union([
     .passthrough(),
 ]);
 
-const recipeIngredientSchema = z
+export const recipeIngredientSchema = z
   .object({
     item: z.string().min(1),
-    quantity: z.number().positive(),
-    unit: z.string().min(1),
+    quantity: z.number().positive().nullable().optional(),
+    unit: z.string().min(1).nullable().optional(),
     canonical_item: z.string().min(1).nullable().optional(),
     canonical_quantity: z.number().positive().nullable().optional(),
     canonical_unit: z.string().min(1).nullable().optional(),
-    ordering_policy: z.enum(['pantry_item', 'flexible_match', 'direct_match', 'recipe_substitute']),
+    ordering_policy: z.enum(['pantry_item', 'flexible_match', 'direct_match', 'recipe_substitute']).optional(),
     allowed_substitute_queries: z.array(z.string()).nullable().optional(),
     blocked_substitute_terms: z.array(z.string()).nullable().optional(),
     brand_bias: z.array(z.string()).nullable().optional(),
@@ -33,19 +33,19 @@ const recipeIngredientSchema = z
 
 export const recipeDocumentSchema = z
   .object({
-    id: z.string().min(1),
+    id: z.string().min(1).optional(),
     name: z.string().min(1),
-    meal_type: z.enum(['breakfast', 'lunch', 'dinner', 'snack']),
-    servings: z.number().int().min(1),
-    total_time: z.number().int().min(1),
-    active_time: z.number().int().min(0),
+    meal_type: z.enum(['breakfast', 'lunch', 'dinner', 'snack', 'unknown']).optional(),
+    servings: z.number().int().min(1).nullable().optional(),
+    total_time: z.number().int().min(1).nullable().optional(),
+    active_time: z.number().int().min(0).nullable().optional(),
     macros: z.object({
       calories: z.number(),
       fiber_g: z.number(),
       protein_g: z.number(),
       sodium_mg: z.number(),
-    }),
-    cost_per_serving_cad: z.number().min(0),
+    }).nullable().optional(),
+    cost_per_serving_cad: z.number().min(0).nullable().optional(),
     instructions: z.array(recipeInstructionSchema).min(1),
     ingredients: z.array(recipeIngredientSchema).min(1),
   })
@@ -60,22 +60,22 @@ export interface JsonPatchOperation {
 }
 
 export interface RecipeColumns {
-  activeTimeMinutes: number;
-  costPerServingCad: number;
+  activeTimeMinutes: number | null;
+  costPerServingCad: number | null;
   instructionsJson: string;
   kidFriendly: number;
-  macrosJson: string;
+  macrosJson: string | null;
   mealType: string;
   miseEnPlaceJson: string | null;
   name: string;
   prepNotes: string | null;
   rawJson: string;
   reheatGuidance: string | null;
-  servings: number;
+  servings: number | null;
   servingNotes: string | null;
   status: string;
   slug: string;
-  totalTimeMinutes: number;
+  totalTimeMinutes: number | null;
 }
 
 export function applyJsonPatch<T>(input: T, operations: JsonPatchOperation[]): T {
@@ -145,25 +145,25 @@ export function validateRecipeDocument(input: unknown): RecipeDocument {
   return recipeDocumentSchema.parse(parseJsonLike(input));
 }
 
-export function deriveRecipeColumns(recipe: RecipeDocument): RecipeColumns {
+export function deriveRecipeColumns(recipe: RecipeDocument & { id: string }): RecipeColumns {
   const status = typeof recipe.status === 'string' && recipe.status.trim().length > 0 ? recipe.status.trim().toLowerCase() : 'active';
   return {
-    activeTimeMinutes: recipe.active_time,
-    costPerServingCad: recipe.cost_per_serving_cad,
+    activeTimeMinutes: recipe.active_time ?? null,
+    costPerServingCad: recipe.cost_per_serving_cad ?? null,
     instructionsJson: JSON.stringify(recipe.instructions),
     kidFriendly: recipe.kid_friendly ? 1 : 0,
-    macrosJson: JSON.stringify(recipe.macros),
-    mealType: recipe.meal_type,
+    macrosJson: recipe.macros ? JSON.stringify(recipe.macros) : null,
+    mealType: recipe.meal_type ?? 'unknown',
     miseEnPlaceJson: Array.isArray(recipe.mise_en_place) ? JSON.stringify(recipe.mise_en_place) : null,
     name: recipe.name,
     prepNotes: typeof recipe.prep_notes === 'string' ? recipe.prep_notes : null,
     rawJson: JSON.stringify(recipe),
     reheatGuidance: typeof recipe.reheat_guidance === 'string' ? recipe.reheat_guidance : null,
-    servings: recipe.servings,
+    servings: recipe.servings ?? null,
     servingNotes: typeof recipe.serving_notes === 'string' ? recipe.serving_notes : null,
     status,
     slug: slugify(recipe.id),
-    totalTimeMinutes: recipe.total_time,
+    totalTimeMinutes: recipe.total_time ?? null,
   };
 }
 

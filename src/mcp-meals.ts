@@ -5,8 +5,15 @@ import {
   buildMutationProvenance,
   FLUENT_MEALS_READ_SCOPE,
   FLUENT_MEALS_WRITE_SCOPE,
+  FLUENT_STYLE_READ_SCOPE,
+  requireAnyScope,
   requireScope,
 } from './auth';
+import type { BudgetsService } from './domains/budgets/service';
+import {
+  BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
+  buildBudgetsEnvelopeSetupStructuredContent,
+} from './domains/budgets/envelope-setup';
 import type { FluentCoreService } from './fluent-core';
 import {
   buildMutationAck,
@@ -17,6 +24,7 @@ import {
   summarizeMealPreferences,
   summarizePreparedOrder,
 } from './domains/meals/service';
+import { mirrorMealsTier1PersonFacts } from './domains/meals/person-facts-bridge';
 import type {
   CurrentGroceryListRecord,
   GroceryIntentRecord,
@@ -58,6 +66,11 @@ import {
   MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI,
   MEALS_GROCERY_LIST_TEMPLATE_URI,
   MEALS_GROCERY_LIST_TRANSPORT_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_VNEXT_BRIDGE_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_VNEXT_LEGACY_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_VNEXT_MULTIFRAME_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_VNEXT_PREVIOUS_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
   MEALS_GROCERY_SMOKE_TEMPLATE_URI,
   type GroceryListActionViewModel,
   type GroceryListItemViewModel,
@@ -82,6 +95,80 @@ import { normalizeIngredient } from './domains/meals/helpers';
 import { firstTemplateValue, iconFor, jsonResource, provenanceInputSchema, readViewSchema, toolResult, writeResponseModeSchema } from './mcp-shared';
 
 const calendarMealTypeSchema = z.enum(['breakfast', 'lunch', 'dinner', 'snack']);
+const isoDateInputSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .describe('ISO calendar date formatted exactly as YYYY-MM-DD.');
+const metadataLeafSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const metadataNestedObjectSchema = z.record(z.string(), z.union([metadataLeafSchema, z.array(metadataLeafSchema)]));
+const metadataInputSchema = z
+  .record(z.string(), z.union([metadataLeafSchema, z.array(metadataLeafSchema), metadataNestedObjectSchema]))
+  .optional()
+  .describe(
+    'Optional machine-readable Fluent lifecycle metadata returned by Fluent widgets or retailer/order sync flows; omit for normal user-entered updates.',
+  );
+
+const TIER1_DIETARY_CORE_RULE_KEYS = new Set([
+  'allergies',
+  'allergies_confirmed_at',
+  'hard_avoids',
+  'hard_avoids_confirmed_at',
+  'dietary_constraints',
+  'dietary_constraints_confirmed_at',
+  'dislikes',
+  'dislikes_confirmed_at',
+  'favorite_foods',
+  'favorite_foods_confirmed_at',
+]);
+
+function stripTier1DietaryCoreRules(preferences: unknown): Record<string, unknown> {
+  if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) {
+    throw new Error('Meal preferences payload must be an object.');
+  }
+  const raw = { ...(preferences as Record<string, unknown>) };
+  const coreRules = raw.core_rules;
+  if (!coreRules || typeof coreRules !== 'object' || Array.isArray(coreRules)) {
+    return raw;
+  }
+  const nextCoreRules = { ...(coreRules as Record<string, unknown>) };
+  for (const key of TIER1_DIETARY_CORE_RULE_KEYS) {
+    delete nextCoreRules[key];
+  }
+  raw.core_rules = nextCoreRules;
+  return raw;
+}
+
+const groceryPlanItemKeySchema = z
+  .string()
+  .min(1)
+  .describe(
+    'Use the item_key/itemKey value returned for the exact grocery-plan line by meals_get_grocery_plan, meals_get_current_grocery_list, or meals_render_grocery_list_v2.',
+  );
+const mealRecipeIdInputSchema = z
+  .string()
+  .min(1)
+  .describe('Preferred saved Fluent recipe identifier returned as recipe_id/id by meals_list_recipes, meals_get_recipe_book, or a prior recipe tool.');
+const mealRecipeIdAliasInputSchema = z
+  .string()
+  .min(1)
+  .describe('Legacy saved Fluent recipe ID alias; prefer recipe_id when it is available.');
+const mealRecipeSlugInputSchema = z
+  .string()
+  .min(1)
+  .describe('Fallback saved Fluent recipe slug; use only when no recipe_id/id is available.');
+const mealsHouseholdMealParticipationSchema = z
+  .record(
+    z.enum(['breakfast', 'lunch', 'dinner', 'snack']),
+    z.array(z.string().min(1).describe('Participant label such as adult_1, adult_2, child, everyone, or skips.')),
+  )
+  .describe('Object keyed only by meal type: breakfast, lunch, dinner, or snack.');
+const groceryIntentStatusSchema = z
+  .enum(['pending', 'completed', 'deleted'])
+  .describe('Lifecycle status for the grocery intent: pending while still needed, completed when handled, or deleted when removed.');
+const groceryIntentTargetWindowSchema = z
+  .string()
+  .min(1)
+  .describe('Target shopping window for the intent, usually an ISO week_start date formatted YYYY-MM-DD or a short label such as next_order.');
 const mealsCalibrationSignalKindSchema = z.enum([
   'household_shape',
   'disliked_food',
@@ -103,6 +190,8 @@ const mealsCalibrationSignalKindSchema = z.enum([
 ]);
 const mealsCalibrationSignalStatusSchema = z.enum(['confirmed', 'corrected', 'rejected']);
 const mealsPantryCalibrationStatusSchema = z.enum(['stale', 'accidental', 'not_representative', 'representative']);
+const vNextMealsPlanningFrontDoor =
+  'For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, this is a detail follow-up, not a starter; do not use this as the first read. Start with fluent_get_context(domain="meals", intent="planning") when available, then use this tool only if the user asks for its specific detail or the vNext packet says that detail is required.';
 function buildWidgetMeta(description: string, origin: string) {
   return {
     'openai/widgetCSP': {
@@ -112,12 +201,12 @@ function buildWidgetMeta(description: string, origin: string) {
     'openai/widgetDescription': description,
     'openai/widgetDomain': origin,
     'openai/widgetPrefersBorder': true,
+    // MCP Apps `ui.domain` is host-provisioned (Claude rejects a server-supplied origin).
     ui: {
       csp: {
         connectDomains: [],
         resourceDomains: [],
       },
-      domain: origin,
       prefersBorder: true,
     },
   } as const;
@@ -154,6 +243,7 @@ function withAppsSecurity<T extends { _meta?: Record<string, unknown> }>(
 }
 
 type MealsMcpSurfaceOptions = {
+  budgets?: BudgetsService;
   includeDevWidgetSurfaces?: boolean;
 };
 
@@ -565,27 +655,35 @@ function buildPantryDashboardViewModel(input: {
   };
 }
 const calendarContextDaySchema = z.object({
-  date: z.string(),
-  blockedMeals: z.array(calendarMealTypeSchema).optional(),
-  householdAdultsHome: z.number().int().min(0).nullable().optional(),
-  householdChildrenHome: z.number().int().min(0).nullable().optional(),
-  notes: z.array(z.string()).nullable().optional(),
-});
+  date: isoDateInputSchema.describe('ISO calendar date for the planning day, formatted exactly as YYYY-MM-DD.'),
+  blockedMeals: z
+    .array(calendarMealTypeSchema.describe('Meal slot name: breakfast, lunch, dinner, or snack.'))
+    .optional()
+    .describe('Meal slots that should not be planned on this date, such as dinner when the household is out.'),
+  householdAdultsHome: z.number().int().min(0).nullable().optional().describe('Known adult count eating at home on this date, or null if unknown.'),
+  householdChildrenHome: z.number().int().min(0).nullable().optional().describe('Known child count eating at home on this date, or null if unknown.'),
+  notes: z.array(z.string()).nullable().optional().describe('Short calendar constraints or scheduling notes for this date.'),
+}).describe('One day of calendar context for a weekly meal plan.');
 const calendarContextSchema = z.object({
-  weekStart: z.string(),
-  generatedAt: z.string().nullable().optional(),
-  source: z.string().nullable().optional(),
-  availability: z.enum(['available', 'unavailable', 'unchecked']),
-  days: z.array(calendarContextDaySchema).optional(),
-});
+  weekStart: isoDateInputSchema.describe('Start date of the requested planning week, formatted exactly as YYYY-MM-DD.'),
+  generatedAt: z.string().nullable().optional().describe('Optional timestamp for when the calendar context was assembled.'),
+  source: z.string().nullable().optional().describe('Optional source label for the calendar context, such as user or calendar_import.'),
+  availability: z.enum(['available', 'unavailable', 'unchecked']).describe('Whether calendar availability was checked for this plan.'),
+  days: z.array(calendarContextDaySchema).optional().describe('Per-day planning constraints keyed by each date in the requested week.'),
+}).describe('Optional calendar availability and household-presence context for meal planning.');
 const trainingContextSchema = z.object({
-  goalType: z.string().nullable().optional(),
-  trainingDays: z.array(z.string()).optional(),
-  daysPerWeek: z.number().int().min(0).max(7),
-  sessionLoadByDay: z.record(z.string(), z.enum(['light', 'moderate', 'hard'])).optional(),
-  nutritionSupportMode: z.enum(['general', 'higher_protein', 'simpler_dinners', 'recovery_support']),
-  weekComplexity: z.enum(['low', 'medium', 'high']),
-});
+  goalType: z.string().nullable().optional().describe('Optional training goal label, such as strength, endurance, fat_loss, or null if unknown.'),
+  trainingDays: z.array(isoDateInputSchema).optional().describe('ISO dates, formatted exactly as YYYY-MM-DD, when training is expected during the plan week.'),
+  daysPerWeek: z.number().int().min(0).max(7).describe('Number of expected training days in the plan week.'),
+  sessionLoadByDay: z
+    .record(z.string(), z.enum(['light', 'moderate', 'hard']))
+    .optional()
+    .describe('Object keyed by ISO date YYYY-MM-DD; each value is the expected training load for that date: light, moderate, or hard.'),
+  nutritionSupportMode: z
+    .enum(['general', 'higher_protein', 'simpler_dinners', 'recovery_support'])
+    .describe('Nutrition emphasis to account for training while planning meals.'),
+  weekComplexity: z.enum(['low', 'medium', 'high']).describe('How complex the week should feel from a meal-prep and cooking perspective.'),
+}).describe('Optional fitness/training context used to bias meal planning without changing the canonical health plan.');
 
 function normalizeMealsTrainingContextInput(
   input: z.infer<typeof trainingContextSchema> | undefined,
@@ -624,6 +722,9 @@ export function registerMealsMcpSurface(
   options?: MealsMcpSurfaceOptions,
 ) {
   const mealsReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_MEALS_READ_SCOPE] }];
+  const fluentRenderSurfaceSecuritySchemes = [
+    { type: 'oauth2' as const, scopes: [FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE] },
+  ];
   const mealsWriteSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_MEALS_WRITE_SCOPE] }];
   const recipeCardWidgetMeta = buildWidgetMeta(
     'Fluent recipe card for a saved meal recipe, with ingredients, steps, and cook mode.',
@@ -772,6 +873,31 @@ export function registerMealsMcpSurface(
     'Grocery List Widget Previous v70',
   );
   registerGroceryListWidgetResource('fluent-meals-grocery-list-widget-v2', MEALS_GROCERY_LIST_TEMPLATE_URI);
+  registerGroceryListWidgetResource(
+    'fluent-vnext-meals-grocery-list-widget-legacy-v1',
+    MEALS_GROCERY_LIST_VNEXT_LEGACY_TEMPLATE_URI,
+    'Fluent vNext Grocery List Candidate Widget Previous v1',
+  );
+  registerGroceryListWidgetResource(
+    'fluent-vnext-meals-grocery-list-widget-previous-v2',
+    MEALS_GROCERY_LIST_VNEXT_PREVIOUS_TEMPLATE_URI,
+    'Fluent vNext Grocery List Candidate Widget Previous v2',
+  );
+  registerGroceryListWidgetResource(
+    'fluent-vnext-meals-grocery-list-widget-v3',
+    MEALS_GROCERY_LIST_VNEXT_BRIDGE_TEMPLATE_URI,
+    'Fluent vNext Grocery List Candidate Widget v3',
+  );
+  registerGroceryListWidgetResource(
+    'fluent-vnext-meals-grocery-list-widget-v4',
+    MEALS_GROCERY_LIST_VNEXT_MULTIFRAME_TEMPLATE_URI,
+    'Fluent vNext Grocery List Candidate Widget v4',
+  );
+  registerGroceryListWidgetResource(
+    'fluent-vnext-meals-grocery-list-widget-v5',
+    MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
+    'Fluent vNext Grocery List Candidate Widget v5',
+  );
 
   const registerPantryDashboardWidgetResource = (name: string, uri: string, title = 'Pantry Dashboard Widget') =>
     server.registerResource(
@@ -836,9 +962,10 @@ export function registerMealsMcpSurface(
   server.registerResource(
     'meals-current-plan',
     'fluent://meals/current-plan',
-    {
-      title: 'Current Meal Plan',
-      description: 'The current approved or active meal plan with entries.',
+      {
+      title: 'Detail Resource: Current Meal Plan',
+      description:
+        'Detail resource for the current approved or active meal plan with entries. For broad planning/currentness prompts, start with fluent_get_context(domain="meals", intent="planning") instead.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -853,9 +980,10 @@ export function registerMealsMcpSurface(
   server.registerResource(
     'meals-inventory',
     'fluent://meals/inventory',
-    {
-      title: 'Meal Inventory',
-      description: 'Current lightweight meal inventory snapshot.',
+      {
+      title: 'Detail Resource: Meal Inventory',
+      description:
+        'Detail resource for the current lightweight meal inventory snapshot. For broad planning/currentness prompts, start with fluent_get_context(domain="meals", intent="planning") instead.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -868,9 +996,10 @@ export function registerMealsMcpSurface(
   server.registerResource(
     'meals-preferences',
     'fluent://meals/preferences',
-    {
-      title: 'Meals Preferences',
-      description: 'Canonical meal-planning preferences for the current Fluent profile.',
+      {
+      title: 'Detail Resource: Meals Preferences',
+      description:
+        'Detail resource for canonical meal-planning preferences. For broad planning/currentness prompts, start with fluent_get_context(domain="meals", intent="planning") instead.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -883,9 +1012,10 @@ export function registerMealsMcpSurface(
   server.registerResource(
     'fluent-meals-plan-by-week',
     new ResourceTemplate('fluent://meals/plans/{week_start}', { list: undefined }),
-    {
-      title: 'Meal Plan By Week',
-      description: 'A meal plan for a specific week start date.',
+      {
+      title: 'Detail Resource: Meal Plan By Week',
+      description:
+        'Detail resource for a meal plan by specific week start date. For broad planning/currentness prompts, start with fluent_get_context(domain="meals", intent="planning") instead.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -898,9 +1028,9 @@ export function registerMealsMcpSurface(
   server.registerResource(
     'fluent-meals-recipe',
     new ResourceTemplate('fluent://meals/recipes/{recipe_id}', { list: undefined }),
-    {
-      title: 'Meal Recipe',
-      description: 'A single meal recipe by recipe ID.',
+      {
+      title: 'Detail Resource: Meal Recipe',
+      description: 'Detail resource for a single meal recipe by recipe ID.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -913,9 +1043,9 @@ export function registerMealsMcpSurface(
   server.registerResource(
     'fluent-meals-grocery-plan',
     new ResourceTemplate('fluent://meals/grocery-plan/{week_start}', { list: undefined }),
-    {
-      title: 'Meal Grocery Plan',
-      description: 'Retailer-agnostic grocery planning output for a specific week start date.',
+      {
+      title: 'Detail Resource: Meal Grocery Plan',
+      description: 'Detail resource for retailer-agnostic grocery planning output for a specific week start date.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -966,12 +1096,13 @@ export function registerMealsMcpSurface(
   server.registerTool(
     'meals_get_plan',
     {
-      title: 'Get Meal Plan',
-      description: 'Fetch the current approved or active meal plan, or a canonical meal plan for a specific week start date.',
+      title: 'Detail Only: Meal Plan',
+      description:
+        `Fetch the current approved or active meal plan, or a canonical meal plan for a specific week start date. ${vNextMealsPlanningFrontDoor}`,
       inputSchema: {
-        today: z.string().optional(),
+        today: isoDateInputSchema.optional().describe('Optional date formatted exactly as YYYY-MM-DD used to choose the current plan when week_start is omitted.'),
         view: readViewSchema,
-        week_start: z.string().optional(),
+        week_start: isoDateInputSchema.optional().describe('Optional plan week start date formatted exactly as YYYY-MM-DD; takes precedence over today when provided.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -993,8 +1124,9 @@ export function registerMealsMcpSurface(
   server.registerTool(
     'meals_list_plan_history',
     {
-      title: 'List Meal Plan History',
-      description: 'List recent canonical weekly meal plans.',
+      title: 'Detail Only: Meal Plan History',
+      description:
+        `List recent canonical weekly meal plans. ${vNextMealsPlanningFrontDoor}`,
       inputSchema: {
         limit: z.number().int().min(1).max(52).optional(),
       },
@@ -1027,7 +1159,7 @@ export function registerMealsMcpSurface(
       title: 'Get Day Meal Plan',
       description: 'Fetch the meals for a specific date.',
       inputSchema: {
-        date: z.string(),
+        date: isoDateInputSchema.describe('Date to fetch, formatted exactly as YYYY-MM-DD.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -1057,11 +1189,11 @@ export function registerMealsMcpSurface(
   server.registerTool(
     'meals_get_today_context',
     {
-      title: 'Get Today Context',
+      title: 'Detail Only: Today Meals',
       description:
-        'Fetch today’s meals, linked recipe details, and whether feedback is still missing. Use this only for today-plan questions (e.g., what am I eating today). Do not use this to answer “which recipe is X” or other recipe-disambiguation prompts.',
+        `Fetch today’s meals, linked recipe details, and whether feedback is still missing. Use this only for today-plan questions (e.g., what am I eating today). Do not use this to answer "which recipe is X" or other recipe-disambiguation prompts. ${vNextMealsPlanningFrontDoor}`,
       inputSchema: {
-        date: z.string().optional(),
+        date: isoDateInputSchema.optional().describe('Optional date formatted exactly as YYYY-MM-DD; omit to use today.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -1098,9 +1230,9 @@ export function registerMealsMcpSurface(
       description:
         'Fetch canonical recipe data by recipe ID. Use this for raw recipe details, ingredient extraction, editing, patching, simple data questions, and as the default recipe path in Codex, OpenClaw, generic plain MCP clients, and hosts that render first-party recipe visuals themselves. In ChatGPT / MCP Apps-style hosts that support Fluent widgets, if the user wants to show, view, open, or pull up the recipe, prefer meals_render_recipe_card instead of this raw data tool.',
       inputSchema: {
-        recipe_id: z.string().optional(),
-        id: z.string().optional(),
-        slug: z.string().optional(),
+        recipe_id: mealRecipeIdInputSchema.optional().describe('Preferred saved Fluent recipe identifier returned as recipe_id/id by meals_list_recipes, meals_get_recipe_book, or a prior recipe tool.'),
+        id: mealRecipeIdAliasInputSchema.optional().describe('Legacy saved Fluent recipe ID alias; prefer recipe_id when it is available.'),
+        slug: mealRecipeSlugInputSchema.optional().describe('Fallback saved Fluent recipe slug; use only when no recipe_id/id is available.'),
         view: readViewSchema,
       },
       annotations: {
@@ -1204,10 +1336,10 @@ export function registerMealsMcpSurface(
           ? 'Preferred public alias for showing a saved Fluent recipe as a rich Fluent widget only in hosts that support MCP Apps or MCP output templates, such as Claude MCP Apps and ChatGPT Apps-style hosts. Prefer this for ordinary prompts like "show me the recipe for X", "open this recipe", or "pull up that recipe" in those hosts. Do not use this by default in Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer meals_get_recipe and either let the host render its own recipe visual or answer in text.'
           : 'Show a saved Fluent recipe as a rich Fluent widget only in hosts that support MCP Apps or MCP output templates, such as Claude MCP Apps and ChatGPT Apps-style hosts. Prefer this when the user says show, open, view, or pull up a recipe in those hosts, including prompts like "show me the recipe for X." Do not use this by default in Claude Code, Codex, OpenClaw, or generic plain MCP clients; there, prefer meals_get_recipe and either let the host render its own recipe visual or answer in text.',
         inputSchema: {
-          recipe_id: z.string().optional(),
-          recipeId: z.string().optional(),
-          id: z.string().optional(),
-          slug: z.string().optional(),
+          recipe_id: mealRecipeIdInputSchema.optional().describe('Preferred saved Fluent recipe identifier returned as recipe_id/id by meals_list_recipes, meals_get_recipe_book, or a prior recipe tool.'),
+          recipeId: mealRecipeIdAliasInputSchema.describe('Legacy camelCase saved Fluent recipe ID alias; prefer recipe_id when it is available.').optional(),
+          id: mealRecipeIdAliasInputSchema.optional().describe('Legacy saved Fluent recipe ID alias; prefer recipe_id when it is available.'),
+          slug: mealRecipeSlugInputSchema.optional().describe('Fallback saved Fluent recipe slug; use only when no recipe_id/id is available.'),
         },
         annotations: {
           readOnlyHint: true,
@@ -1228,6 +1360,47 @@ export function registerMealsMcpSurface(
   registerRenderRecipeCardTool('meals_render_recipe_card');
   registerRenderRecipeCardTool('meals_show_recipe', { preferredAlias: true });
 
+  const renderCurrentGroceryList = async ({ week_start, weekStart }: { week_start?: string; weekStart?: string }) => {
+    requireScope(FLUENT_MEALS_READ_SCOPE);
+    const currentList = await getCurrentGroceryListForRender(meals, week_start ?? weekStart);
+    const viewModel = buildGroceryListViewModel({
+      currentList,
+      groceryPlan: currentList.groceryPlan,
+      intents: currentList.intents,
+      prepared: currentList.preparedOrder,
+      weekStart: currentList.weekStart,
+    });
+
+    if (!viewModel) {
+      const emptyViewModel = applyCurrentListMetadataToViewModel(buildEmptyGroceryListViewModel(currentList.weekStart), currentList);
+      return {
+        _meta: buildGroceryListMetadata(emptyViewModel),
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Your current grocery list is empty.',
+          },
+        ],
+        structuredContent: {
+          ...buildGroceryListStructuredContent(emptyViewModel),
+          hasData: false,
+        },
+      };
+    }
+
+    const structuredContent = buildGroceryListStructuredContent(viewModel);
+    return {
+      _meta: buildGroceryListMetadata(viewModel),
+      content: [
+        {
+          type: 'text' as const,
+          text: 'Showing your current grocery list.',
+        },
+      ],
+      structuredContent,
+    };
+  };
+
   const registerRenderGroceryListTool = () =>
     server.registerTool(
       'meals_render_grocery_list_v2',
@@ -1236,8 +1409,8 @@ export function registerMealsMcpSurface(
         description:
           'Show the user\'s current Fluent grocery list as the primary rich checklist surface for normal asks like "show me my grocery list", "what do I need to buy?", "open my shopping list", or "pull up my grocery list". In ChatGPT / MCP Apps-style hosts, and in broader MCP clients such as Claude.ai when they expose MCP Apps UI-resource mounting, prefer this tool for ordinary grocery-list display because it returns the official Fluent `ui://` resource plus structured fallback data. The surface shows the living list with source provenance, trust state, To buy, Check amount, Check at home, and Done sections. If the active host cannot mount the returned MCP Apps UI resource, fall back to the canonical living-list data in the tool result or call meals_get_current_grocery_list and answer in text. Use meals_get_grocery_plan only for explicit week-scoped/raw plan detail.',
         inputSchema: {
-          week_start: z.string().optional(),
-          weekStart: z.string().optional(),
+          week_start: isoDateInputSchema.optional().describe('Optional plan week start date formatted exactly as YYYY-MM-DD. Prefer week_start; weekStart is a legacy alias.'),
+          weekStart: isoDateInputSchema.optional().describe('Legacy camelCase week start alias formatted exactly as YYYY-MM-DD; prefer week_start.'),
         },
         annotations: {
           readOnlyHint: true,
@@ -1253,49 +1426,152 @@ export function registerMealsMcpSurface(
           'openai/widgetAccessible': true,
         },
       }, mealsReadSecuritySchemes),
-      async ({ week_start, weekStart }) => {
-        requireScope(FLUENT_MEALS_READ_SCOPE);
-        const currentList = await getCurrentGroceryListForRender(meals, week_start ?? weekStart);
-        const viewModel = buildGroceryListViewModel({
-          currentList,
-          groceryPlan: currentList.groceryPlan,
-          intents: currentList.intents,
-          prepared: currentList.preparedOrder,
-          weekStart: currentList.weekStart,
-        });
-
-        if (!viewModel) {
-          const emptyViewModel = applyCurrentListMetadataToViewModel(buildEmptyGroceryListViewModel(currentList.weekStart), currentList);
-          return {
-            _meta: buildGroceryListMetadata(emptyViewModel),
-            content: [
-              {
-                type: 'text' as const,
-                text: 'Your current grocery list is empty.',
-              },
-            ],
-            structuredContent: {
-              ...buildGroceryListStructuredContent(emptyViewModel),
-              hasData: false,
-            },
-          };
-        }
-
-        const structuredContent = buildGroceryListStructuredContent(viewModel);
-        return {
-          _meta: buildGroceryListMetadata(viewModel),
-          content: [
-            {
-              type: 'text' as const,
-              text: 'Showing your current grocery list.',
-            },
-          ],
-          structuredContent,
-        };
-      },
+      renderCurrentGroceryList,
     );
 
   registerRenderGroceryListTool();
+
+  const renderBudgetsEnvelopeSetupResult = async () => {
+    requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
+    if (!options?.budgets) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Budgets envelope setup is unavailable in this runtime.',
+          },
+        ],
+        isError: true,
+        structuredContent: {
+          error: 'budgets_unavailable',
+          surface: 'budgets_envelope_setup',
+        },
+      };
+    }
+    const structuredContent = await buildBudgetsEnvelopeSetupStructuredContent(options.budgets);
+    return {
+      _meta: {
+        ui: {
+          resourceUri: BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
+        },
+        'openai/outputTemplate': BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
+        surface: 'budgets_envelope_setup',
+        templateUri: BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
+      },
+      content: [
+        {
+          type: 'text' as const,
+          text: [
+            'Showing the Fluent budget envelope setup surface.',
+            `Template URI: ${BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI}.`,
+            'If the host cannot mount this resource, use the structured envelope fallback data in text.',
+          ].join(' '),
+        },
+      ],
+      structuredContent,
+    };
+  };
+
+  // Hosts mount only the REGISTRATION-level output template (Claude ignores per-result
+  // templateUri — observed live 2026-06-11), so the envelope-setup view needs its own
+  // adapter tool with the budgets template pinned here.
+  server.registerTool(
+    'fluent_render_budgets_surface',
+    withAppsSecurity({
+      title: 'Show Fluent Budget Envelopes',
+      description:
+        'Promoted render adapter for the Fluent budget envelope-setup MCP Apps surface. Use this when the user wants to see, set, or edit their clothing/grocery budget envelopes and the host can mount MCP Apps ui:// resources. Returns the envelope-setup widget resource plus structured fallback data; if the host cannot mount the resource, answer from the structured fallback data in text.',
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+      _meta: {
+        ui: {
+          resourceUri: BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
+        },
+        'openai/outputTemplate': BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
+        'openai/toolInvocation/invoked': 'Fluent budget envelopes ready.',
+        'openai/toolInvocation/invoking': 'Opening budget envelopes...',
+        'openai/widgetAccessible': true,
+      },
+    }, fluentRenderSurfaceSecuritySchemes),
+    async () => renderBudgetsEnvelopeSetupResult(),
+  );
+
+  server.registerTool(
+    'fluent_render_surface',
+    withAppsSecurity({
+      title: 'Render Fluent Grocery List',
+      description:
+        'Promoted render adapter for Fluent MCP Apps surfaces. Use surface="meals_grocery_list" for the current Fluent grocery-list widget. For budget envelopes prefer fluent_render_budgets_surface (it mounts the envelope-setup widget); surface="budgets_envelope_setup" here returns the same structured envelope data for widget refresh and text fallback. If the host cannot mount the returned ui:// resource, answer from the structured fallback data in text.',
+      inputSchema: {
+        surface: z.enum(['meals_grocery_list', 'budgets_envelope_setup']).describe('The Fluent surface to render.'),
+        week_start: isoDateInputSchema.optional().describe('Optional plan week start date formatted exactly as YYYY-MM-DD. Prefer week_start; weekStart is a legacy alias.'),
+        weekStart: isoDateInputSchema.optional().describe('Legacy camelCase week start alias formatted exactly as YYYY-MM-DD; prefer week_start.'),
+      },
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+      _meta: {
+        ui: {
+          resourceUri: MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
+        },
+        'openai/outputTemplate': MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
+        'openai/toolInvocation/invoked': 'Fluent surface ready.',
+        'openai/toolInvocation/invoking': 'Opening Fluent surface...',
+        'openai/widgetAccessible': true,
+      },
+    }, fluentRenderSurfaceSecuritySchemes),
+    async ({ surface, week_start, weekStart }) => {
+      if (surface === 'budgets_envelope_setup') {
+        return renderBudgetsEnvelopeSetupResult();
+      }
+
+      if (surface !== 'meals_grocery_list') {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Unsupported Fluent surface: ${String(surface)}.`,
+            },
+          ],
+          isError: true,
+          structuredContent: {
+            error: 'unsupported_surface',
+            surface,
+          },
+        };
+      }
+
+      requireScope(FLUENT_MEALS_READ_SCOPE);
+      const result = await renderCurrentGroceryList({ week_start, weekStart });
+      return {
+        ...result,
+        _meta: {
+          ...result._meta,
+          surface: 'meals_grocery_list',
+          templateUri: MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
+        },
+        content: [
+          {
+            type: 'text' as const,
+            text: [
+              'Showing the Fluent grocery list surface.',
+              `Template URI: ${MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI}.`,
+              'If the host cannot mount this resource, use the structured grocery-list fallback data in text.',
+            ].join(' '),
+          },
+        ],
+        structuredContent: {
+          surface: 'meals_grocery_list',
+          templateUri: MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
+          ...result.structuredContent,
+        },
+      };
+    },
+  );
 
   server.registerTool(
     'meals_render_pantry_dashboard',
@@ -1359,7 +1635,11 @@ export function registerMealsMcpSurface(
           'plan_meals',
         ]),
         dashboard_id: z.string().optional(),
-        item_key: z.string().optional(),
+        item_key: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Inventory item key from the Pantry Dashboard action payload; required only for mark_used_up and undo_used_up actions.'),
         staple_id: z.string().optional(),
         staple_name: z.string().optional(),
         staple_quantity: z.union([z.number(), z.string()]).nullable().optional(),
@@ -1695,9 +1975,9 @@ export function registerMealsMcpSurface(
   server.registerTool(
     'meals_list_recipes',
     {
-      title: 'List Recipes',
+      title: 'Detail Only: Recipe Discovery',
       description:
-        'List recipe candidates for discovery, optionally filtered by meal type. Use this for recipe disambiguation (e.g., “which one is X”) and to find recipe IDs and names, then call meals_get_recipe for the actual recipe details.',
+        `List recipe candidates for explicit recipe discovery, recipe disambiguation (e.g., "which one is X"), or finding recipe IDs and names before meals_get_recipe. Do not call this just to make a tentative weeknight plan. ${vNextMealsPlanningFrontDoor}`,
       inputSchema: {
         meal_type: z.string().optional(),
         status: z.string().optional(),
@@ -1796,9 +2076,9 @@ export function registerMealsMcpSurface(
   server.registerTool(
     'meals_get_preferences',
     {
-      title: 'Get Meals Preferences',
+      title: 'Detail Only: Meals Preferences',
       description:
-        'Fetch raw or summarized meal-planning preferences outside the standard setup/calibration lane. For Meals onboarding, confidence checks, inferred preference confirmation, kitchen-inventory evidence calibration, or "what do you know about how we eat?" prompts, start with meals_get_onboarding_calibration so inventory evidence, meal history, inferred signals, confirmed preferences, and planning/grocery readiness stay distinct.',
+        `Fetch raw or summarized meal-planning preferences for explicit preference-detail questions. ${vNextMealsPlanningFrontDoor}`,
       inputSchema: {
         view: readViewSchema,
       },
@@ -1821,9 +2101,9 @@ export function registerMealsMcpSurface(
   server.registerTool(
     'meals_get_onboarding_calibration',
     {
-      title: 'Get Meals Onboarding Calibration',
+      title: 'Detail Only: Meals Setup Calibration',
       description:
-        'Required first and sufficient read model for Meals setup/calibration. Fetch setup state, household/preference status, kitchen-inventory coverage, plan/history coverage, grocery readiness, inferred meal signals, confirmed preferences, unresolved questions, evidence gaps, suggested next action, confidence breakdown, and host copy guardrails. Use this for new Meals setup, returning/imported inventory calibration, inferred preference confirmation, starter meal preference collection, grocery-confidence prompts, and meal planning that depends on thin or inferred evidence. At-home ownership, old plans, accepted recipes, and grocery actions are evidence only; say "your kitchen inventory suggests" or "your meal history suggests" unless the user explicitly confirmed the preference.',
+        'Read the detailed Meals setup/calibration model for explicit setup, returning/imported inventory calibration, inferred preference confirmation, or starter meal preference collection. For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, start with fluent_get_context(domain="meals", intent="planning") when available; use this tool only when the vNext context packet is unavailable or the user asks for setup/calibration detail. At-home ownership, old plans, accepted recipes, and grocery actions are evidence only; say "your kitchen inventory suggests" or "your meal history suggests" unless the user explicitly confirmed the preference.',
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
@@ -1850,12 +2130,13 @@ export function registerMealsMcpSurface(
         pantry_items: z
           .array(
             z.object({
-              item_name: z.string(),
-              note: z.string().nullable().optional(),
-              status: mealsPantryCalibrationStatusSchema,
+              item_name: z.string().describe('Pantry or inventory item name exactly as the user identified it.'),
+              note: z.string().nullable().optional().describe('Optional user-confirmed context for why this pantry item status changed.'),
+              status: mealsPantryCalibrationStatusSchema.describe('Calibration status to apply to this pantry item.'),
             }),
           )
-          .optional(),
+          .optional()
+          .describe('Only include pantry items the user explicitly confirmed, corrected, rejected, or marked stale/accidental.'),
         preference_patch: z
           .object({
             allergies: z.array(z.string()).nullable().optional(),
@@ -1873,7 +2154,10 @@ export function registerMealsMcpSurface(
             household_default_serve_target: z.number().min(0).nullable().optional(),
             household_guest_frequency: z.string().nullable().optional(),
             household_leftover_target_servings: z.number().min(0).nullable().optional(),
-            household_meal_participation: z.record(z.string(), z.array(z.string())).nullable().optional(),
+            household_meal_participation: mealsHouseholdMealParticipationSchema
+              .nullable()
+              .optional()
+              .describe('Object keyed by meal type: breakfast, lunch, dinner, or snack. Values are participant labels such as adult_1, adult_2, child, everyone, or skips.'),
             household_shape: z.string().nullable().optional(),
             household_size_segment: z.string().nullable().optional(),
             leftover_preference: z.string().nullable().optional(),
@@ -1898,7 +2182,8 @@ export function registerMealsMcpSurface(
             spice_preference: z.string().nullable().optional(),
             weeknight_time_limit_minutes: z.number().min(0).nullable().optional(),
           })
-          .optional(),
+          .optional()
+          .describe('Sparse patch of explicit user-confirmed Meals preferences. Include only fields the user just confirmed or corrected; omit inferred inventory, recipe, or grocery-history evidence.'),
         response_mode: writeResponseModeSchema,
         signals: z
           .array(
@@ -1910,7 +2195,8 @@ export function registerMealsMcpSurface(
               value: z.string(),
             }),
           )
-          .optional(),
+          .optional()
+          .describe('Explicit confirm/correct/reject responses for inferred meal preference signals.'),
         starter_preference_text: z.string().nullable().optional(),
         ...provenanceInputSchema,
       },
@@ -1918,66 +2204,75 @@ export function registerMealsMcpSurface(
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
+      const response = {
+        pantryItems: args.pantry_items?.map((entry) => ({
+          itemName: entry.item_name,
+          note: entry.note ?? null,
+          status: entry.status,
+        })),
+        preferencePatch: args.preference_patch
+          ? {
+              allergies: args.preference_patch.allergies ?? null,
+              budgetSensitivity: args.preference_patch.budget_sensitivity ?? null,
+              cleanupTolerance: args.preference_patch.cleanup_tolerance ?? null,
+              cookingCadence: args.preference_patch.cooking_cadence ?? null,
+              dietaryConstraints: args.preference_patch.dietary_constraints ?? null,
+              dislikes: args.preference_patch.dislikes ?? null,
+              favoriteFoods: args.preference_patch.favorite_foods ?? null,
+              groceryExpectation: args.preference_patch.grocery_expectation ?? null,
+              hardAvoids: args.preference_patch.hard_avoids ?? null,
+              householdAdultCount: args.preference_patch.household_adult_count ?? null,
+              householdChildCount: args.preference_patch.household_child_count ?? null,
+              householdChildrenEatSameMeals: args.preference_patch.household_children_eat_same_meals ?? null,
+              householdDefaultServeTarget: args.preference_patch.household_default_serve_target ?? null,
+              householdGuestFrequency: args.preference_patch.household_guest_frequency ?? null,
+              householdLeftoverTargetServings: args.preference_patch.household_leftover_target_servings ?? null,
+              householdMealParticipation: args.preference_patch.household_meal_participation ?? null,
+              householdShape: args.preference_patch.household_shape ?? null,
+              householdSizeSegment: args.preference_patch.household_size_segment ?? null,
+              leftoverPreference: args.preference_patch.leftover_preference ?? null,
+              mealRoutine: args.preference_patch.meal_routine ?? null,
+              planningBatchFreezerComfort: args.preference_patch.planning_batch_freezer_comfort ?? null,
+              planningBusyNights: args.preference_patch.planning_busy_nights ?? null,
+              planningCalendarPolicy: args.preference_patch.planning_calendar_policy ?? null,
+              planningEquipmentConstraints: args.preference_patch.planning_equipment_constraints ?? null,
+              planningFamilyDinnerCount: args.preference_patch.planning_family_dinner_count ?? null,
+              planningGroceryDay: args.preference_patch.planning_grocery_day ?? null,
+              planningPrepDay: args.preference_patch.planning_prep_day ?? null,
+              planningTargetBreakfastCount: args.preference_patch.planning_target_breakfast_count ?? null,
+              planningTargetDinnerCount: args.preference_patch.planning_target_dinner_count ?? null,
+              planningTargetLunchCount: args.preference_patch.planning_target_lunch_count ?? null,
+              planningTargetSnackCount: args.preference_patch.planning_target_snack_count ?? null,
+              planningTotalTimeToleranceMinutes: args.preference_patch.planning_total_time_tolerance_minutes ?? null,
+              preferredCuisines: args.preference_patch.preferred_cuisines ?? null,
+              shoppingPantryCheckPolicy: args.preference_patch.shopping_pantry_check_policy ?? null,
+              shoppingPreferredBrands: args.preference_patch.shopping_preferred_brands ?? null,
+              shoppingPreferredStores: args.preference_patch.shopping_preferred_stores ?? null,
+              shoppingSubstitutionTolerance: args.preference_patch.shopping_substitution_tolerance ?? null,
+              spicePreference: args.preference_patch.spice_preference ?? null,
+              weeknightTimeLimitMinutes: args.preference_patch.weeknight_time_limit_minutes ?? null,
+            }
+          : null,
+        signals: args.signals?.map((entry) => ({
+          correctedValue: entry.corrected_value ?? null,
+          kind: entry.kind,
+          note: entry.note ?? null,
+          status: entry.status,
+          value: entry.value,
+        })),
+        starterPreferenceText: args.starter_preference_text ?? null,
+      };
+      const provenance = buildMutationProvenance(authProps, args);
       const updated = await meals.recordCalibrationResponse({
-        response: {
-          pantryItems: args.pantry_items?.map((entry) => ({
-            itemName: entry.item_name,
-            note: entry.note ?? null,
-            status: entry.status,
-          })),
-          preferencePatch: args.preference_patch
-            ? {
-                allergies: args.preference_patch.allergies ?? null,
-                budgetSensitivity: args.preference_patch.budget_sensitivity ?? null,
-                cleanupTolerance: args.preference_patch.cleanup_tolerance ?? null,
-                cookingCadence: args.preference_patch.cooking_cadence ?? null,
-                dietaryConstraints: args.preference_patch.dietary_constraints ?? null,
-                dislikes: args.preference_patch.dislikes ?? null,
-                favoriteFoods: args.preference_patch.favorite_foods ?? null,
-                groceryExpectation: args.preference_patch.grocery_expectation ?? null,
-                hardAvoids: args.preference_patch.hard_avoids ?? null,
-                householdAdultCount: args.preference_patch.household_adult_count ?? null,
-                householdChildCount: args.preference_patch.household_child_count ?? null,
-                householdChildrenEatSameMeals: args.preference_patch.household_children_eat_same_meals ?? null,
-                householdDefaultServeTarget: args.preference_patch.household_default_serve_target ?? null,
-                householdGuestFrequency: args.preference_patch.household_guest_frequency ?? null,
-                householdLeftoverTargetServings: args.preference_patch.household_leftover_target_servings ?? null,
-                householdMealParticipation: args.preference_patch.household_meal_participation ?? null,
-                householdShape: args.preference_patch.household_shape ?? null,
-                householdSizeSegment: args.preference_patch.household_size_segment ?? null,
-                leftoverPreference: args.preference_patch.leftover_preference ?? null,
-                mealRoutine: args.preference_patch.meal_routine ?? null,
-                planningBatchFreezerComfort: args.preference_patch.planning_batch_freezer_comfort ?? null,
-                planningBusyNights: args.preference_patch.planning_busy_nights ?? null,
-                planningCalendarPolicy: args.preference_patch.planning_calendar_policy ?? null,
-                planningEquipmentConstraints: args.preference_patch.planning_equipment_constraints ?? null,
-                planningFamilyDinnerCount: args.preference_patch.planning_family_dinner_count ?? null,
-                planningGroceryDay: args.preference_patch.planning_grocery_day ?? null,
-                planningPrepDay: args.preference_patch.planning_prep_day ?? null,
-                planningTargetBreakfastCount: args.preference_patch.planning_target_breakfast_count ?? null,
-                planningTargetDinnerCount: args.preference_patch.planning_target_dinner_count ?? null,
-                planningTargetLunchCount: args.preference_patch.planning_target_lunch_count ?? null,
-                planningTargetSnackCount: args.preference_patch.planning_target_snack_count ?? null,
-                planningTotalTimeToleranceMinutes: args.preference_patch.planning_total_time_tolerance_minutes ?? null,
-                preferredCuisines: args.preference_patch.preferred_cuisines ?? null,
-                shoppingPantryCheckPolicy: args.preference_patch.shopping_pantry_check_policy ?? null,
-                shoppingPreferredBrands: args.preference_patch.shopping_preferred_brands ?? null,
-                shoppingPreferredStores: args.preference_patch.shopping_preferred_stores ?? null,
-                shoppingSubstitutionTolerance: args.preference_patch.shopping_substitution_tolerance ?? null,
-                spicePreference: args.preference_patch.spice_preference ?? null,
-                weeknightTimeLimitMinutes: args.preference_patch.weeknight_time_limit_minutes ?? null,
-              }
-            : null,
-          signals: args.signals?.map((entry) => ({
-            correctedValue: entry.corrected_value ?? null,
-            kind: entry.kind,
-            note: entry.note ?? null,
-            status: entry.status,
-            value: entry.value,
-          })),
-          starterPreferenceText: args.starter_preference_text ?? null,
-        },
-        provenance: buildMutationProvenance(authProps, args),
+        response,
+        provenance,
+      });
+      await mirrorMealsTier1PersonFacts({
+        preferencePatch: response.preferencePatch,
+        provenance,
+        rejectPersonFact: (factInput, factProvenance) => fluentCore.rejectPersonFact(factInput, factProvenance),
+        signals: response.signals,
+        upsertPersonFact: (factInput, factProvenance) => fluentCore.upsertPersonFact(factInput, factProvenance),
       });
       const calibration = await meals.getOnboardingCalibration();
       const ack = buildMutationAck(
@@ -2014,7 +2309,7 @@ export function registerMealsMcpSurface(
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
       const updated = await meals.updatePreferences({
-        preferences: args.preferences,
+        preferences: stripTier1DietaryCoreRules(args.preferences),
         provenance: buildMutationProvenance(authProps, args),
         sourceSnapshot: args.source_snapshot,
       });
@@ -2073,31 +2368,33 @@ export function registerMealsMcpSurface(
       description:
         'Generate compact weekly meal-plan candidate summaries from Fluent planner inputs. Use this when the user wants to start over or replan; accept a candidate to create a new weekly meal plan instead of deleting or rewriting prior plan history.',
       inputSchema: {
-        week_start: z.string(),
-        calendar_context: calendarContextSchema.optional(),
-        training_context: trainingContextSchema.optional(),
+        week_start: isoDateInputSchema.describe('Start date for the generated meal-plan week, formatted exactly as YYYY-MM-DD.'),
+        calendar_context: calendarContextSchema.optional().describe('Optional calendar availability context for this exact week.'),
+        training_context: trainingContextSchema.optional().describe('Optional training context for this exact week.'),
         overrides: z
           .object({
-            breakfastCount: z.number().int().min(0).max(7).optional(),
-            lunchCount: z.number().int().min(0).max(7).optional(),
-            dinnerCount: z.number().int().min(0).max(7).optional(),
-            snackCount: z.number().int().min(0).max(7).optional(),
-            familyDinnerCount: z.number().int().min(0).max(7).optional(),
-            maxTrialMeals: z.number().int().min(0).max(7).optional(),
-            includeRecipeIds: z.array(z.string()).optional(),
-            excludeRecipeIds: z.array(z.string()).optional(),
-            prioritizeInventory: z.boolean().optional(),
+            breakfastCount: z.number().int().min(0).max(7).optional().describe('Requested number of breakfasts in the generated week.'),
+            lunchCount: z.number().int().min(0).max(7).optional().describe('Requested number of lunches in the generated week.'),
+            dinnerCount: z.number().int().min(0).max(7).optional().describe('Requested number of dinners in the generated week.'),
+            snackCount: z.number().int().min(0).max(7).optional().describe('Requested number of snacks in the generated week.'),
+            familyDinnerCount: z.number().int().min(0).max(7).optional().describe('Requested number of dinners intended for the full household.'),
+            maxTrialMeals: z.number().int().min(0).max(7).optional().describe('Maximum number of exploratory or trial meals to include.'),
+            includeRecipeIds: z.array(z.string()).optional().describe('Recipe IDs the user explicitly asked to include if feasible.'),
+            excludeRecipeIds: z.array(z.string()).optional().describe('Recipe IDs the user explicitly asked to avoid for this generation.'),
+            prioritizeInventory: z.boolean().optional().describe('Whether to favor recipes that use current at-home inventory evidence.'),
             pinnedMeals: z
               .array(
                 z.object({
-                  date: z.string(),
-                  mealType: z.enum(['breakfast', 'lunch', 'dinner', 'snack']),
-                  recipeId: z.string(),
+                  date: isoDateInputSchema.describe('ISO date YYYY-MM-DD for the pinned meal.'),
+                  mealType: z.enum(['breakfast', 'lunch', 'dinner', 'snack']).describe('Meal slot to pin.'),
+                  recipeId: z.string().describe('Saved Fluent recipe ID to pin into that slot.'),
                 }),
               )
-              .optional(),
+              .optional()
+              .describe('Specific meals the user already chose and wants preserved in the generated week.'),
           })
-          .optional(),
+          .optional()
+          .describe('Optional explicit planning overrides from the user; omit when the setup read model already has enough targets.'),
         ...provenanceInputSchema,
       },
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
@@ -2132,11 +2429,11 @@ export function registerMealsMcpSurface(
       description:
         'Accept a generated meal-plan candidate and materialize it as a fresh canonical weekly plan, preserving any previous plan for the same week in history instead of deleting or rewriting it.',
       inputSchema: {
-        generation_id: z.string(),
-        candidate_id: z.string(),
-        input_hash: z.string(),
-        calendar_context: calendarContextSchema.optional(),
-        training_context: trainingContextSchema.optional(),
+        generation_id: z.string().describe('Generation ID returned by meals_generate_plan.'),
+        candidate_id: z.string().describe('Candidate ID returned by meals_generate_plan for the selected plan.'),
+        input_hash: z.string().describe('Input hash returned by meals_generate_plan; include it unchanged to protect against accepting a stale candidate.'),
+        calendar_context: calendarContextSchema.optional().describe('Same calendar_context used for meals_generate_plan, when one was provided.'),
+        training_context: trainingContextSchema.optional().describe('Optional training context: pass the same training_context used for meals_generate_plan when one was provided.'),
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
@@ -2213,8 +2510,9 @@ export function registerMealsMcpSurface(
   server.registerTool(
     'meals_get_inventory_summary',
     {
-      title: 'Get Inventory Summary',
-      description: 'Fetch a compact inventory summary including status counts and near-expiry items.',
+      title: 'Detail Only: Inventory Summary',
+      description:
+        `Fetch a compact inventory summary including status counts and near-expiry items for explicit inventory/pantry detail questions. ${vNextMealsPlanningFrontDoor}`,
       inputSchema: {
         today: z.string().optional(),
       },
@@ -2419,7 +2717,7 @@ export function registerMealsMcpSurface(
         location: z.string().optional(),
         brand: z.string().optional(),
         cost_cad: z.number().min(0).optional(),
-        metadata: z.any().optional(),
+        metadata: metadataInputSchema,
         ...provenanceInputSchema,
       },
     },
@@ -2491,7 +2789,7 @@ export function registerMealsMcpSurface(
             location: z.string().optional(),
             brand: z.string().optional(),
             cost_cad: z.number().min(0).optional(),
-            metadata: z.any().optional(),
+            metadata: metadataInputSchema,
           }),
         ),
         response_mode: writeResponseModeSchema,
@@ -2616,7 +2914,7 @@ export function registerMealsMcpSurface(
       description:
         'Generate or regenerate a retailer-agnostic grocery shopping plan for a meal-plan week, including items to buy and at-home staples to verify before shopping. Regeneration preserves previous grocery-plan context in event/source history instead of deleting or resetting prior state.',
       inputSchema: {
-        week_start: z.string().optional(),
+        week_start: isoDateInputSchema.optional().describe('Optional meal-plan week start date formatted exactly as YYYY-MM-DD; omit to use the current plan week.'),
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
@@ -2654,8 +2952,8 @@ export function registerMealsMcpSurface(
       description:
         'Fetch the canonical current living grocery list data for text answers, calculations, reconciliation, or hosts that cannot mount a rich grocery-list resource. This host-neutral read model distinguishes the living grocery list from weekly meal plans, derived grocery needs, shopping sessions, purchases, and kitchen memory. In ChatGPT / MCP Apps-style hosts, and in broader MCP clients such as Claude.ai when they expose MCP Apps UI-resource mounting, prefer meals_render_grocery_list_v2 for ordinary display asks like "show me my grocery list" or "what do I need to buy?". In Codex, OpenClaw, generic plain MCP clients, or render-fallback turns, use this tool and answer in text.',
       inputSchema: {
-        week_start: z.string().optional(),
-        today: z.string().optional(),
+        week_start: isoDateInputSchema.optional().describe('Optional meal-plan week start date formatted exactly as YYYY-MM-DD; takes precedence over today when provided.'),
+        today: isoDateInputSchema.optional().describe('Optional date formatted exactly as YYYY-MM-DD used to choose the current grocery list when week_start is omitted.'),
         view: readViewSchema,
       },
       annotations: {
@@ -2681,7 +2979,7 @@ export function registerMealsMcpSurface(
       description:
         'Fetch the underlying grocery-plan document for a specific meal-plan week, including buy-list items, at-home checks, substitutions, and resolved grocery actions. Prefer this for audit/debugging, when the user explicitly asks for a week-scoped grocery plan, or when a tool needs raw plan data. For ordinary "show my grocery list" asks in ChatGPT / MCP Apps-style hosts or broader MCP clients with MCP Apps UI-resource support, prefer meals_render_grocery_list_v2. In Codex, OpenClaw, generic plain MCP clients, or render-fallback turns, prefer meals_get_current_grocery_list.',
       inputSchema: {
-        week_start: z.string(),
+        week_start: isoDateInputSchema.describe('Meal-plan week start date formatted exactly as YYYY-MM-DD.'),
         view: readViewSchema,
       },
       annotations: {
@@ -2785,8 +3083,8 @@ export function registerMealsMcpSurface(
       description:
         'Persist an explicit user-requested grocery item resolution for a grocery-plan line, including mark purchased, track already in cart, skip item, confirm at-home stock, record an at-home sufficiency confirmation, mark need to buy, or substitute, swap, or replace one ingredient with another.',
       inputSchema: {
-        week_start: z.string(),
-        item_key: z.string(),
+        week_start: isoDateInputSchema.describe('Meal-plan week start date formatted exactly as YYYY-MM-DD.'),
+        item_key: groceryPlanItemKeySchema,
         action_status: z.enum([
           'purchased',
           'in_cart',
@@ -2799,7 +3097,13 @@ export function registerMealsMcpSurface(
           'dont_have_it',
         ]),
         meal_plan_id: z.string().optional(),
-        substitute_item_key: z.string().optional(),
+        substitute_item_key: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Optional item_key/itemKey for an existing grocery-plan line being used as the substitute source; omit when providing only substitute_display_name.',
+          ),
         substitute_display_name: z.string().optional(),
         create_substitute_intent: z.boolean().optional(),
         substitute_quantity: z.number().positive().optional(),
@@ -2807,7 +3111,7 @@ export function registerMealsMcpSurface(
         intent_notes: z.string().optional(),
         notes: z.string().optional(),
         purchased_at: z.string().optional(),
-        metadata: z.any().optional(),
+        metadata: metadataInputSchema,
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
@@ -2864,7 +3168,7 @@ export function registerMealsMcpSurface(
         'Legacy broader-MCP undo action for a specific grocery-plan item action. Use only for explicit cleanup of a specific week and item key; restart/reset product flows should start a new meal or grocery plan instead of deleting plan state.',
       inputSchema: {
         week_start: z.string(),
-        item_key: z.string(),
+        item_key: groceryPlanItemKeySchema,
         ...provenanceInputSchema,
       },
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
@@ -2896,10 +3200,10 @@ export function registerMealsMcpSurface(
         quantity: z.number().positive().optional(),
         unit: z.string().optional(),
         notes: z.string().optional(),
-        status: z.string().optional(),
-        target_window: z.string().optional(),
+        status: groceryIntentStatusSchema.optional().describe('Lifecycle status for the grocery intent: pending while still needed, completed when handled, or deleted when removed.'),
+        target_window: groceryIntentTargetWindowSchema.optional().describe('Target shopping window for the intent, usually an ISO week_start date formatted YYYY-MM-DD or a short label such as next_order.'),
         meal_plan_id: z.string().optional(),
-        metadata: z.any().optional(),
+        metadata: metadataInputSchema,
         ...provenanceInputSchema,
       },
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
@@ -3013,10 +3317,16 @@ async function getCurrentGroceryListForRender(
   explicitWeekStart?: string,
 ): Promise<CurrentGroceryListRecord> {
   const optionalMeals = meals as MealsService & {
-    getCurrentGroceryList?: (input?: { weekStart?: string | null }) => Promise<CurrentGroceryListRecord>;
+    getCurrentGroceryList?: (input?: {
+      skipCalibrationContext?: boolean;
+      weekStart?: string | null;
+    }) => Promise<CurrentGroceryListRecord>;
   };
   if (typeof optionalMeals.getCurrentGroceryList === 'function') {
-    return optionalMeals.getCurrentGroceryList({ weekStart: explicitWeekStart });
+    return optionalMeals.getCurrentGroceryList({
+      skipCalibrationContext: true,
+      weekStart: explicitWeekStart,
+    });
   }
 
   const weekStart = await resolveMealsGroceryWeekStart(meals, explicitWeekStart);

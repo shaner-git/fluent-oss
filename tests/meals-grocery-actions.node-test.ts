@@ -34,6 +34,8 @@ async function main() {
     await substitutionFlowAddsIntentAndSummaryPreview();
     await planScopedSubstituteIntentsDoNotBleedIntoLaterWeeks();
     await planScopedIntentsDoNotReuseOlderOpenIntentIds();
+    await newGroceryIntentIdsDoNotIncludeDisplayNames();
+    await preparedOrderDedupesRepeatedResolvedSubstitutionDecisions();
     await substitutionsPersistRecipeMemorySignals();
     await pantryCheckItemsCanBeConfirmedOrPromotedToBuyList();
     await rejectsOrphanGroceryPlanActions();
@@ -44,6 +46,8 @@ async function main() {
     await rejectsInventoryActionsWhenGroceryPlanMissingWithoutGenerating();
     await exposesCurrentGroceryListLifecycleState();
     await currentGroceryListDefaultsToMostRecentPastListInsteadOfFuturePlaceholder();
+    await currentWeekManualIntentSelectsLivingListBeforeStalePastPlan();
+    await manualIntentWritesRefreshCurrentGroceryListProjection();
     await regeneratesLegacyGroceryPlanRowsForUpdatedMealPlans();
     await rejectsSufficiencyConfirmationsForNonPantryItems();
     await rejectsInvalidGroceryPlanActionStatus();
@@ -473,6 +477,76 @@ async function planScopedIntentsDoNotReuseOlderOpenIntentIds() {
   }
 }
 
+async function newGroceryIntentIdsDoNotIncludeDisplayNames() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const intent = await service.upsertGroceryIntent({
+      displayName: 'Codex proof apples',
+      quantity: 3,
+      status: 'pending',
+      unit: 'count',
+      provenance,
+    });
+
+    assert.match(intent.id, /^grocery-intent:[0-9a-f-]{36}$/i);
+    assert.equal(intent.id.includes('codex'), false);
+    assert.equal(intent.id.includes('apples'), false);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function preparedOrderDedupesRepeatedResolvedSubstitutionDecisions() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const weekStart = '2026-05-13';
+    await service.updatePreferences({
+      preferences: {
+        inventory: {
+          long_life_defaults: ['black pepper'],
+        },
+      },
+      provenance,
+    });
+    await service.updateInventory({
+      name: 'black pepper',
+      status: 'present',
+      source: 'manual',
+      provenance,
+    });
+    await createTwoRecipePlanWithSharedIngredient(service, {
+      weekStart,
+      ingredient: { item: 'black pepper', quantity: 1, unit: 'g', ordering_policy: 'pantry_item' },
+    });
+
+    const generated = await service.generateGroceryPlan({ weekStart, provenance });
+    const pepperResolvedItems = generated.raw.resolvedItems.filter((item) => item.normalizedName === 'black pepper');
+    assert.equal(pepperResolvedItems.length, 2);
+
+    await service.upsertGroceryPlanAction({
+      weekStart,
+      itemKey: pepperResolvedItems[0]!.itemKey,
+      actionStatus: 'substituted',
+      substituteDisplayName: 'white pepper',
+      provenance,
+    });
+
+    const prepared = await service.prepareOrder({ weekStart });
+    assert.equal(prepared.substitutionDecisions.length, 1);
+    assert.deepEqual(prepared.substitutionDecisions[0], {
+      requested: 'black pepper',
+      resolvedTo: 'white pepper',
+      source: 'grocery_plan_action',
+    });
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
 async function substitutionsPersistRecipeMemorySignals() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
@@ -553,6 +627,65 @@ async function regeneratesLegacyGroceryPlanRowsForUpdatedMealPlans() {
   } finally {
     runtime.sqliteDb.close();
   }
+}
+
+async function createTwoRecipePlanWithSharedIngredient(
+  service: MealsService,
+  input: {
+    weekStart: string;
+    ingredient: { item: string; quantity: number; unit: string; ordering_policy?: string };
+  },
+) {
+  const recipes = [
+    { id: 'grocery-actions-duplicate-pepper-one', name: 'Duplicate Pepper One', mealType: 'dinner' },
+    { id: 'grocery-actions-duplicate-pepper-two', name: 'Duplicate Pepper Two', mealType: 'lunch' },
+  ] as const;
+
+  for (const recipe of recipes) {
+    await service.createRecipe({
+      recipe: {
+        id: recipe.id,
+        name: recipe.name,
+        meal_type: recipe.mealType,
+        servings: 1,
+        total_time: 5,
+        active_time: 5,
+        macros: {
+          calories: 300,
+          fiber_g: 4,
+          protein_g: 18,
+          sodium_mg: 180,
+        },
+        cost_per_serving_cad: 3.5,
+        ingredients: [{ ...input.ingredient, ordering_policy: input.ingredient.ordering_policy ?? 'flexible_match' }],
+        instructions: [{ step_number: 1, detail: 'Cook the recipe.' }],
+      },
+      provenance,
+    });
+  }
+
+  await service.upsertPlan({
+    plan: {
+      week_start: input.weekStart,
+      week_end: input.weekStart,
+      status: 'approved',
+      meals: recipes.map((recipe, index) => ({
+        id: `plan:${input.weekStart}:${index + 1}`,
+        date: input.weekStart,
+        day: 'Monday',
+        meal_type: recipe.mealType,
+        recipe_id: recipe.id,
+        recipe_name: recipe.name,
+        selection_status: 'proven',
+        serves: 1,
+        prep_minutes: 5,
+        total_minutes: 5,
+        leftovers_expected: false,
+        instructions: ['Cook the recipe.'],
+      })),
+    },
+    provenance,
+  });
 }
 
 async function createSingleRecipePlan(
@@ -987,6 +1120,94 @@ async function currentGroceryListDefaultsToMostRecentPastListInsteadOfFuturePlac
     assert.ok(currentList.sourceProvenance.some((source) => source.weekStart === pastWeekStart));
     assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'salmon fillets'), true);
     assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'plain greek yogurt'), false);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function currentWeekManualIntentSelectsLivingListBeforeStalePastPlan() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const pastWeekStart = '2026-05-11';
+    const currentWeekStart = '2026-06-01';
+    await createSingleRecipePlan(service, {
+      weekStart: pastWeekStart,
+      recipeId: 'grocery-actions-current-list-stale-past',
+      recipeName: 'Stale Past Grocery List',
+      ingredient: { item: 'old lemons', quantity: 1, unit: 'count' },
+      mealType: 'dinner',
+    });
+    await service.generateGroceryPlan({ weekStart: pastWeekStart, provenance });
+    await service.upsertGroceryIntent({
+      displayName: 'current week lemons',
+      status: 'pending',
+      targetWindow: currentWeekStart,
+      provenance,
+    });
+
+    const currentList = await service.getCurrentGroceryList({ today: '2026-06-07' });
+    assert.equal(currentList.weekStart, currentWeekStart);
+    assert.equal(currentList.weekRelation, 'contains_today');
+    assert.equal(currentList.stale, false);
+    assert.equal(currentList.trustState, 'review_before_shopping');
+    assert.equal(currentList.groceryPlan, null);
+    assert.equal(currentList.selectionReason, null);
+    assert.equal(currentList.counts.manualIntentCount, 1);
+    assert.equal(currentList.intents[0]?.displayName, 'current week lemons');
+    assert.ok(currentList.sourceProvenance.some((source) => source.kind === 'manual_item'));
+    assert.equal(currentList.sourceProvenance.some((source) => source.kind === 'accepted_meal_plan'), false);
+    assert.equal(currentList.sourceProvenance.some((source) => source.kind === 'grocery_plan'), false);
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'old lemons') ?? false, false);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function manualIntentWritesRefreshCurrentGroceryListProjection() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const weekStart = '2026-05-25';
+    await createSingleRecipePlan(service, {
+      weekStart,
+      recipeId: 'grocery-actions-manual-intent-refresh',
+      recipeName: 'Manual Intent Refresh Plan',
+      ingredient: { item: 'eggs', quantity: 6, unit: 'count' },
+      mealType: 'breakfast',
+    });
+
+    await service.generateGroceryPlan({ weekStart, provenance });
+    const added = await service.upsertGroceryIntent({
+      displayName: 'Bananas',
+      quantity: 1,
+      status: 'pending',
+      targetWindow: weekStart,
+      unit: 'bunch',
+      provenance,
+    });
+
+    const afterAdd = await service.getCurrentGroceryList({ weekStart, today: weekStart });
+    assert.equal(afterAdd.groceryPlan?.raw.items.some((item) => item.name === 'Bananas'), true);
+
+    await service.upsertGroceryIntent({
+      id: added.id,
+      displayName: 'Ripe bananas',
+      quantity: 2,
+      status: 'pending',
+      targetWindow: weekStart,
+      unit: 'bunch',
+      provenance,
+    });
+
+    const currentList = await service.getCurrentGroceryList({ weekStart, today: weekStart });
+    assert.equal(currentList.intents.some((intent) => intent.displayName === 'Ripe bananas'), true);
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'Ripe bananas'), true);
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'Bananas'), false);
+    assert.equal(currentList.preparedOrder?.remainingToBuy.some((item) => item.displayName === 'Ripe bananas'), true);
+    assert.equal(currentList.preparedOrder?.remainingToBuy.some((item) => item.displayName === 'Bananas'), false);
   } finally {
     runtime.sqliteDb.close();
   }

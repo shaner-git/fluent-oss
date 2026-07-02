@@ -1,7 +1,7 @@
 {
   "name": "fluent",
   "version": "0.1.0",
-  "description": "Fluent helps AI assistants remember what fits your life across meals, style, and health.",
+  "description": "Fluent helps AI assistants remember meals and style context, with wellbeing reserved until it earns a public surface.",
   "author": {
     "name": "Fluent"
   },
@@ -9,7 +9,7 @@
   "keywords": [
     "fluent",
     "meals",
-    "health",
+    "wellbeing",
     "style",
     "personal-mcp"
   ],
@@ -29,12 +29,10 @@
       "oss"
     ],
     "defaultDeploymentTrack": "oss",
-    "minimumContractVersion": "2026-05-17.fluent-core-v1.84",
+    "minimumContractVersion": "2026-06-01.fluent-core-v1.85",
     "requiredHostedScopes": [
       "meals:read",
       "meals:write",
-      "health:read",
-      "health:write",
       "style:read",
       "style:write",
       "offline_access"
@@ -42,8 +40,8 @@
   },
   "interface": {
     "displayName": "Fluent",
-    "shortDescription": "Life context for meals, style, and health.",
-    "longDescription": "Fluent connects Codex to saved Meals, Style, and Health context.",
+    "shortDescription": "Meals and style context; wellbeing reserved.",
+    "longDescription": "Fluent connects Codex to saved Meals and Style context while treating Wellbeing as a reserved public boundary.",
     "developerName": "Fluent",
     "category": "Lifestyle",
     "capabilities": [

@@ -9,12 +9,13 @@ import {
   resolveLocalTokenFile,
   rotateLocalTokenState,
 } from '../src/local/auth';
+import { cliString, parseCliArgs, resolveCliRoot } from '../src/local/cli';
 import { resolveLocalRuntimePaths } from '../src/local/runtime';
 
-const args = parseArgs(process.argv.slice(2));
-const cwd = path.resolve(args.cwd ?? process.cwd());
-const rootDir = args.root ? path.resolve(cwd, args.root) : undefined;
-const action = String(args.action ?? args._command ?? 'print').toLowerCase();
+const args = parseCliArgs(process.argv.slice(2));
+const cwd = path.resolve(cliString(args, 'cwd') ?? process.cwd());
+const rootDir = resolveCliRoot({ args, cwd });
+const action = String(cliString(args, 'action') ?? args._command ?? 'print').toLowerCase();
 const paths = resolveLocalRuntimePaths(rootDir);
 
 main().catch((error) => {
@@ -56,28 +57,3 @@ async function main() {
   );
 }
 
-function parseArgs(argv: string[]): Record<string, string> {
-  const result: Record<string, string> = {};
-  let positionalIndex = 0;
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (!token.startsWith('--')) {
-      if (positionalIndex === 0) {
-        result._command = token;
-      } else {
-        result[`_${positionalIndex}`] = token;
-      }
-      positionalIndex += 1;
-      continue;
-    }
-    const key = token.slice(2);
-    const next = argv[index + 1];
-    if (next && !next.startsWith('--')) {
-      result[key] = next;
-      index += 1;
-    } else {
-      result[key] = 'true';
-    }
-  }
-  return result;
-}

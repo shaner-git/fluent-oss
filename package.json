@@ -12,6 +12,7 @@
     "oss:check:postgres-s3": "tsx scripts/check-oss-postgres-s3.ts",
     "oss:export:snapshot": "tsx scripts/export-oss-snapshot.ts",
     "oss:import:snapshot": "tsx scripts/import-oss-snapshot.ts",
+    "oss:seed:demo": "tsx scripts/seed-oss-demo.ts",
     "oss:start": "tsx src/local/server.ts",
     "oss:start:postgres-s3": "tsx src/experimental/postgres-s3-server.ts",
     "oss:token": "tsx scripts/local-token.ts",

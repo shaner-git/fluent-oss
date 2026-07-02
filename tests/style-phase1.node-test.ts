@@ -4,6 +4,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { runWithFluentAuthProps, type FluentAuthProps } from '../src/auth';
 import { decryptStyleImageOwnerToken } from '../src/domains/style/media';
+import { buildPurchaseAnalysisViewModel } from '../src/domains/style/purchase-analysis';
 import { StyleService } from '../src/domains/style/service';
 import { createLocalRuntime } from '../src/local/runtime';
 import { maybeHandleStyleImageRequest } from '../src/style-image-handler';
@@ -35,6 +36,7 @@ async function main() {
   await storesProvenanceOutsideCanonicalItemReads();
   await preservesPartialItemUpdatesWithoutDroppingExistingFields();
   await summarizesOnboardingReadyState();
+  await treatsThreeStarterItemsAsProvisionalPurchaseReady();
   await treatsMatureSeededClosetAsPurchaseReadyFromConfirmedSignals();
   await tracksEvidenceGapCoverage();
   await treatsLegacyProfilesAsUsableEvidence();
@@ -50,6 +52,7 @@ async function main() {
   await bootstrapsProfilesForNewItems();
   await analyzesPurchasesFromClosetAndCalibration();
   await ranksActiveWhiteSneakerComparatorsByStyleSimilarity();
+  await preservesDressKindInPurchasePresentationCopy();
   await keepsPurchaseComparatorVisualBundlesInsideCandidateCategory();
   await doesNotMarkGapFillPurchaseAsCoveredLane();
   await enrichesPurchaseAnalysisWithDescriptorEvidence();
@@ -310,7 +313,15 @@ async function storesProvenanceOutsideCanonicalItemReads() {
 
     const provenanceRow = await service.getItemProvenance('style-item:test-oxford');
     assert.deepEqual(provenanceRow?.technicalMetadata, { fabric: 'cotton', weight: 'mid' });
-    assert.deepEqual(provenanceRow?.fieldEvidence, { category: { source: 'vision', value: 'TOP' } });
+    assert.deepEqual(provenanceRow?.fieldEvidence, {
+      category: { source: 'vision', value: 'TOP' },
+      dressCode: { confidence: null, source: 'style_auto_bootstrap', value: { max: 4, min: 2 } },
+      pairingNotes: {
+        confidence: null,
+        source: 'style_auto_bootstrap',
+        value: 'pairs easily with trousers, chinos, and loafers for polished casual outfits',
+      },
+    });
   } finally {
     runtime.sqliteDb.close();
   }
@@ -394,6 +405,155 @@ async function summarizesOnboardingReadyState() {
     assert.equal(context.profile.raw.onboardingPath, 'seeded');
     assert.equal(context.profile.raw.practicalCalibrationConfirmed, true);
     assert.equal(context.profile.raw.tasteCalibrationConfirmed, true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function treatsThreeStarterItemsAsProvisionalPurchaseReady() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    for (const [index, name] of ['Starter Black Tee 1', 'Starter Black Tee 2'].entries()) {
+      await service.addStarterClosetItem({
+        item: {
+          id: `style-item:starter-black-tee-${index + 1}`,
+          brand: 'Starter',
+          category: 'TOP',
+          color_family: 'black',
+          comparator_key: 'tee',
+          formality: 1,
+          name,
+          subcategory: 'Tee',
+        },
+        provenance,
+      });
+    }
+
+    let calibration = await service.getOnboardingCalibration();
+    assert.equal(calibration.purchaseAnalysisReadiness.ready, false);
+    assert.equal(calibration.purchaseAnalysisReadiness.readinessLevel, 'not_ready');
+    assert.equal(calibration.purchaseAnalysisReadiness.basis, 'thin_closet');
+
+    await service.addStarterClosetItem({
+      item: {
+        id: 'style-item:starter-black-tee-3',
+        brand: 'Starter',
+        category: 'TOP',
+        color_family: 'black',
+        comparator_key: 'tee',
+        formality: 1,
+        name: 'Starter Black Tee 3',
+        subcategory: 'Tee',
+      },
+      provenance,
+    });
+
+    calibration = await service.getOnboardingCalibration();
+    assert.equal(calibration.purchaseAnalysisReadiness.ready, true);
+    assert.equal(calibration.purchaseAnalysisReadiness.readinessLevel, 'provisional');
+    assert.equal(calibration.purchaseAnalysisReadiness.basis, 'starter_closet');
+    assert.match(calibration.purchaseAnalysisReadiness.notes.join(' '), /three to four anchors/i);
+
+    const analysis = await service.analyzePurchase({
+      candidate: {
+        brand: 'Candidate',
+        category: 'TOP',
+        color_family: 'black',
+        comparator_key: 'tee',
+        formality: 1,
+        image_url: 'https://example.com/candidate-black-tee.jpg',
+        name: 'Black Tee',
+        subcategory: 'Tee',
+      },
+      visualEvidence: {
+        candidateInspected: true,
+        candidateObservations: ['black cotton tee with a regular short-sleeve shape'],
+        comparatorItemIdsInspected: [],
+        source: 'host_vision',
+      },
+    });
+    const viewModel = buildPurchaseAnalysisViewModel(analysis);
+    const presentationText = JSON.stringify({
+      findings: viewModel.findings,
+      reasons: viewModel.reasons,
+      shoppingAnswer: viewModel.shoppingAnswer,
+    });
+
+    assert.equal(analysis.calibration.purchaseAnalysisReadiness.readinessLevel, 'provisional');
+    assert.ok(viewModel.shoppingAnswer.closestComparators.length > 0);
+    assert.match(presentationText, /Starter Black Tee 1|Starter Black Tee 2|Starter Black Tee 3/);
+    assert.match(presentationText, /Cautious read from starter closet anchors|add more and I get sharper/i);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function preservesDressKindInPurchasePresentationCopy() {
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+
+    for (const [index, name] of ['Black Knit Dress', 'Black Shirt Dress'].entries()) {
+      await service.addStarterClosetItem({
+        item: {
+          id: `style-item:black-dress-${index + 1}`,
+          brand: 'Starter',
+          category: 'ONE_PIECE',
+          color_family: 'black',
+          comparator_key: 'dress',
+          formality: 3,
+          name,
+          subcategory: 'Dress',
+        },
+        provenance,
+      });
+    }
+
+    await service.addStarterClosetItem({
+      item: {
+        id: 'style-item:black-dress-3',
+        brand: 'Starter',
+        category: 'ONE_PIECE',
+        color_family: 'black',
+        comparator_key: 'dress',
+        formality: 3,
+        name: 'Black Slip Dress',
+        subcategory: 'Dress',
+      },
+      provenance,
+    });
+
+    const analysis = await service.analyzePurchase({
+      candidate: {
+        brand: 'Candidate',
+        category: 'ONE_PIECE',
+        color_family: 'black',
+        comparator_key: 'dress',
+        formality: 3,
+        image_url: 'https://example.com/candidate-black-dress.jpg',
+        name: 'Black Dress',
+        subcategory: 'Dress',
+      },
+      visualEvidence: {
+        candidateInspected: true,
+        candidateObservations: ['black sleeveless dress with a simple drape'],
+        comparatorItemIdsInspected: [],
+        source: 'host_vision',
+      },
+    });
+    const viewModel = buildPurchaseAnalysisViewModel(analysis);
+    const presentationText = JSON.stringify({
+      findings: viewModel.findings,
+      reasons: viewModel.reasons,
+      shoppingAnswer: viewModel.shoppingAnswer,
+    });
+
+    assert.match(presentationText, /dress/i);
+    assert.doesNotMatch(presentationText, /dreses|dressses/i);
   } finally {
     runtime.sqliteDb.close();
   }
@@ -657,6 +817,8 @@ async function tracksEvidenceGapCoverage() {
     let gaps = await service.listEvidenceGaps();
     assert.equal(gaps.items.length, 1);
     assert.equal(gaps.items[0]?.gapTypes.includes('missing_primary_photo_delivery'), true);
+    assert.equal(gaps.items[0]?.gapTypes.includes('missing_display_photo'), true);
+    assert.equal(gaps.items[0]?.gapTypes.includes('missing_fit_photo'), true);
     assert.equal(gaps.items[0]?.gapTypes.includes('missing_typed_profile'), false);
     assert.equal(gaps.items[0]?.gapTypes.includes('weak_descriptor_coverage'), false);
     assert.equal(gaps.items[0]?.gapTypes.includes('weak_comparator_identity'), false);
@@ -670,6 +832,13 @@ async function tracksEvidenceGapCoverage() {
           id: 'style-photo:evidence-gap-1',
           is_primary: true,
           view: 'front',
+        },
+        {
+          data_url:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=',
+          id: 'style-photo:evidence-gap-fit',
+          is_fit: true,
+          view: 'fit_front',
         },
       ],
       provenance,
@@ -1135,7 +1304,8 @@ async function treatsLegacyProfilesAsUsableEvidence() {
     });
 
     const allGaps = await service.listEvidenceGaps();
-    assert.equal(allGaps.items.length, 0);
+    assert.equal(allGaps.items.length, 1);
+    assert.deepEqual(allGaps.items[0]?.gapTypes, ['missing_fit_photo']);
     assert.equal(allGaps.descriptorCoverage, 0);
     assert.equal(allGaps.usableProfileCoverage, 1);
     assert.equal(allGaps.stylistDescriptorCoverage, 0);
@@ -2688,6 +2858,19 @@ async function prefersDeliverablePhotosInVisualBundles() {
     assert.equal(bundle.visualInspection.state, 'image_references_returned');
     assert.equal(bundle.visualInspection.fetchableAssetCount, 1);
     assert.equal(bundle.evidenceWarnings.includes('Bundle Photo Choice Sneaker does not have an owned Fluent image delivery route yet.'), false);
+
+    const productBundle = await service.getVisualBundle({
+      deliveryMode: 'authenticated_with_signed_fallback',
+      itemIds: ['style-item:test-bundle-photo-choice'],
+      maxImages: 1,
+      photoPreference: 'product',
+    });
+    assert.equal(productBundle.assets.length, 1);
+    assert.equal(productBundle.assets[0]?.photoId, 'style-photo:test-bundle-photo-choice-secondary');
+    assert.equal(
+      productBundle.assets[0]?.authenticatedOriginalUrl?.includes('/images/style/style-photo%3Atest-bundle-photo-choice-secondary/original'),
+      true,
+    );
   } finally {
     runtime.sqliteDb.close();
   }

@@ -118,6 +118,7 @@ export interface UpsertGroceryIntentInput {
   targetWindow?: string | null;
   mealPlanId?: string | null;
   metadata?: unknown;
+  regenerateGroceryPlan?: boolean | null;
   provenance: MutationProvenance;
 }
 
@@ -156,6 +157,24 @@ export interface ApplyGroceryPlanActionResult {
   action: import('./types').GroceryPlanActionRecord;
   groceryPlan: import('./types').GroceryPlanRecord | null;
   substituteIntent: import('./types').GroceryIntentRecord | null;
+}
+
+export type GroceryShoppingResultItemStatus = 'bought' | 'skipped';
+
+export interface ApplyGroceryShoppingResultInput {
+  weekStart?: string | null;
+  markAllToBuyBought?: boolean;
+  boughtItems?: Array<{ itemKey: string; status?: GroceryShoppingResultItemStatus }>;
+  provenance: MutationProvenance;
+}
+
+export interface ApplyGroceryShoppingResultRecord {
+  weekStart: string;
+  appliedCount: number;
+  planItems: Array<{ itemKey: string; name: string; actionStatus: string }>;
+  manualIntents: Array<{ id: string; displayName: string; status: string }>;
+  inventoryRefreshed: Array<{ name: string }>;
+  skipped: Array<{ itemKey: string; reason: string }>;
 }
 
 export interface DeleteGroceryPlanActionInput {

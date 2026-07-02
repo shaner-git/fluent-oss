@@ -282,8 +282,11 @@ function deriveSetupState(input: {
   if (input.activeItemCount === 0) {
     return input.confirmedSignalCount > 0 || input.profile.updatedAt ? 'empty_closet_started' : 'no_style_state';
   }
-  if (input.activeItemCount < 5) {
+  if (input.activeItemCount < 3) {
     return 'empty_closet_started';
+  }
+  if (input.activeItemCount < 5) {
+    return 'starter_closet_ready';
   }
   if (input.activeItemCount < 10) {
     return input.confirmedSignalCount > 0 ? 'preference_partially_confirmed' : 'starter_closet_ready';
@@ -323,7 +326,7 @@ function buildPurchaseReadiness(
     return {
       basis: 'thin_closet',
       label: 'Early closet signal only.',
-      notes: [...notes, 'Use cautious language until at least five anchor items or confirmed constraints exist.'],
+      notes: [...notes, 'Ask for at least three starter closet anchors before making wardrobe-fit claims; five anchors makes the read sharper.'],
       ready: false,
       readinessLevel: 'not_ready',
     };
@@ -346,10 +349,13 @@ function buildPurchaseReadiness(
     };
   }
   if (state === 'starter_closet_ready') {
+    const starterNote = activeItemCount < 5
+      ? 'Cautious read: three to four anchors are enough for a provisional verdict; add five-plus active items for a sharper read.'
+      : 'Recommendations can compare against anchor items, but should keep confidence visible.';
     return {
       basis: 'starter_closet',
       label: 'Starter closet ready for cautious purchase reads.',
-      notes: [...notes, 'Recommendations can compare against anchor items, but should keep confidence visible.'],
+      notes: [...notes, starterNote],
       ready: true,
       readinessLevel: 'provisional',
     };
@@ -473,8 +479,8 @@ function buildSuggestedNextAction(input: {
 }) {
   if (input.evidenceItems.length === 0) {
     return {
-      label: 'Add a first anchor item',
-      rationale: 'One real item is enough to start a useful closet record without turning setup into homework.',
+      label: 'Add 3 starter closet anchors',
+      rationale: 'Three real items are enough for a provisional purchase read; five makes it sharper without turning setup into homework.',
       toolName: 'style_add_starter_closet_item',
     };
   }
@@ -486,9 +492,12 @@ function buildSuggestedNextAction(input: {
     };
   }
   if (input.evidenceItems.length < 5) {
+    const belowMinimum = input.evidenceItems.length < 3;
     return {
-      label: 'Add another anchor item',
-      rationale: 'A few real pieces make Style useful without forcing a long setup.',
+      label: belowMinimum ? 'Add another starter anchor' : 'Add one more anchor when easy',
+      rationale: belowMinimum
+        ? 'Style needs at least three real pieces before it should make wardrobe-fit claims.'
+        : 'Style can run a provisional purchase read now; five anchors makes the read sharper.',
       toolName: 'style_add_starter_closet_item',
     };
   }
@@ -531,9 +540,9 @@ function buildCalibrationPrompts(input: {
     prompts.push({
       id: 'starter-anchor-items',
       kind: 'starter_item',
-      label: 'Add one anchor item',
-      question: 'Add one item you actually wear often: photo, product link, or a short description.',
-      rationale: 'One real anchor is enough to start Style without pretending Fluent found a closet.',
+      label: 'Add 3 starter anchors',
+      question: 'Add three to five items you actually wear often: photos, product links, or short descriptions.',
+      rationale: 'Three real anchors unlock a provisional purchase read; five makes it sharper.',
       responseOptions: [
         { label: 'Add description/link/photo', requiresFreeText: 'item_description', source: null, status: null, value: null },
         { label: 'Skip for now', requiresFreeText: null, source: null, status: null, value: null },
@@ -542,12 +551,17 @@ function buildCalibrationPrompts(input: {
       toolName: 'style_add_starter_closet_item',
     });
   } else if (input.evidenceItems.length < 5) {
+    const belowMinimum = input.evidenceItems.length < 3;
     prompts.push({
       id: 'starter-anchor-items-more',
       kind: 'starter_item',
-      label: 'Add another anchor item',
-      question: 'Add another item you actually wear often: photo, product link, or a short description.',
-      rationale: 'A few real anchors make Style more useful without turning setup into homework.',
+      label: belowMinimum ? 'Add another starter anchor' : 'Add one more anchor when easy',
+      question: belowMinimum
+        ? 'Add another item you actually wear often: photo, product link, or a short description.'
+        : 'Style can run a provisional purchase read now. Add one or two more often-worn items when easy for a sharper read.',
+      rationale: belowMinimum
+        ? 'Style needs at least three real anchors before making wardrobe-fit claims.'
+        : 'Five real anchors improves the read without making setup a questionnaire.',
       responseOptions: [
         { label: 'Add description/link/photo', requiresFreeText: 'item_description', source: null, status: null, value: null },
         { label: 'Skip for now', requiresFreeText: null, source: null, status: null, value: null },

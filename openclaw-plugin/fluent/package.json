@@ -1,6 +1,6 @@
 {
   "name": "fluent-openclaw-oss-helper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "type": "module",
   "description": "Bundled OpenClaw helper package shipped with Fluent open-source exports; not the published fluent-openclaw package.",
@@ -25,7 +25,7 @@
   "keywords": [
     "fluent",
     "meals",
-    "health",
+    "wellbeing",
     "style",
     "openclaw",
     "plugin",
@@ -67,12 +67,10 @@
       "oss"
     ],
     "defaultDeploymentTrack": "oss",
-    "minimumContractVersion": "2026-05-17.fluent-core-v1.84",
+    "minimumContractVersion": "2026-06-01.fluent-core-v1.85",
     "requiredHostedScopes": [
       "meals:read",
       "meals:write",
-      "health:read",
-      "health:write",
       "style:read",
       "style:write",
       "offline_access"

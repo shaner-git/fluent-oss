@@ -12,12 +12,14 @@ import {
   resolveLocalTokenFile,
   rotateLocalTokenState,
 } from '../src/local/auth';
+import { parseCliArgs, resolveCliBaseUrl, resolveCliRoot } from '../src/local/cli';
 import { createLocalRuntime, localHealth, localProbe } from '../src/local/runtime';
 
 const tempRoots: string[] = [];
 
 try {
   bootstrapsAndRotatesLocalToken();
+  resolvesLocalCliRootAndBaseUrlFromArgsAndEnvironment();
   exposesBearerAuthModelThroughProbeAndHealth();
 } finally {
   while (tempRoots.length > 0) {
@@ -26,6 +28,36 @@ try {
       rmSync(root, { force: true, recursive: true });
     }
   }
+}
+
+function resolvesLocalCliRootAndBaseUrlFromArgsAndEnvironment() {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fluent-local-cli-'));
+  tempRoots.push(cwd);
+  const envRoot = path.join(cwd, 'env-root');
+  const cliRoot = path.join(cwd, 'cli-root');
+  const npmRoot = path.join(cwd, 'npm-root');
+
+  assert.equal(resolveCliRoot({ args: parseCliArgs([]), cwd, env: { FLUENT_OSS_ROOT: envRoot } }), envRoot);
+  assert.equal(
+    resolveCliRoot({ args: parseCliArgs([]), cwd, env: { npm_config_root: npmRoot, FLUENT_OSS_ROOT: envRoot } }),
+    npmRoot,
+  );
+  assert.equal(
+    resolveCliRoot({
+      args: parseCliArgs(['--root', cliRoot]),
+      cwd,
+      env: { npm_config_root: npmRoot, FLUENT_OSS_ROOT: envRoot },
+    }),
+    cliRoot,
+  );
+  assert.equal(
+    resolveCliBaseUrl({
+      args: parseCliArgs([]),
+      defaultBaseUrl: 'http://127.0.0.1:8788',
+      env: { npm_config_base_url: 'http://127.0.0.1:8799/' },
+    }),
+    'http://127.0.0.1:8799',
+  );
 }
 
 function bootstrapsAndRotatesLocalToken() {

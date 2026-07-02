@@ -816,6 +816,7 @@ export interface MealsOnboardingCalibrationRecord {
   groceryReadiness: MealsReadinessRecord;
   hostGuidance: {
     answerMode: 'text_first' | 'widget_deferred';
+    broadPlanningFirstTool: 'fluent_get_context';
     copyGuardrails: string[];
     firstTool: 'meals_get_onboarding_calibration';
   };

@@ -39,6 +39,8 @@ export type StylePreferenceWeight = 'low' | 'medium' | 'high';
 export type StyleBrandAffinityStance = 'prefer' | 'avoid' | 'conditional';
 export type StyleEvidenceGapType =
   | 'missing_primary_photo_delivery'
+  | 'missing_display_photo'
+  | 'missing_fit_photo'
   | 'missing_typed_profile'
   | 'weak_descriptor_coverage'
   | 'weak_comparator_identity';
@@ -298,6 +300,8 @@ export interface StyleItemSummaryRecord {
   formality: number | null;
   id: string;
   name: string | null;
+  hasDisplayPhoto: boolean;
+  hasFitPhoto: boolean;
   photoCount: number;
   primaryPhotoDelivery: StylePhotoDeliveryRecord | null;
   profileTags: string[];
@@ -305,6 +309,8 @@ export interface StyleItemSummaryRecord {
   status: StyleItemStatus;
   subcategory: string | null;
 }
+
+export type StyleFitVerdict = 'true_to_size' | 'runs_small' | 'runs_large';
 
 export interface StyleItemProfileDocument {
   avoidOccasions: string[];
@@ -317,10 +323,15 @@ export interface StyleItemProfileDocument {
   } | null;
   fabricHand: string | null;
   fitObservations: string[];
+  fitVerdict: StyleFitVerdict | null;
   itemType: string | null;
+  lengthNote: string | null;
+  ownedSize: string | null;
   pairingNotes: string | null;
   polishLevel: string | null;
   qualityTier: string | null;
+  reanalyzePending: boolean;
+  reanalyzeRequestedAt: string | null;
   seasonality: string[];
   silhouette: string | null;
   styleRole: string | null;
@@ -373,6 +384,8 @@ export interface StyleContextRecord {
   inactiveStatusBreakdown: Array<{ status: StyleItemStatus; count: number }>;
   itemCount: number;
   onboardingMode: StyleOnboardingMode;
+  pendingReanalyzeCount: number;
+  pendingReanalyzeItemIds: string[];
   photoCount: number;
   profile: StyleProfileRecord;
   profileCount: number;
@@ -429,6 +442,24 @@ export interface StylePurchaseVisualEvidence {
 export interface StylePurchaseAnalysisItemMatch {
   itemId: string;
   reasons: string[];
+}
+
+export interface StylePurchaseBudgetContext {
+  category: 'style-clothing';
+  categoryPressure: number | null;
+  caveats: string[];
+  liquidityFloor: null;
+  projectedRatio?: number | null;
+  purchaseSignal: 'comfortable' | 'tight' | 'no_signal';
+  targetSetup: {
+    category: 'style-clothing';
+    currency: string;
+    monthlyAmount: number;
+    periodStart: string;
+    remainingThisPeriod: number;
+    spentThisPeriod: number;
+    updatedAt: string;
+  } | null;
 }
 
 export type StylePurchaseComparisonRelation = 'duplicate' | 'replacement' | 'upgrade' | 'adjacent' | 'distinct' | 'uncertain';
@@ -534,6 +565,7 @@ export interface StylePurchaseAnalysis {
   comparatorReasoning: StylePurchaseComparatorReasoning;
   confidenceNotes: string[];
   contextBuckets: StylePurchaseAnalysisBuckets;
+  budgetContext: StylePurchaseBudgetContext | null;
   coverageImpact: {
     notes: string[];
     pilesIntoCoveredLane: boolean;

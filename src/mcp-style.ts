@@ -22,6 +22,19 @@ import {
   getStyleSetupCalibrationWidgetHtml,
   STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
 } from './domains/style/onboarding-calibration';
+import {
+  buildStyleClosetStructuredContent,
+  buildStyleClosetWidgetMeta,
+  getStyleClosetWidgetHtml,
+  STYLE_CLOSET_PREVIOUS_TEMPLATE_URI,
+  STYLE_CLOSET_TEMPLATE_URI,
+  STYLE_CLOSET_V2_TEMPLATE_URI,
+  STYLE_CLOSET_V3_TEMPLATE_URI,
+  STYLE_CLOSET_V4_TEMPLATE_URI,
+  STYLE_CLOSET_V5_TEMPLATE_URI,
+  STYLE_CLOSET_V6_TEMPLATE_URI,
+  type StyleClosetFilter,
+} from './domains/style/closet-manager';
 import type {
   StylePurchaseStylistJudgment,
   StyleVisualBundleAssetRecord,
@@ -83,6 +96,17 @@ const styleVisualBundleDeliveryModeSchema = z.enum(['authenticated_only', 'authe
 const styleEvidenceGapPriorityFilterSchema = z.enum(['actionable', 'all', 'high', 'medium', 'low']).optional();
 const styleDescriptorBacklogFocusSchema = z.enum(['priority', 'blocked', 'all']).optional();
 const stylePurchaseAnalysisActionIdSchema = z.enum(['log_purchase']);
+const styleClosetFilterSchema = z.object({
+  brand: z.string().optional(),
+  category: z.string().optional(),
+  color: z.string().optional(),
+  favorite_only: z.boolean().optional(),
+  item_ids: z.array(z.string()).optional(),
+  query: z.string().optional(),
+  size: z.string().optional(),
+  status: z.enum(['active', 'archived', 'any']).optional(),
+  subcategory: z.string().optional(),
+}).optional();
 const styleCalibrationSignalKindSchema = z.enum([
   'aesthetic',
   'budget',
@@ -137,13 +161,66 @@ const styleConcreteVisualObservationSchema = z
     message: 'Observation must describe concrete candidate image pixels.',
   });
 const stylePurchaseVisualEvidenceInputSchema = z.object({
-  candidateInspected: z.literal(true),
-  candidateObservations: z.array(styleConcreteVisualObservationSchema).min(1),
-  comparatorItemIdsInspected: z.array(z.string()).optional(),
-  source: z.string().optional(),
-  visionPacketId: z.string().nullable().optional(),
-  visualObservationId: z.string().optional(),
-});
+  candidateInspected: z.literal(true).describe('Must be true only after the host has inspected the actual candidate image pixels.'),
+  candidateObservations: z
+    .array(styleConcreteVisualObservationSchema)
+    .min(1)
+    .describe('Concrete visual observations from the inspected candidate image; do not include guesses from text metadata only.'),
+  comparatorItemIdsInspected: z
+    .array(z.string())
+    .optional()
+    .describe('Optional comparator item IDs or handles from style_prepare_purchase_analysis that were also visually inspected.'),
+  source: z.string().nullable().optional().describe('Evidence source label such as style_submit_purchase_visual_observations or host_vision_uploaded_image; omit or null for host-vision evidence.'),
+  visionPacketId: z.string().nullable().optional().describe('Vision packet ID returned by style_get_purchase_vision_packet, or null for uploaded-image evidence.'),
+  visualObservationId: z.string().nullable().optional().describe('Receipt ID returned by style_submit_purchase_visual_observations when reusing accepted visual evidence; omit or null for host-vision evidence (that legacy tool is not in the public profile).'),
+}).describe('Host-inspected visual evidence required before rendering or logging a Style purchase decision.');
+const styleJsonLeafSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const styleToolMetadataInputSchema = z
+  .record(z.string(), z.union([styleJsonLeafSchema, z.array(styleJsonLeafSchema)]))
+  .optional()
+  .describe('Optional compact machine-readable source metadata returned by Fluent tools; omit for normal user-entered updates.');
+const styleWeightedPreferenceInputSchema = z.object({
+  note: z.string().nullable().optional().describe('Optional short user-confirmed note for this preference.'),
+  value: z.string().describe('Preference value, such as black, relaxed fit, or clean minimal sneakers.'),
+  weight: z.enum(['low', 'medium', 'high']).optional().describe('How strongly the user confirmed this preference.'),
+}).describe('One weighted Style preference confirmed by the user.');
+const styleBrandAffinityInputSchema = z.object({
+  brand: z.string().describe('Brand name.'),
+  note: z.string().nullable().optional().describe('Optional short reason or caveat for the brand stance.'),
+  stance: z.enum(['prefer', 'avoid', 'conditional']).describe('User-confirmed brand stance.'),
+}).describe('One Style brand preference or avoidance rule.');
+const styleBudgetProfileInputSchema = z.object({
+  everydayTier: z.string().nullable().optional().describe('Normal comfortable spend tier for everyday items.'),
+  investmentTier: z.string().nullable().optional().describe('Higher spend tier for investment pieces.'),
+  splurgeCategories: z.array(z.string()).optional().describe('Categories where the user is willing to spend more.'),
+}).describe('Budget constraints confirmed during Style setup or purchase calibration.');
+const styleFitProfileInputSchema = z.object({
+  bodyNotes: z.array(z.string()).optional().describe('User-confirmed fit or body-context notes.'),
+  legShapePreference: z.string().nullable().optional().describe('Preferred pant or leg shape, when confirmed.'),
+  risePreference: z.string().nullable().optional().describe('Preferred pant rise, when confirmed.'),
+  sleevePreference: z.string().nullable().optional().describe('Preferred sleeve fit or length, when confirmed.'),
+  topLengthPreference: z.string().nullable().optional().describe('Preferred top length, when confirmed.'),
+}).describe('User-confirmed Style fit preferences.');
+const styleProfilePatchInputSchema = z.object({
+  aestheticKeywords: z.array(z.string()).optional().describe('User-confirmed aesthetic words to add to the Style profile.'),
+  brandAffinities: z.array(styleBrandAffinityInputSchema).optional().describe('User-confirmed brand preferences or avoids.'),
+  budgetProfile: styleBudgetProfileInputSchema.nullable().optional().describe('Budget profile patch confirmed by the user.'),
+  closetCoverage: z.enum(['current', 'partial']).nullable().optional().describe('Whether the closet evidence is current or partial.'),
+  colorDirections: z.array(z.string()).optional().describe('Legacy simple color direction labels confirmed by the user.'),
+  colorPreferences: z.array(styleWeightedPreferenceInputSchema).optional().describe('Weighted color preferences confirmed by the user.'),
+  contextRules: z.array(z.string()).optional().describe('Context rules such as work, weekend, travel, or climate constraints.'),
+  fitNotes: z.array(z.string()).optional().describe('Simple user-confirmed fit notes.'),
+  fitProfile: styleFitProfileInputSchema.nullable().optional().describe('Structured fit profile patch confirmed by the user.'),
+  formalityTendency: z.string().nullable().optional().describe('Overall formality direction, such as casual, smart casual, or polished.'),
+  hardAvoids: z.array(z.string()).optional().describe('Only explicit hard avoids the user confirmed.'),
+  importedClosetConfirmed: z.boolean().optional().describe('Whether the user confirmed an imported closet is representative.'),
+  onboardingPath: z.enum(['seeded', 'fresh']).nullable().optional().describe('Style onboarding path when explicitly known.'),
+  preferredSilhouettes: z.array(z.string()).optional().describe('Legacy simple silhouette labels confirmed by the user.'),
+  practicalCalibrationConfirmed: z.boolean().optional().describe('Whether practical constraints such as budget, fit, or occasions are confirmed.'),
+  silhouettePreferences: z.array(styleWeightedPreferenceInputSchema).optional().describe('Weighted silhouette preferences confirmed by the user.'),
+  sizingPreferences: z.array(z.string()).optional().describe('User-confirmed sizing or alteration notes.'),
+  tasteCalibrationConfirmed: z.boolean().optional().describe('Whether taste signals such as color, aesthetic, or silhouette are confirmed.'),
+}).strict().describe('Sparse Style profile patch. Include only fields the user explicitly confirmed or corrected in the current setup/calibration turn.');
 const stylePurchaseStylistJudgmentSchema = z.object({
   caveats: z.array(z.string().trim().min(1)).optional(),
   decisionBasis: z.enum(['gap', 'upgrade', 'replacement', 'duplicate', 'taste_fit', 'unclear']).nullable().optional(),
@@ -315,12 +392,57 @@ const stylePurchaseCandidateObjectInputSchema = z.preprocess(
     url: z.string().url().optional(),
     useCases: z.array(z.string()).optional(),
     visualWeight: z.string().optional(),
-  }).strict(),
-);
+  }).strict().describe('Object form for a purchase candidate. All fields are optional; provide only known product details such as name, brand, category, sourceUrl, and direct image URLs.'),
+).describe('Structured Style purchase candidate supplied by the user, product page extraction, or an uploaded/direct image flow.');
 const stylePurchaseCandidateInputSchema = z.union([
-  z.string().trim().min(1),
+  z.string().trim().min(1).describe('Plain-text candidate name or product description when no structured product object is available.'),
   stylePurchaseCandidateObjectInputSchema,
-]);
+]).describe('Style purchase candidate. Use a short string for simple prompts or an object for known product details and image/source URLs.');
+const styleStarterClosetItemProfileInputSchema = z.object({
+  bestOccasions: z.array(z.string()).optional().describe('Best occasions or settings for this starter item.'),
+  fitObservations: z.array(z.string()).optional().describe('User-supplied fit details such as relaxed, cropped, knee length, or structured shoulders.'),
+  polishLevel: z.string().nullable().optional().describe('Polish level such as casual, polished, rugged, or dressy.'),
+  silhouette: z.string().nullable().optional().describe('Silhouette words supplied by the user.'),
+  structureLevel: z.string().nullable().optional().describe('Structure level such as soft, tailored, structured, or slouchy.'),
+  tags: z.array(z.string()).optional().describe('Short descriptive tags from the user-supplied item evidence.'),
+  useCases: z.array(z.string()).optional().describe('Use cases such as work, dinner, weekend, travel, or gym.'),
+}).strict().describe('Optional item-profile details for a user-supplied starter closet item.');
+const styleStarterClosetItemInputSchema = z.object({
+  brand: z.string().nullable().optional().describe('Optional brand name if the user supplied it.'),
+  category: z.string().nullable().optional().describe('Broad item category such as top, bottom, shoe, outerwear, or accessory.'),
+  colorFamily: z.string().nullable().optional().describe('Optional broad color family, camelCase form.'),
+  color_family: z.string().nullable().optional().describe('Optional broad color family, snake_case form.'),
+  description: z.string().nullable().optional().describe('User-provided item description; preserve concrete details.'),
+  formality: z.number().nullable().optional().describe('Optional formality estimate on Fluent internal scale when known.'),
+  id: z.string().nullable().optional().describe('Optional stable item ID when the item already has one; omit for new starter evidence.'),
+  itemProfile: styleStarterClosetItemProfileInputSchema.optional().describe('Optional camelCase item profile details.'),
+  item_profile: styleStarterClosetItemProfileInputSchema.optional().describe('Optional snake_case item profile details.'),
+  name: z.string().nullable().optional().describe('Item name or short label, such as navy overshirt or black leather loafer.'),
+  notes: z.string().nullable().optional().describe('Short user-provided notes about why this item belongs in the starter closet.'),
+  occasions: z.array(z.string()).optional().describe('Occasions the user associates with this starter item.'),
+  photoUrl: z.string().url().nullable().optional().describe('Optional direct photo URL, camelCase form.'),
+  photo_url: z.string().url().nullable().optional().describe('Optional direct photo URL, snake_case form.'),
+  profile: styleStarterClosetItemProfileInputSchema.optional().describe('Optional profile details for this starter item.'),
+  status: z.enum(['active', 'archived', 'retired']).optional().describe('Closet status; starter additions should normally be active.'),
+  subcategory: z.string().nullable().optional().describe('Specific item type such as loafer, overshirt, jean, or tee.'),
+  tags: z.array(z.string()).optional().describe('Short descriptive tags from the user-provided evidence.'),
+  useCases: z.array(z.string()).optional().describe('Use cases such as work, dinner, weekend, travel, or gym.'),
+  use_cases: z.array(z.string()).optional().describe('Use cases in snake_case form.'),
+}).strict().describe('One user-supplied starter closet item. Use only details the user provided; do not invent closet contents.');
+const stylePurchaseRetryInputSchema = z.object({
+  candidate: stylePurchaseCandidateInputSchema.optional().describe('Optional repeated candidate from the prior purchase-analysis step.'),
+  visualEvidence: stylePurchaseVisualEvidenceInputSchema.optional().describe('Accepted visual evidence in camelCase form.'),
+  visual_evidence: stylePurchaseVisualEvidenceInputSchema.optional().describe('Accepted visual evidence in snake_case form.'),
+  visualObservations: z.array(styleConcreteVisualObservationSchema).optional().describe('Concrete candidate observations in camelCase shorthand.'),
+  visual_observations: z.array(styleConcreteVisualObservationSchema).optional().describe('Concrete candidate observations in snake_case shorthand.'),
+  visualObservationId: z.string().optional().describe('Optional visual-observation receipt ID in camelCase form.'),
+  visual_observation_id: z.string().optional().describe('Optional visual-observation receipt ID in snake_case form.'),
+}).strict().describe('Retry input from a prior not-render-ready purchase response; include only concrete visual evidence fields.');
+const stylePurchaseRenderRepairInputSchema = z.object({
+  reason: z.string().optional().describe('Short reason the prior render attempt needed repair.'),
+  retryInput: stylePurchaseRetryInputSchema.optional().describe('CamelCase retry payload for a repaired purchase-analysis render attempt.'),
+  retry_input: stylePurchaseRetryInputSchema.optional().describe('Snake_case retry payload for a repaired purchase-analysis render attempt.'),
+}).strict().describe('Repair payload returned by a prior purchase-analysis response when the host is adding missing visual evidence.');
 const styleSubmitPurchaseVisualObservationsInputSchema = z.object({
   candidate: stylePurchaseCandidateInputSchema,
   comparator_item_ids_inspected: z.array(z.string()).optional(),
@@ -335,7 +457,7 @@ const stylePurchasePageEvidenceInputSchema = {
   product_url: z.string().min(1),
 };
 
-type StylePurchasePageImageEvidence = {
+export type StylePurchasePageImageEvidence = {
   alt: string | null;
   source: string;
   url: string;
@@ -377,7 +499,7 @@ type StylePurchaseVisualEvidenceCacheEntry = {
 
 const stylePurchaseVisualEvidenceCache = new Map<string, StylePurchaseVisualEvidenceCacheEntry>();
 
-const STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES = 4;
+export const STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES = 4;
 const STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGE_BYTES = 1_500_000;
 const STYLE_PURCHASE_STATE_AUTHORITY_RULE =
   'Do not let host memory, prior chat context, or an earlier unsaved recommendation determine the buy/wait/skip call unless the user confirms it in the current turn or Fluent state/tool evidence supports it. Mention outside context only as outside Fluent state.';
@@ -442,12 +564,12 @@ function buildWidgetMeta(description: string, origin: string) {
     'openai/widgetDescription': description,
     'openai/widgetDomain': origin,
     'openai/widgetPrefersBorder': true,
+    // MCP Apps `ui.domain` is host-provisioned (Claude rejects a server-supplied origin).
     ui: {
       csp: {
         connectDomains: [],
         resourceDomains,
       },
-      domain: origin,
       prefersBorder: true,
     },
   } as const;
@@ -658,8 +780,17 @@ function buildStylePurchasePreparation(input: {
           input: hostVisionTask,
         },
       ];
+  // D16 feed-before-judging: surface the proven budget signal to the host BEFORE it forms a
+  // verdict. Fluent will not override the host's judgment; this is how the host gets informed.
+  const budgetContext = analysis.budgetContext ?? null;
+  const budgetInstruction = budgetContext && budgetContext.targetSetup
+    ? `Budget context (Fluent-verified): ${budgetContext.purchaseSignal} - $${budgetContext.targetSetup.spentThisPeriod} of $${budgetContext.targetSetup.monthlyAmount} ${budgetContext.category} spent this month, $${budgetContext.targetSetup.remainingThisPeriod} remaining. Factor this into your buy/wait/skip judgment; Fluent will not override your verdict.`
+    : null;
+
   return {
     analysisSummary: summarizeStylePurchaseAnalysis(analysis),
+    budgetContext,
+    budgetInstruction,
     calibrationAsk: calibrationContext.opportunisticCalibrationPrompt
       ? {
           prompt: calibrationContext.opportunisticCalibrationPrompt,
@@ -892,7 +1023,9 @@ function extractPurchaseCandidateSourceUrl(value: unknown): string | null {
 }
 
 export async function extractStylePurchasePageEvidence(input: {
+  browserUserAgent?: boolean;
   fetchImpl?: typeof fetch;
+  includeRawHtml?: boolean;
   maxImages?: number | null;
   productUrl: string;
 }): Promise<{
@@ -902,6 +1035,7 @@ export async function extractStylePurchasePageEvidence(input: {
     finalUrl: string | null;
     imageCandidates: StylePurchasePageImageEvidence[];
     pageTitle: string | null;
+    rawHtml?: string;
   };
   productUrl: string;
   recommendedNextSteps: Array<{
@@ -942,10 +1076,21 @@ export async function extractStylePurchasePageEvidence(input: {
   try {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       response = await (input.fetchImpl ?? fetch)(currentUrl.toString(), {
-        headers: {
-          accept: 'text/html,application/xhtml+xml',
-          'user-agent': 'FluentStyleEvidenceBot/1.0 (+https://meetfluent.app)',
-        },
+        headers: input.browserUserAgent
+          ? {
+              // Opt-in browser UA: many retailers (e.g. Gap) serve DEGRADED bot markup to a bot UA — the
+              // real product gallery (incl the clean packshot) is omitted, leaving only stripped/on-model
+              // images. A browser UA + accept gets the same full gallery a user's browser sees. Used by the
+              // closet-add display-image resolver; the purchase path keeps the honest bot UA below.
+              accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+              'accept-language': 'en-US,en;q=0.9',
+              'user-agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            }
+          : {
+              accept: 'text/html,application/xhtml+xml',
+              'user-agent': 'FluentStyleEvidenceBot/1.0 (+https://meetfluent.app)',
+            },
         redirect: 'manual',
         signal: createFetchTimeoutSignal(15_000),
       });
@@ -1035,6 +1180,7 @@ export async function extractStylePurchasePageEvidence(input: {
     imageCandidates,
     pageTitle,
     productUrl: url.toString(),
+    rawHtml: input.includeRawHtml ? html : undefined,
     status: imageCandidates.length > 0 ? 'image_references_extracted' : 'no_images_found',
     warnings: imageCandidates.length > 0
       ? imageExtraction.warnings
@@ -1053,6 +1199,7 @@ function buildPageEvidenceResult(input: {
   imageCandidates: StylePurchasePageImageEvidence[];
   pageTitle: string | null;
   productUrl: string;
+  rawHtml?: string;
   status: StylePurchasePageEvidenceStatus;
   warnings: string[];
 }) {
@@ -1067,6 +1214,7 @@ function buildPageEvidenceResult(input: {
       finalUrl: input.finalUrl,
       imageCandidates: input.imageCandidates,
       pageTitle: input.pageTitle,
+      ...(input.rawHtml != null ? { rawHtml: input.rawHtml } : {}),
     },
     productUrl: input.productUrl,
     recommendedNextSteps: [
@@ -1148,7 +1296,7 @@ function inferImportedFromSource(sourceUrl: string | null): string | null {
   }
 }
 
-function createFetchTimeoutSignal(milliseconds: number): AbortSignal | undefined {
+export function createFetchTimeoutSignal(milliseconds: number): AbortSignal | undefined {
   if (typeof AbortSignal === 'undefined') {
     return undefined;
   }
@@ -1771,14 +1919,33 @@ async function fetchStyleVisualBundleInlineImages(
   return { images, warnings };
 }
 
-async function fetchStyleVisualBundleImage(url: string): Promise<{
+export async function fetchStyleVisualBundleImage(url: string, signal?: AbortSignal): Promise<{
   byteLength: number;
   data: string;
   mimeType: string;
 }> {
+  // SSRF boundary: never server-fetch a non-public URL. Caller-/host-supplied photo URLs can be arbitrary
+  // (retailer or user-provided), so reject localhost / private / link-local hosts BEFORE fetching. Mirrors
+  // the write-path boundary at domains/style/service.ts (store-by-reference; never fetch host-inspected
+  // URLs). Public retailer and owned signed (img.meetfluent.app) URLs pass unchanged.
+  if (!normalizePublicProductUrl(url)) {
+    throw new Error('refusing to fetch a non-public image URL');
+  }
   const response = await fetch(url, {
-    headers: { accept: 'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8' },
-    signal: createFetchTimeoutSignal(15_000),
+    // Do NOT send a browser User-Agent here. Empirically (probed against the live CDN), content.gapinc
+    // content-negotiates purely on UA: a browser UA gets image/avif (which the vision model CANNOT view, so
+    // we would discard it), while a UA-less request gets image/webp (host-viewable). The accept header is
+    // ignored by that CDN. So a bot/absent UA is what actually yields a usable inline image here. (The
+    // product-page scraper is the opposite case — it needs a browser UA to get full HTML — they are distinct.)
+    //
+    // cache:'no-store' is REQUIRED for correctness, not just freshness: content.gapinc serves a different
+    // body per UA (avif vs webp) but declares only `Vary: Origin` (NOT Vary: User-Agent) with max-age=1yr.
+    // So Cloudflare's Worker-subrequest cache keys on the URL alone — a browser-UA fetch (e.g. an earlier
+    // deploy) caches AVIF, and a later UA-less fetch gets a cache HIT on that stale avif, masking this fix.
+    // Bypassing the cache forces a fresh UA-less origin fetch -> webp.
+    cache: 'no-store',
+    headers: { accept: 'image/webp,image/png,image/jpeg,image/gif,image/*;q=0.8' },
+    signal: signal ?? createFetchTimeoutSignal(15_000),
   });
   if (!response.ok) {
     throw new Error(`image fetch returned HTTP ${response.status}`);
@@ -1887,7 +2054,7 @@ function encodeArrayBufferBase64(buffer: ArrayBuffer): string {
   throw new Error('No base64 encoder is available in this runtime');
 }
 
-function normalizePublicProductUrl(value: string): URL | null {
+export function normalizePublicProductUrl(value: string): URL | null {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') {
@@ -2247,7 +2414,7 @@ function scoreImageEvidenceSource(source: string): number {
   return 1;
 }
 
-function scoreProductImageEvidence(entry: StylePurchasePageImageEvidence, pageTitle: string | null, pageUrl: string): number {
+export function scoreProductImageEvidence(entry: StylePurchasePageImageEvidence, pageTitle: string | null, pageUrl: string): number {
   let score = scoreImageEvidenceSource(entry.source) * 10;
   const signature = imageEvidenceSignature(entry);
   if (/\b(product|pdp|catalog|sku|style|shot|main|primary|zoom|large|detail)\b/.test(signature)) score += 8;
@@ -2260,7 +2427,7 @@ function scoreProductImageEvidence(entry: StylePurchasePageImageEvidence, pageTi
   return score;
 }
 
-function isLikelyNonProductImage(entry: StylePurchasePageImageEvidence, pageTitle: string | null, pageUrl: string): boolean {
+export function isLikelyNonProductImage(entry: StylePurchasePageImageEvidence, pageTitle: string | null, pageUrl: string): boolean {
   const signature = imageEvidenceSignature(entry);
   const searchText = imageEvidenceSearchText(entry);
   if (/\b(logo|brand logo|brand logos|icon|sprite|favicon|payment|badge|loader|placeholder)\b/.test(searchText)) {
@@ -2555,6 +2722,9 @@ export function registerStyleMcpSurface(
 ) {
   const allowPurchasePageExtraction = options.allowPurchasePageExtraction ?? true;
   const styleReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_READ_SCOPE] }];
+  // Closet render adapter accepts either read scope (gate = requireAnyScope([style:read, meals:read]));
+  // advertise both so the narrowed public token (meals:read) is in lockstep with the gate.
+  const styleClosetReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE] }];
   const styleWriteSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_WRITE_SCOPE] }];
   const purchaseAnalysisWidgetMeta = buildWidgetMeta(
     'Rich Fluent purchase analysis for Style buy/skip decisions in ChatGPT-style widget hosts.',
@@ -2562,6 +2732,10 @@ export function registerStyleMcpSurface(
   );
   const setupCalibrationWidgetMeta = buildWidgetMeta(
     'Fluent Style setup and calibration view for closet confidence, inferred taste, confirmed taste, and next best action.',
+    origin,
+  );
+  const closetWidgetMeta = buildStyleClosetWidgetMeta(
+    'Photography-first Fluent Style closet manager for owned-item review and item-level edits.',
     origin,
   );
 
@@ -2688,6 +2862,66 @@ export function registerStyleMcpSurface(
     'fluent-style-purchase-analysis-widget',
     STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
     'Purchase Analysis Widget',
+  );
+
+  const registerStyleClosetWidgetResource = (name: string, uri: string, title: string) => {
+    server.registerResource(
+      name,
+      uri,
+      {
+        title,
+        description: 'Photography-first closet manager for owned Fluent Style items.',
+        mimeType: 'text/html;profile=mcp-app',
+        icons: iconFor(origin),
+        _meta: closetWidgetMeta,
+      },
+      async () => ({
+        contents: [
+          {
+            uri,
+            mimeType: 'text/html;profile=mcp-app',
+            text: getStyleClosetWidgetHtml(),
+            _meta: closetWidgetMeta,
+          },
+        ],
+      }),
+    );
+  };
+
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-previous-v1',
+    STYLE_CLOSET_PREVIOUS_TEMPLATE_URI,
+    'Style Closet Widget Previous v1',
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-previous-v2',
+    STYLE_CLOSET_V2_TEMPLATE_URI,
+    'Style Closet Widget Previous v2',
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-previous-v3',
+    STYLE_CLOSET_V3_TEMPLATE_URI,
+    'Style Closet Widget Previous v3',
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-previous-v4',
+    STYLE_CLOSET_V4_TEMPLATE_URI,
+    'Style Closet Widget Previous v4',
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-previous-v5',
+    STYLE_CLOSET_V5_TEMPLATE_URI,
+    'Style Closet Widget Previous v5',
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-previous-v6',
+    STYLE_CLOSET_V6_TEMPLATE_URI,
+    'Style Closet Widget Previous v6',
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v7',
+    STYLE_CLOSET_TEMPLATE_URI,
+    'Style Closet Widget',
   );
 
   server.registerResource(
@@ -2920,13 +3154,17 @@ export function registerStyleMcpSurface(
         item_wear_statuses: z
           .array(
             z.object({
-              item_id: z.string(),
-              note: z.string().nullable().optional(),
-              wear_status: styleItemWearStatusSchema,
+              item_id: z
+                .string()
+                .min(1)
+                .describe('Use item_id returned by style_get_onboarding_calibration, style_list_items, or style_get_context; do not invent item IDs.'),
+              note: z.string().nullable().optional().describe('Optional user-confirmed reason for the item wear-status calibration.'),
+              wear_status: styleItemWearStatusSchema.describe('User-confirmed wear status for this known closet item.'),
             }),
           )
+          .describe('Known closet items the user explicitly marked active, stale, accidental, retired, or otherwise calibrated.')
           .optional(),
-        profile_patch: z.any().optional(),
+        profile_patch: styleProfilePatchInputSchema.optional().describe('Sparse Style profile patch; include only explicit user-confirmed setup or calibration fields.'),
         response_mode: writeResponseModeSchema,
         signals: z
           .array(
@@ -2984,10 +3222,10 @@ export function registerStyleMcpSurface(
       description:
         'Preferred write tool for adding one active starter Style closet item from a user-provided description, product link, or image URL during setup. Preserve obvious descriptive details such as length, structure, silhouette, formality, occasions, and evidence gaps. This is for user-supplied evidence only; do not search for or invent closet items, and do not use style_upsert_item for starter closet onboarding unless the user is doing advanced item maintenance.',
       inputSchema: {
-        item: z.any(),
-        photo_url: z.string().optional(),
+        item: styleStarterClosetItemInputSchema.describe('Required user-supplied starter closet item object with name/category/description/profile details when known.'),
+        photo_url: z.string().url().optional().describe('Optional direct photo URL for the starter closet item.'),
         response_mode: writeResponseModeSchema,
-        source_snapshot: z.any().optional(),
+        source_snapshot: styleToolMetadataInputSchema,
         ...provenanceInputSchema,
       },
     },
@@ -3505,18 +3743,18 @@ export function registerStyleMcpSurface(
         ? 'Use for Style purchase-analysis requests, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what product-page or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. If only a product URL was provided and no candidate image references exist yet, use style_extract_purchase_page_evidence next. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.'
         : 'Use for Style purchase-analysis requests, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what item details or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. In ChatGPT, product links should be supported by user-provided item details plus a direct product image or uploaded photo before the final buy/wait/skip call. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.',
       inputSchema: {
-        candidate: stylePurchaseCandidateInputSchema,
-        evidence: z.any().optional(),
-        renderRepair: z.any().optional(),
-        render_repair: z.any().optional(),
-        retryInput: z.any().optional(),
-        retry_input: z.any().optional(),
-        visualEvidence: z.any().optional(),
-        visualObservationId: z.string().optional(),
-        visual_observation_id: z.string().optional(),
-        visual_evidence: z.any().optional(),
-        visualObservations: z.any().optional(),
-        visual_observations: z.any().optional(),
+        candidate: stylePurchaseCandidateInputSchema.describe('Required purchase candidate as a short string or structured object with known product details.'),
+        evidence: stylePurchaseVisualEvidenceInputSchema.optional().describe('Accepted concrete visual evidence from a prior host inspection; omit until the image has actually been inspected.'),
+        renderRepair: stylePurchaseRenderRepairInputSchema.optional().describe('Optional repair payload from a prior purchase-analysis response, camelCase form.'),
+        render_repair: stylePurchaseRenderRepairInputSchema.optional().describe('Optional repair payload from a prior purchase-analysis response, snake_case form.'),
+        retryInput: stylePurchaseRetryInputSchema.optional().describe('Optional retry payload with concrete visual evidence, camelCase form.'),
+        retry_input: stylePurchaseRetryInputSchema.optional().describe('Optional retry payload with concrete visual evidence, snake_case form.'),
+        visualEvidence: stylePurchaseVisualEvidenceInputSchema.optional().describe('Accepted concrete visual evidence in camelCase form.'),
+        visualObservationId: z.string().optional().describe('Receipt ID returned by style_submit_purchase_visual_observations.'),
+        visual_observation_id: z.string().optional().describe('Receipt ID returned by style_submit_purchase_visual_observations.'),
+        visual_evidence: stylePurchaseVisualEvidenceInputSchema.optional().describe('Accepted concrete visual evidence in snake_case form.'),
+        visualObservations: z.array(styleConcreteVisualObservationSchema).optional().describe('Concrete candidate image observations in camelCase shorthand.'),
+        visual_observations: z.array(styleConcreteVisualObservationSchema).optional().describe('Concrete candidate image observations in snake_case shorthand.'),
       },
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
@@ -3562,9 +3800,18 @@ export function registerStyleMcpSurface(
       description:
         'Primary Fluent Style purchase-analysis visual step for staged purchase decisions. Returns model-visible inline candidate and closet-comparator images plus compact comparison context. Use after style_prepare_purchase_analysis for image-bearing candidates, inspect the returned image content, then call style_submit_purchase_visual_observations before rendering the widget or giving the final buy/wait/skip recommendation.',
       inputSchema: {
-        candidate: stylePurchaseCandidateInputSchema,
-        comparator_item_ids: z.array(z.string()).optional(),
-        max_inline_images: z.number().int().positive().max(STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES).optional(),
+        candidate: stylePurchaseCandidateInputSchema.describe('Purchase candidate from style_prepare_purchase_analysis or the same candidate object/string previously analyzed.'),
+        comparator_item_ids: z
+          .array(z.string().min(1).describe('Comparator item ID returned in comparatorItemIds by style_prepare_purchase_analysis.'))
+          .optional()
+          .describe('Optional exact comparator item IDs from the prior style_prepare_purchase_analysis result; omit to let Fluent choose comparators.'),
+        max_inline_images: z
+          .number()
+          .int()
+          .positive()
+          .max(STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES)
+          .optional()
+          .describe(`Maximum inline images to return, from 1 to ${STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES}.`),
       },
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
@@ -3944,30 +4191,17 @@ export function registerStyleMcpSurface(
     },
   );
 
-  server.registerTool(
-    'style_show_purchase_analysis_widget',
-    withAppsSecurity({
-      title: 'Show Purchase Analysis Widget',
-      description:
-        'Open the rich Fluent Style purchase-analysis widget in ChatGPT / MCP Apps-style hosts only after style_prepare_purchase_analysis has run and the host has actually inspected candidate images. Pass stylist_judgment with the host agent buy/skip/wait call so the card renders the agent-owned stylist decision. Do not call this with only a product URL, text metadata, image references, or uninspected visual evidence. Requires visual_evidence with candidateInspected true and concrete candidateObservations.',
-      inputSchema: {
-        candidate: stylePurchaseCandidateInputSchema,
-        visual_evidence: stylePurchaseVisualEvidenceInputSchema,
-        stylistJudgment: stylePurchaseStylistJudgmentSchema.optional(),
-        stylist_judgment: stylePurchaseStylistJudgmentSchema.optional(),
-      },
-      annotations: { readOnlyHint: true, idempotentHint: true },
-      _meta: {
-        ui: {
-          resourceUri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
-        },
-        'openai/outputTemplate': STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
-        'openai/toolInvocation/invoked': 'Purchase analysis ready.',
-        'openai/toolInvocation/invoking': 'Opening purchase analysis…',
-        'openai/widgetAccessible': true,
-      },
-    }, styleReadSecuritySchemes),
-    async (args) => {
+  const stylePurchaseAnalysisWidgetInputSchema = {
+    candidate: stylePurchaseCandidateInputSchema,
+    visual_evidence: stylePurchaseVisualEvidenceInputSchema,
+    stylistJudgment: stylePurchaseStylistJudgmentSchema.optional(),
+    stylist_judgment: stylePurchaseStylistJudgmentSchema.optional(),
+  };
+
+  const renderStylePurchaseAnalysisWidgetResult = async (
+    args: z.infer<z.ZodObject<typeof stylePurchaseAnalysisWidgetInputSchema>>,
+    toolName: 'fluent_render_style_surface' | 'style_show_purchase_analysis_widget',
+  ) => {
       const { candidate, visual_evidence } = args;
       const authProps = requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
       const stylistJudgment = extractStylePurchaseStylistJudgmentArgument(args);
@@ -3976,7 +4210,7 @@ export function registerStyleMcpSurface(
       });
       if (!acceptedVisualEvidence) {
         throw new Error(
-          'style_show_purchase_analysis_widget not_render_ready: concrete candidate image observations are required. Call style_prepare_purchase_analysis or style_render_purchase_analysis for non-widget not-ready output.',
+          `${toolName} not_render_ready: concrete candidate image observations are required. Call style_prepare_purchase_analysis or style_render_purchase_analysis for non-widget not-ready output.`,
         );
       }
       const analysis = await style.analyzePurchase({
@@ -3985,7 +4219,7 @@ export function registerStyleMcpSurface(
       });
       if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
         throw new Error(
-          'style_show_purchase_analysis_widget not_render_ready: visual evidence did not produce host visual grounding. Call style_prepare_purchase_analysis or style_render_purchase_analysis for non-widget not-ready output.',
+          `${toolName} not_render_ready: visual evidence did not produce host visual grounding. Call style_prepare_purchase_analysis or style_render_purchase_analysis for non-widget not-ready output.`,
         );
       }
       const imageHints = await buildPurchaseAnalysisImageHints(style, analysis, candidate, {
@@ -4022,7 +4256,118 @@ export function registerStyleMcpSurface(
         ],
         structuredContent,
       };
+  };
+
+  server.registerTool(
+    'fluent_render_style_closet_surface',
+    withAppsSecurity({
+      title: 'Show Fluent Style Closet',
+      description:
+        'Promoted render adapter for the Fluent Style closet manager MCP Apps surface. Reads owned Style items and returns the v1 closet widget plus compact structured fallback data. Pass the consolidated filter object to open the closet pre-narrowed to what the user asked about — for example filter.category "TOP" for shirts/tops, "SHOE" for shoes, or filter.color/filter.subcategory/filter.query for a more specific ask; the card opens focused on that filter and the user can broaden it in-card. Use filter.status "archived" to show archived items. This surface is for managing saved closet state, not purchase advice or stylist judgment.',
+      inputSchema: {
+        cursor: z.string().optional(),
+        filter: styleClosetFilterSchema,
+        limit: z.number().int().min(1).max(120).optional(),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      _meta: {
+        ui: {
+          csp: closetWidgetMeta.ui.csp,
+          resourceUri: STYLE_CLOSET_TEMPLATE_URI,
+        },
+        'openai/outputTemplate': STYLE_CLOSET_TEMPLATE_URI,
+        'openai/toolInvocation/invoked': 'Style closet ready.',
+        'openai/toolInvocation/invoking': 'Opening style closet...',
+        'openai/widgetAccessible': true,
+      },
+    }, styleClosetReadSecuritySchemes),
+    async (args) => {
+      requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
+      const structuredContent = await buildStyleClosetStructuredContent(style, {
+        cursor: args.cursor,
+        filter: args.filter as StyleClosetFilter | undefined,
+        limit: args.limit,
+      });
+      // Reference-only / external photos (e.g. a pasted product URL) are cross-origin to the widget
+      // iframe and Claude's COEP sandbox blocks them unless served through Fluent's signed same-origin
+      // image route. Owned photos already carry a same-origin signed URL and pass through unchanged.
+      const sameOriginImage = (value: string): boolean => {
+        try {
+          return new URL(value).origin === new URL(origin).origin;
+        } catch {
+          return false;
+        }
+      };
+      await Promise.all(structuredContent.items.map(async (item) => {
+        if (item.imageUrl && !sameOriginImage(item.imageUrl)) {
+          const proxied = await buildWidgetImageUrl(item.imageUrl, { imageDeliverySecret: options.imageDeliverySecret, origin });
+          item.imageUrl = proxied;
+          item.hasImage = Boolean(proxied);
+        }
+        // The flip card's worn/fit photo needs the same treatment: a reference-only fit photo can be a
+        // cross-origin sourceUrl that Claude's COEP iframe blocks. Proxy it, or null it if unproxiable.
+        if (item.fitImageUrl && !sameOriginImage(item.fitImageUrl)) {
+          item.fitImageUrl = await buildWidgetImageUrl(item.fitImageUrl, { imageDeliverySecret: options.imageDeliverySecret, origin });
+        }
+      }));
+      const label = structuredContent.summary.filterLabel.toLowerCase();
+      return {
+        _meta: {
+          openai: { outputTemplate: STYLE_CLOSET_TEMPLATE_URI },
+          ui: { resourceUri: STYLE_CLOSET_TEMPLATE_URI },
+          widgetResourceUri: STYLE_CLOSET_TEMPLATE_URI,
+        },
+        content: [
+          {
+            type: 'text' as const,
+            text: `Your closet - ${structuredContent.summary.shownTotal} ${label} shown`,
+          },
+        ],
+        structuredContent,
+      };
     },
+  );
+
+  server.registerTool(
+    'fluent_render_style_surface',
+    withAppsSecurity({
+      title: 'Legacy Style Purchase Card (deprecated)',
+      description:
+        'Legacy/compatibility render adapter only — do NOT use in the Phase 1/2 public Style purchase flow. A buy/skip/consider/wait verdict is PROSE from one fluent_get_context(domain="style", intent="purchase", candidate, amount) read; to show the user the owned items that compare to the candidate, render fluent_render_style_closet_surface with filter.item_ids set to those comparator ids — NEVER this tool. Retained only for older hosts still driving the deprecated evidence flow; if somehow used, answer from the structured fallback data in text.',
+      inputSchema: stylePurchaseAnalysisWidgetInputSchema,
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      _meta: {
+        ui: {
+          resourceUri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+        },
+        'openai/outputTemplate': STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+        'openai/toolInvocation/invoked': 'Style purchase analysis ready.',
+        'openai/toolInvocation/invoking': 'Opening style purchase analysis...',
+        'openai/widgetAccessible': true,
+      },
+    }, styleReadSecuritySchemes),
+    async (args) => renderStylePurchaseAnalysisWidgetResult(args, 'fluent_render_style_surface'),
+  );
+
+  server.registerTool(
+    'style_show_purchase_analysis_widget',
+    withAppsSecurity({
+      title: 'Show Purchase Analysis Widget',
+      description:
+        'Open the rich Fluent Style purchase-analysis widget in ChatGPT / MCP Apps-style hosts only after style_prepare_purchase_analysis has run and the host has actually inspected candidate images. Pass stylist_judgment with the host agent buy/skip/wait call so the card renders the agent-owned stylist decision. Do not call this with only a product URL, text metadata, image references, or uninspected visual evidence. Requires visual_evidence with candidateInspected true and concrete candidateObservations.',
+      inputSchema: stylePurchaseAnalysisWidgetInputSchema,
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      _meta: {
+        ui: {
+          resourceUri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+        },
+        'openai/outputTemplate': STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
+        'openai/toolInvocation/invoked': 'Purchase analysis ready.',
+        'openai/toolInvocation/invoking': 'Opening purchase analysis…',
+        'openai/widgetAccessible': true,
+      },
+    }, styleReadSecuritySchemes),
+    async (args) => renderStylePurchaseAnalysisWidgetResult(args, 'style_show_purchase_analysis_widget'),
   );
 
   server.registerResource(
@@ -4048,7 +4393,7 @@ export function registerStyleMcpSurface(
         'Apply an explicit user-requested Style purchase analysis action from the widget, such as logging a purchased item into the Fluent closet.',
       inputSchema: {
         action_id: stylePurchaseAnalysisActionIdSchema,
-        candidate: z.any(),
+        candidate: stylePurchaseCandidateInputSchema.describe('Purchase candidate returned by the rendered analysis widget or prior preparation step.'),
         ...provenanceInputSchema,
       },
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },

@@ -1,20 +1,23 @@
 ---
 name: fluent-visual-sync
-description: Use when the live host supports a Fluent-compatible visual sync surface.
+description: Historical Fluent visual-sync guidance. Do not use for public vNext unless a future surface earns re-entry.
 ---
 
 # Fluent Visual Sync
 
-## When To Use
+See [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md) for host-specific rendering rules.
 
-- ChatGPT / MCP Apps-style hosts should prefer `meals_render_grocery_list_v2` instead of this skill.
-- Claude-side visualizer hosts should use this skill when `visualize:show_widget` is actually available and MCP Apps UI-resource mounting is not the active path.
-- Codex and generic plain clients should fall back to canonical data plus text.
+## Public vNext Boundary
 
-## Pattern
+The canonical hosted `/mcp` public profile is text/data first: 26 tools, 10 resources, with the promoted vNext grocery-list, Budgets Envelope Setup, and Style Closet Manager v2/v3/v4/v5 MCP Apps as the only widget surfaces.
 
-Read canonical state, render only with proven host support, persist through normal Fluent writes after explicit intent, then read back before claiming success.
+Do not use visual-sync, ChatGPT widgets, MCP Apps resources, render adapters, or host-specific visualizers as the default Fluent product path. Answer from canonical data plus text.
 
-## Safety
+## Rules
 
-Widgets must not call MCP directly or hold credentials. If refresh or persistence is unreliable, use text-first Fluent tools.
+- Do not switch to `/mcp/app`, `/mcp/chatgpt`, or a legacy/full route to get widgets.
+- Do not call or suggest old grocery, recipe, home, pantry, Style, or Health widgets.
+- Do not use `visualize:show_widget` as a public vNext Fluent path.
+- If the user asks for a visual, explain that public Fluent vNext currently provides context, items, evidence, and media for the host to present in text or host-native UI.
+
+Future visual surfaces must prove value over text/data first, then re-enter through a new acceptance packet.

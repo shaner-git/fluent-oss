@@ -13,6 +13,7 @@ import {
   FLUENT_TOOL_NAMES,
   fluentContractSnapshot,
 } from '../src/contract';
+import { getFluentGuidanceDocument } from '../src/fluent-guidance';
 import { registerCoreMcpSurface } from '../src/mcp-core';
 import { registerHealthMcpSurface } from '../src/mcp-health';
 import { registerMealsMcpSurface } from '../src/mcp-meals';
@@ -35,6 +36,9 @@ const publicTools = new Set<string>(FLUENT_TOOL_NAMES);
 const publicResources = new Set<string>(FLUENT_RESOURCE_URIS);
 const aliasTools = new Set<string>(FLUENT_TOOL_ALIASES.map((entry) => entry.name));
 const devTools = new Set<string>(FLUENT_DEV_TOOL_NAMES);
+const legacyFullRuntimeTools = new Set<string>([
+  'fluent_render_style_surface',
+]);
 const devResources = new Set<string>(FLUENT_DEV_RESOURCE_URIS);
 const previewTools = PREVIEW_RICH_TOOL_GUIDE.map((entry) => entry.name);
 const frozenContractSnapshot = JSON.parse(readRepoFile('contracts/fluent-contract.v1.json')) as {
@@ -44,6 +48,8 @@ const frozenContractSnapshot = JSON.parse(readRepoFile('contracts/fluent-contrac
   resources: string[];
   tools: string[];
 };
+const styleEnrichmentGuidanceUri = 'fluent://guidance/style-enrichment';
+const styleShoppingGuidanceUri = 'fluent://guidance/style-shopping';
 
 assert.deepEqual(
   frozenContractSnapshot,
@@ -54,10 +60,34 @@ assert.deepEqual(
   'contracts/fluent-contract.v1.json must stay in exact parity with src/contract.ts.',
 );
 
+assert.ok(
+  getFluentGuidanceDocument(styleEnrichmentGuidanceUri),
+  'style enrichment guidance must resolve through getFluentGuidanceDocument.',
+);
+assert.match(
+  JSON.stringify(getFluentGuidanceDocument(styleEnrichmentGuidanceUri)),
+  /re-analyzing a saved item from its photo.*fluent_get_media_bundle.*host_vision.*has_image:true/s,
+  'style enrichment guidance must include the saved-photo re-analysis honesty rule.',
+);
+assert.equal(
+  FLUENT_RESOURCE_URIS.includes(styleEnrichmentGuidanceUri),
+  true,
+  'style enrichment guidance URI must be in the public contract resource list.',
+);
+assert.ok(
+  getFluentGuidanceDocument(styleShoppingGuidanceUri),
+  'style shopping guidance must resolve through getFluentGuidanceDocument.',
+);
+assert.equal(
+  FLUENT_RESOURCE_URIS.includes(styleShoppingGuidanceUri),
+  true,
+  'style shopping guidance URI must be in the public contract resource list.',
+);
+
 assert.deepEqual(
   runtimeSurface.tools
     .map((entry) => entry.name)
-    .filter((name) => !publicTools.has(name) && !aliasTools.has(name) && !devTools.has(name)),
+    .filter((name) => !publicTools.has(name) && !aliasTools.has(name) && !devTools.has(name) && !legacyFullRuntimeTools.has(name)),
   [],
   'Every registered runtime tool must be public contract, alias-only, or dev-only.',
 );

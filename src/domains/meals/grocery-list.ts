@@ -1,4 +1,7 @@
+import type { CurrentGroceryListRecord, GroceryIntentRecord, GroceryPlanItemRecord } from './types';
+
 export const MEALS_GROCERY_LIST_WIDGET_VERSION = 'v71';
+export const FLUENT_VNEXT_GROCERY_LIST_WIDGET_VERSION = 'v1';
 export const MEALS_GROCERY_SMOKE_WIDGET_VERSION = 'v1';
 export const MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v57.html';
 export const MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v58.html';
@@ -15,6 +18,11 @@ export const MEALS_GROCERY_LIST_PANTRY_UNDO_PREVIOUS_TEMPLATE_URI = 'ui://widget
 export const MEALS_GROCERY_LIST_STALE_SOURCE_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v69.html';
 export const MEALS_GROCERY_LIST_BUCKET_ACTION_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v70.html';
 export const MEALS_GROCERY_LIST_TEMPLATE_URI = `ui://widget/fluent-grocery-list-${MEALS_GROCERY_LIST_WIDGET_VERSION}.html`;
+export const MEALS_GROCERY_LIST_VNEXT_LEGACY_TEMPLATE_URI = 'ui://widget/fluent-vnext-grocery-list-v1.html';
+export const MEALS_GROCERY_LIST_VNEXT_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-vnext-grocery-list-v2.html';
+export const MEALS_GROCERY_LIST_VNEXT_BRIDGE_TEMPLATE_URI = 'ui://widget/fluent-vnext-grocery-list-v3.html';
+export const MEALS_GROCERY_LIST_VNEXT_MULTIFRAME_TEMPLATE_URI = 'ui://widget/fluent-vnext-grocery-list-v4.html';
+export const MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI = 'ui://widget/fluent-vnext-grocery-list-v5.html';
 export const MEALS_GROCERY_SMOKE_TEMPLATE_URI = `ui://widget/fluent-grocery-smoke-${MEALS_GROCERY_SMOKE_WIDGET_VERSION}.html`;
 
 export interface GroceryListRecipeReferenceViewModel {
@@ -591,6 +599,283 @@ export function buildGroceryListMetadata(viewModel: GroceryListViewModel) {
     groceryList: buildGroceryListInteractiveViewModel(viewModel),
     version: MEALS_GROCERY_LIST_WIDGET_VERSION,
   };
+}
+
+export function buildVNextGroceryListMetadata(viewModel: GroceryListViewModel) {
+  return {
+    experience: 'grocery_list',
+    groceryList: buildGroceryListInteractiveViewModel(viewModel),
+    version: FLUENT_VNEXT_GROCERY_LIST_WIDGET_VERSION,
+  };
+}
+
+export function buildVNextGroceryListViewModel(currentList: CurrentGroceryListRecord): GroceryListViewModel {
+  const planItems = currentList.groceryPlan?.raw.items ?? [];
+  const resolvedItems = currentList.groceryPlan?.raw.resolvedItems ?? [];
+  const unresolvedNames = new Set((currentList.preparedOrder?.unresolvedItems ?? []).map((item) => normalizeListKey(item.displayName)));
+  const remainingNames = new Set((currentList.preparedOrder?.remainingToBuy ?? []).map((item) => normalizeListKey(item.displayName)));
+
+  const toBuy: GroceryListItemViewModel[] = [];
+  const verify: GroceryListItemViewModel[] = [];
+  const covered: GroceryListItemViewModel[] = [];
+
+  for (const item of planItems) {
+    const normalizedName = normalizeListKey(item.name);
+    const bucket: GroceryListItemViewModel['bucket'] = unresolvedNames.has(normalizedName)
+      ? 'verify_pantry'
+      : 'need_to_buy';
+    const viewItem = buildVNextPlanItemViewModel(currentList, item, bucket);
+    if (bucket === 'verify_pantry') {
+      verify.push(viewItem);
+    } else {
+      toBuy.push(viewItem);
+    }
+  }
+
+  for (const item of resolvedItems) {
+    covered.push(buildVNextPlanItemViewModel(currentList, item, 'covered'));
+  }
+
+  for (const intent of currentList.intents ?? []) {
+    const item = buildVNextManualIntentViewModel(currentList, intent);
+    if (!item) {
+      continue;
+    }
+    if (item.bucket === 'covered') {
+      covered.push(item);
+    } else {
+      toBuy.push(item);
+    }
+  }
+
+  for (const item of currentList.preparedOrder?.remainingToBuy ?? []) {
+    const normalizedName = normalizeListKey(item.displayName);
+    if (remainingNames.has(normalizedName) && !toBuy.some((entry) => normalizeListKey(entry.displayName) === normalizedName)) {
+      toBuy.push(buildVNextPreparedOrderItemViewModel(currentList, item, 'need_to_buy'));
+    }
+  }
+
+  for (const item of currentList.preparedOrder?.unresolvedItems ?? []) {
+    const normalizedName = normalizeListKey(item.displayName);
+    if (!verify.some((entry) => normalizeListKey(entry.displayName) === normalizedName)) {
+      verify.push(buildVNextPreparedOrderItemViewModel(currentList, item, 'verify_pantry', item.reason));
+    }
+  }
+
+  const buckets: GroceryListViewModel['buckets'] = [
+    { id: 'need_to_buy', label: 'To buy', count: toBuy.length, items: toBuy },
+    { id: 'verify_pantry', label: 'Check at home', count: verify.length, items: verify },
+    { id: 'covered', label: 'Done', count: covered.length, items: covered },
+  ];
+
+  return {
+    bucketOrder: ['need_to_buy', 'verify_pantry', 'covered'],
+    buckets,
+    listId: currentList.listId,
+    objectRole: currentList.objectRole,
+    sourceProvenance: currentList.sourceProvenance.map((source) => ({
+      kind: source.kind,
+      label: source.label,
+      status: source.status ?? null,
+      weekStart: source.weekStart ?? null,
+    })),
+    stale: currentList.stale,
+    staleReasons: currentList.staleReasons,
+    subtitle: currentList.subtitle,
+    summary: {
+      coveredCount: covered.length,
+      headline: `${toBuy.length} item${toBuy.length === 1 ? '' : 's'} left to buy`,
+      needToBuyCount: toBuy.length,
+      verifyCount: verify.length,
+    },
+    title: currentList.title,
+    trustLabel: currentList.trustLabel,
+    trustState: currentList.trustState,
+    version: currentList.version,
+    weekStart: currentList.weekStart,
+    weekRelation: currentList.weekRelation,
+  };
+}
+
+function buildVNextPlanItemViewModel(
+  currentList: CurrentGroceryListRecord,
+  item: GroceryPlanItemRecord,
+  bucket: GroceryListItemViewModel['bucket'],
+): GroceryListItemViewModel {
+  return {
+    actions: buildVNextPlanItemActions(currentList, item, bucket),
+    brandHint: Array.isArray(item.preferredBrands) && item.preferredBrands[0] ? `Brand hint: ${item.preferredBrands[0]}` : null,
+    bucket,
+    displayName: item.name,
+    isManual: false,
+    itemKey: item.itemKey,
+    manualIntentId: null,
+    note: item.note ?? null,
+    provenanceLabel: 'Plan item',
+    quantity: item.canonicalQuantity ?? item.quantity ?? null,
+    quantityDisplay: formatVNextQuantityDisplay(item.canonicalQuantity ?? item.quantity ?? null, item.canonicalUnit ?? item.unit ?? null),
+    reason: bucket === 'verify_pantry' ? 'Check at home before shopping' : null,
+    recipes: (item.sourceRecipeIds ?? []).map((recipeId, index) => ({
+      recipeId,
+      recipeName: item.sourceRecipeNames?.[index] ?? recipeId,
+    })),
+    unit: item.canonicalUnit ?? item.unit ?? null,
+  };
+}
+
+function buildVNextPreparedOrderItemViewModel(
+  currentList: CurrentGroceryListRecord,
+  item: { displayName: string; notes?: string | null; quantity: number | null; unit: string | null },
+  bucket: GroceryListItemViewModel['bucket'],
+  reason?: string | null,
+): GroceryListItemViewModel {
+  const itemKey = `prepared:${normalizeListKey(item.displayName)}`;
+  return {
+    actions: [],
+    brandHint: null,
+    bucket,
+    displayName: item.displayName,
+    isManual: false,
+    itemKey,
+    manualIntentId: null,
+    note: item.notes ?? null,
+    provenanceLabel: 'Current list preview',
+    quantity: item.quantity,
+    quantityDisplay: formatVNextQuantityDisplay(item.quantity, item.unit),
+    reason: reason ?? null,
+    recipes: [],
+    unit: item.unit,
+  };
+}
+
+function buildVNextManualIntentViewModel(
+  currentList: CurrentGroceryListRecord,
+  intent: GroceryIntentRecord,
+): GroceryListItemViewModel | null {
+  if (intent.status === 'deleted') {
+    return null;
+  }
+  const bucket: GroceryListItemViewModel['bucket'] = intent.status === 'completed' ? 'covered' : 'need_to_buy';
+  const actions: GroceryListActionViewModel[] = currentList.stale
+    ? []
+    : [
+        {
+          args: buildVNextManualIntentChangeArgs(currentList, intent, bucket === 'covered' ? 'pending' : 'completed'),
+          id: bucket === 'covered' ? 'undo' : 'mark_bought',
+          label: bucket === 'covered' ? 'Undo' : 'Mark bought',
+          toolName: 'fluent_apply_grocery_list_change',
+        },
+      ];
+  return {
+    actions,
+    brandHint: null,
+    bucket,
+    displayName: intent.displayName,
+    isManual: true,
+    itemKey: intent.id,
+    manualIntentId: intent.id,
+    note: intent.notes ?? null,
+    provenanceLabel: 'Manual list item',
+    quantity: intent.quantity,
+    quantityDisplay: formatVNextQuantityDisplay(intent.quantity, intent.unit ?? null),
+    reason: null,
+    recipes: [],
+    unit: intent.unit ?? null,
+  };
+}
+
+function buildVNextPlanItemActions(
+  currentList: CurrentGroceryListRecord,
+  item: GroceryPlanItemRecord,
+  bucket: GroceryListItemViewModel['bucket'],
+): GroceryListActionViewModel[] {
+  if (currentList.stale) {
+    return [];
+  }
+  if (!item.itemKey) {
+    return [];
+  }
+  if (bucket === 'verify_pantry') {
+    return [
+      {
+        args: buildVNextPlanItemChangeArgs(currentList, item.itemKey, 'already_have_enough'),
+        id: 'already_have_enough',
+        label: 'Already have enough',
+        toolName: 'fluent_apply_grocery_list_change',
+      },
+      {
+        args: buildVNextPlanItemChangeArgs(currentList, item.itemKey, 'dont_have_it'),
+        id: 'need_to_buy',
+        label: 'Add to buy list',
+        toolName: 'fluent_apply_grocery_list_change',
+      },
+    ];
+  }
+  if (bucket === 'covered') {
+    return [];
+  }
+  return [
+    {
+      args: buildVNextPlanItemChangeArgs(currentList, item.itemKey, 'bought'),
+      id: 'mark_bought',
+      label: 'Mark bought',
+      toolName: 'fluent_apply_grocery_list_change',
+    },
+  ];
+}
+
+function buildVNextPlanItemChangeArgs(
+  currentList: CurrentGroceryListRecord,
+  itemKey: string,
+  status: 'already_have_enough' | 'bought' | 'dont_have_it',
+) {
+  return {
+    approval: 'explicit_user_approved',
+    change: {
+      item_key: itemKey,
+      kind: 'mark_plan_item',
+      status,
+    },
+    list_id: currentList.listId,
+    list_version: currentList.version,
+    response_mode: 'full',
+    week_start: currentList.weekStart,
+  };
+}
+
+function buildVNextManualIntentChangeArgs(
+  currentList: CurrentGroceryListRecord,
+  intent: GroceryIntentRecord,
+  status: 'completed' | 'pending',
+) {
+  return {
+    approval: 'explicit_user_approved',
+    change: {
+      display_name: intent.displayName,
+      intent_id: intent.id,
+      kind: 'update_manual_item',
+      notes: intent.notes ?? undefined,
+      quantity: intent.quantity ?? undefined,
+      status,
+      target_window: intent.targetWindow ?? undefined,
+      unit: intent.unit ?? undefined,
+    },
+    list_id: currentList.listId,
+    list_version: currentList.version,
+    response_mode: 'full',
+    week_start: currentList.weekStart,
+  };
+}
+
+function formatVNextQuantityDisplay(quantity: number | null, unit: string | null): string | null {
+  if (quantity == null) {
+    return null;
+  }
+  return unit ? `${quantity} ${unit}` : String(quantity);
+}
+
+function normalizeListKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 export function getGroceryListWidgetHtml(): string {
@@ -1219,6 +1504,7 @@ export function getGroceryListWidgetHtml(): string {
     var syncError = '';
     var syncSent = false;
     var syncPending = false;
+    var vNextSurface = false;
 
     function getOpenAI() {
       return window.openai || {};
@@ -1262,10 +1548,13 @@ export function getGroceryListWidgetHtml(): string {
       if (candidate._meta && candidate._meta.groceryList) {
         return candidate._meta.groceryList;
       }
+      if ((candidate.type === 'grocery_list' || candidate.id === 'current_grocery_list') && candidate.payload) {
+        return candidate.payload;
+      }
       if (candidate.experience === 'grocery_list') {
         return candidate;
       }
-      var keys = ['structuredContent', 'output', 'result', 'data', 'value', 'params'];
+      var keys = ['structuredContent', 'output', 'result', 'data', 'value', 'params', 'payload', 'readAfterWrite'];
       for (var index = 0; index < keys.length; index += 1) {
         if (candidate[keys[index]]) {
           var nested = findGroceryList(candidate[keys[index]]);
@@ -1294,6 +1583,9 @@ export function getGroceryListWidgetHtml(): string {
     }
 
     function buildFallbackSyncActions(item, bucketId, weekStart) {
+      if (vNextSurface) {
+        return [];
+      }
       if (!item || !item.itemKey || !weekStart) {
         return [];
       }
@@ -1626,6 +1918,131 @@ export function getGroceryListWidgetHtml(): string {
       addItemDraft = value || '';
     }
 
+    function publicGroceryListChangeArgs(viewModel, change, options) {
+      var args = {
+        approval: 'explicit_user_approved',
+        change: change,
+      };
+      if (viewModel && viewModel.listId) {
+        args.list_id = viewModel.listId;
+      }
+      if (viewModel && viewModel.version) {
+        args.list_version = viewModel.version;
+      }
+      if (viewModel && viewModel.weekStart) {
+        args.week_start = viewModel.weekStart;
+      }
+      if (options && options.currentnessConfirmed) {
+        args.currentness_confirmed = true;
+      }
+      return args;
+    }
+
+    function isMissingToolError(error) {
+      var text = String((error && (error.message || error.error || error.statusText)) || error || '').toLowerCase();
+      return text.indexOf('unknown tool') >= 0
+        || text.indexOf('tool not found') >= 0
+        || text.indexOf('no such tool') >= 0
+        || text.indexOf('not callable') >= 0
+        || text.indexOf('method not found') >= 0
+        || text.indexOf('not available') >= 0;
+    }
+
+    async function refreshGroceryList(callTool, viewModel) {
+      try {
+        return await callTool('fluent_render_surface', { surface: 'meals_grocery_list' });
+      } catch (error) {
+        if (!isMissingToolError(error)) {
+          throw error;
+        }
+        return callTool('meals_render_grocery_list_v2', { week_start: viewModel && viewModel.weekStart });
+      }
+    }
+
+    async function callGroceryChange(callTool, viewModel, change, options) {
+      try {
+        return await callTool(
+          'fluent_apply_grocery_list_change',
+          publicGroceryListChangeArgs(viewModel, change, options),
+        );
+      } catch (error) {
+        if (!isMissingToolError(error)) {
+          throw error;
+        }
+        throw error;
+      }
+    }
+
+    function groceryStatusFromPlanAction(status) {
+      if (status === 'purchased' || status === 'in_cart') {
+        return 'bought';
+      }
+      if (status === 'have_enough' || status === 'confirmed' || status === 'skipped') {
+        return 'already_have_enough';
+      }
+      if (status === 'dont_have_it' || status === 'needs_purchase' || status === 'have_some_need_to_buy') {
+        return 'needs_purchase';
+      }
+      return status || 'needs_purchase';
+    }
+
+    function publicChangeForStagedItem(stagedItem) {
+      var action = stagedItem && stagedItem.action ? stagedItem.action : null;
+      var item = stagedItem && stagedItem.item ? stagedItem.item : {};
+      if (!action || !action.toolName) {
+        return null;
+      }
+      var args = action.args || {};
+      if (action.toolName === 'fluent_apply_grocery_list_change' && args.change) {
+        return args.change;
+      }
+      if (action.toolName === 'meals_upsert_grocery_plan_action') {
+        if (String(args.action_status || '') === 'substituted') {
+          return {
+            item_key: args.item_key || item.itemKey,
+            kind: 'substitute_plan_item',
+            substitute_display_name: args.substitute_display_name || args.substituteDisplayName || args.display_name,
+          };
+        }
+        return {
+          item_key: args.item_key || item.itemKey,
+          kind: 'mark_plan_item',
+          status: groceryStatusFromPlanAction(String(args.action_status || '')),
+        };
+      }
+      if (action.toolName === 'meals_delete_grocery_plan_action') {
+        return {
+          item_key: args.item_key || item.itemKey,
+          kind: 'mark_plan_item',
+          status: 'needs_purchase',
+        };
+      }
+      if (action.toolName === 'meals_upsert_grocery_intent') {
+        if (args.id || args.intent_id || item.intentId || item.id) {
+          return {
+            display_name: args.display_name || item.displayName,
+            intent_id: args.id || args.intent_id || item.intentId || item.id,
+            kind: 'update_manual_item',
+            status: args.status === 'completed' ? 'completed' : 'pending',
+          };
+        }
+        return {
+          display_name: args.display_name || item.displayName,
+          kind: 'add_item',
+          target_window: args.target_window,
+        };
+      }
+      return null;
+    }
+
+    async function callStagedGroceryAction(callTool, viewModel, stagedItem) {
+      var change = publicChangeForStagedItem(stagedItem);
+      if (change) {
+        return callGroceryChange(callTool, viewModel, change, { currentnessConfirmed: change.kind !== 'add_item' });
+      }
+      return callTool(stagedItem.action.toolName, stagedItem.action.args);
+    }
+
     async function addManualItem(viewModel) {
       if (syncPending) {
         return;
@@ -1633,7 +2050,7 @@ export function getGroceryListWidgetHtml(): string {
 
       var callTool = getCallTool();
       if (!callTool) {
-        syncError = 'This host cannot add a grocery item from the widget yet.';
+        syncError = 'This host cannot call Fluent from the widget yet, so no item was added.';
         render();
         return;
       }
@@ -1652,25 +2069,24 @@ export function getGroceryListWidgetHtml(): string {
       render();
 
       try {
-        var addArgs = {
+        var addedResult = await callGroceryChange(callTool, viewModel, {
           display_name: itemName,
-          status: 'pending',
+          kind: 'add_item',
           target_window: viewModel.weekStart,
-        };
-        var addedResult = await callTool('meals_upsert_grocery_intent', addArgs);
-        var addedRecord = findToolRecord(addedResult);
+        });
+        var addedRecord = findToolRecord(addedResult, itemName);
 
         var localItemKey = normalizeManualItemKey(itemName);
         var localAddAction = {
-          args: {
+          args: publicGroceryListChangeArgs(viewModel, {
             display_name: itemName,
-            id: addedRecord && addedRecord.id ? addedRecord.id : undefined,
+            intent_id: addedRecord ? (addedRecord.id || addedRecord.intentId || addedRecord.intent_id) : undefined,
+            kind: 'update_manual_item',
             status: 'completed',
-            target_window: viewModel.weekStart,
-          },
+          }),
           id: 'mark_bought',
           label: 'Mark bought',
-          toolName: 'meals_upsert_grocery_intent',
+          toolName: 'fluent_apply_grocery_list_change',
         };
         locallyAddedItems[localItemKey] = {
           checked: false,
@@ -1688,12 +2104,19 @@ export function getGroceryListWidgetHtml(): string {
         publishViewModel(viewModel);
         render();
 
-        var refreshed = await callTool('meals_render_grocery_list_v2', { week_start: viewModel.weekStart });
-        applyRenderResult(refreshed);
+        try {
+          var refreshed = await refreshGroceryList(callTool, viewModel);
+          applyRenderResult(refreshed);
+        } catch (refreshError) {
+          syncPending = false;
+          syncSent = true;
+          syncError = 'Item saved. Refresh did not return a new grocery list yet.';
+          render();
+        }
       } catch (error) {
         syncPending = false;
         syncSent = false;
-        syncError = 'Unable to add that grocery item right now. Refresh the list before trying again.';
+        syncError = 'Unable to add that grocery item right now. No change was confirmed by the widget. Host said: ' + visibleToolCallError(error);
         render();
       }
     }
@@ -1708,20 +2131,21 @@ export function getGroceryListWidgetHtml(): string {
     var bridgePending = Object.create(null);
     var bridgeInitialized = false;
 
-    function getBridgeTarget() {
+    function getBridgeTargets() {
+      var targets = [];
       if (window.parent && window.parent !== window) {
-        return window.parent;
+        targets.push(window.parent);
       }
       try {
-        if (window.top && window.top !== window) {
-          return window.top;
+        if (window.top && window.top !== window && targets.indexOf(window.top) === -1) {
+          targets.push(window.top);
         }
       } catch (error) {}
-      return null;
+      return targets;
     }
 
     function isBridgeSource(source) {
-      return source === getBridgeTarget();
+      return getBridgeTargets().indexOf(source) !== -1;
     }
 
     window.addEventListener('message', function (event) {
@@ -1764,8 +2188,8 @@ export function getGroceryListWidgetHtml(): string {
 
     function bridgeRequest(method, params, timeoutMs) {
       return new Promise(function (resolve, reject) {
-        var target = getBridgeTarget();
-        if (!target) {
+        var targets = getBridgeTargets();
+        if (!targets.length) {
           reject(new Error('MCP Apps bridge is not available.'));
           return;
         }
@@ -1779,7 +2203,7 @@ export function getGroceryListWidgetHtml(): string {
           }, timeoutMs || 12000),
         };
         var message = { jsonrpc: '2.0', id: id, method: method, params: params };
-        target.postMessage(message, '*');
+        targets.forEach(function (target) { target.postMessage(message, '*'); });
       });
     }
 
@@ -1787,11 +2211,9 @@ export function getGroceryListWidgetHtml(): string {
       if (method !== 'ui/notifications/initialized' && !bridgeInitialized) {
         return;
       }
-      var target = getBridgeTarget();
-      if (!target) {
-        return;
-      }
-      target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
+      getBridgeTargets().forEach(function (target) {
+        target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
+      });
     }
 
     function connectMcpAppsHost() {
@@ -1799,7 +2221,7 @@ export function getGroceryListWidgetHtml(): string {
         return bridgeReady;
       }
 
-      if (!getBridgeTarget()) {
+      if (!getBridgeTargets().length) {
         bridgeReady = Promise.resolve(null);
         return bridgeReady;
       }
@@ -1829,10 +2251,67 @@ export function getGroceryListWidgetHtml(): string {
       return bridgeRequest('tools/call', { name: name, arguments: args || {} }, 20000);
     }
 
+    function describeToolCallError(error) {
+      var raw = String((error && (error.message || error.error || error.statusText)) || error || '');
+      return raw ? raw.slice(0, 180) : 'unknown error';
+    }
+
+    function visibleToolCallError(error) {
+      var text = describeToolCallError(error);
+      return text
+        .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, 'Bearer [redacted]')
+        .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[redacted-email]')
+        .slice(0, 120);
+    }
+
+    function shouldFallbackAfterBridgeError(error) {
+      var text = describeToolCallError(error).toLowerCase();
+      return isMissingToolError(error)
+        || text.indexOf('timed out') >= 0
+        || text.indexOf('bridge is not available') >= 0;
+    }
+
+    function logToolCallFailure(name, transport, error) {
+      try {
+        console.warn('[Fluent grocery widget] tool call failed', {
+          message: describeToolCallError(error),
+          tool: name,
+          transport: transport,
+        });
+      } catch (logError) {}
+    }
+
     function getCallTool() {
       var openai = getOpenAI();
       var compatibilityCall = typeof openai.callTool === 'function' ? openai.callTool.bind(openai) : null;
-      return compatibilityCall || (getBridgeTarget() ? callToolViaBridge : null);
+      if (getBridgeTargets().length) {
+        return async function callToolBridgeFirst(name, args) {
+          try {
+            return await callToolViaBridge(name, args);
+          } catch (bridgeError) {
+            logToolCallFailure(name, 'mcp-apps-bridge', bridgeError);
+            if (compatibilityCall && shouldFallbackAfterBridgeError(bridgeError)) {
+              try {
+                return await compatibilityCall(name, args);
+              } catch (compatibilityError) {
+                logToolCallFailure(name, 'window.openai.callTool', compatibilityError);
+              }
+            }
+            throw bridgeError;
+          }
+        };
+      }
+      if (compatibilityCall) {
+        return async function callToolCompatibilityOnly(name, args) {
+          try {
+            return await compatibilityCall(name, args);
+          } catch (compatibilityError) {
+            logToolCallFailure(name, 'window.openai.callTool', compatibilityError);
+            throw compatibilityError;
+          }
+        };
+      }
+      return null;
     }
 
     function applyRenderResult(result, options) {
@@ -1847,7 +2326,9 @@ export function getGroceryListWidgetHtml(): string {
       }
 
       publishViewModel(nextViewModel, options);
-      stagedSelections = Object.create(null);
+      if (!options || !options.preserveStagedSelections) {
+        stagedSelections = Object.create(null);
+      }
       syncError = '';
       syncPending = false;
       syncSent = false;
@@ -1872,8 +2353,8 @@ export function getGroceryListWidgetHtml(): string {
       render();
 
       try {
-        var refreshed = await callTool('meals_render_grocery_list_v2', { week_start: viewModel.weekStart });
-        applyRenderResult(refreshed, { clearMissingLocalEdits: true });
+        var refreshed = await refreshGroceryList(callTool, viewModel);
+        applyRenderResult(refreshed, { clearMissingLocalEdits: true, preserveStagedSelections: true });
       } catch (error) {
         syncPending = false;
         syncSent = false;
@@ -1894,17 +2375,41 @@ export function getGroceryListWidgetHtml(): string {
       return String(displayName || '').trim().toLowerCase();
     }
 
-    function findToolRecord(candidate) {
+    function findToolRecord(candidate, expectedDisplayName) {
       if (!candidate || typeof candidate !== 'object') {
         return null;
       }
-      if (candidate.id || candidate.displayName || candidate.display_name || candidate.status) {
+      if (Array.isArray(candidate)) {
+        for (var itemIndex = 0; itemIndex < candidate.length; itemIndex += 1) {
+          var matchedArrayRecord = findToolRecord(candidate[itemIndex], expectedDisplayName);
+          if (matchedArrayRecord) {
+            return matchedArrayRecord;
+          }
+        }
+        return null;
+      }
+      if (candidate.buckets && Array.isArray(candidate.buckets)) {
+        for (var bucketIndex = 0; bucketIndex < candidate.buckets.length; bucketIndex += 1) {
+          var matchedBucketRecord = findToolRecord(candidate.buckets[bucketIndex].items, expectedDisplayName);
+          if (matchedBucketRecord) {
+            return matchedBucketRecord;
+          }
+        }
+      }
+      var candidateDisplayName = candidate.displayName || candidate.display_name;
+      var isGroceryListContainer = candidate.type === 'grocery_list'
+        || candidate.experience === 'grocery_list'
+        || candidate.id === 'current_grocery_list'
+        || candidate.id === 'current-grocery-list';
+      var displayNameMatches = !expectedDisplayName
+        || String(candidateDisplayName || '').trim().toLowerCase() === String(expectedDisplayName).trim().toLowerCase();
+      if (!isGroceryListContainer && displayNameMatches && (candidate.id || candidate.intentId || candidate.intent_id || candidateDisplayName || candidate.status)) {
         return candidate;
       }
-      var keys = ['structuredContent', 'record', 'result', 'data', 'value'];
+      var keys = ['structuredContent', 'record', 'result', 'data', 'value', 'payload', 'readAfterWrite'];
       for (var index = 0; index < keys.length; index += 1) {
         if (candidate[keys[index]]) {
-          var nested = findToolRecord(candidate[keys[index]]);
+          var nested = findToolRecord(candidate[keys[index]], expectedDisplayName);
           if (nested) {
             return nested;
           }
@@ -2030,6 +2535,29 @@ export function getGroceryListWidgetHtml(): string {
       }
 
       var args = action.args || {};
+      if (action.toolName === 'fluent_apply_grocery_list_change') {
+        var change = args.change || {};
+        if (change.kind === 'add_item') {
+          return 'need_to_buy';
+        }
+        if (change.kind === 'update_manual_item') {
+          return change.status === 'completed' ? 'covered' : 'need_to_buy';
+        }
+        if (change.kind === 'substitute_plan_item') {
+          return 'covered';
+        }
+        if (change.kind === 'mark_plan_item') {
+          var publicStatus = String(change.status || '');
+          if (publicStatus === 'needs_purchase' || publicStatus === 'dont_have_it') {
+            return 'need_to_buy';
+          }
+          if (publicStatus === 'bought' || publicStatus === 'already_have_enough' || publicStatus === 'substituted') {
+            return 'covered';
+          }
+        }
+        return null;
+      }
+
       if (action.toolName === 'meals_upsert_grocery_intent') {
         return args.status === 'completed' ? 'covered' : 'need_to_buy';
       }
@@ -2049,6 +2577,28 @@ export function getGroceryListWidgetHtml(): string {
     }
 
     function localSyncActionsForBucket(item, bucketId, sourceAction, weekStart) {
+      if (sourceAction && sourceAction.toolName === 'fluent_apply_grocery_list_change') {
+        var sourceArgs = sourceAction.args || {};
+        var sourceChange = sourceArgs.change || {};
+        var isManual = sourceChange.kind === 'update_manual_item' || sourceChange.kind === 'add_item';
+        if (isManual) {
+          return [{
+            args: publicGroceryListChangeArgs(
+              { listId: sourceArgs.list_id, version: sourceArgs.list_version, weekStart: sourceArgs.week_start || weekStart },
+              {
+                display_name: sourceChange.display_name || item.displayName,
+                intent_id: sourceChange.intent_id || item.intentId || item.id,
+                kind: 'update_manual_item',
+                status: bucketId === 'covered' ? 'pending' : 'completed',
+              },
+            ),
+            id: bucketId === 'covered' ? 'undo' : 'mark_bought',
+            label: bucketId === 'covered' ? 'Undo' : 'Mark bought',
+            toolName: 'fluent_apply_grocery_list_change',
+          }];
+        }
+      }
+
       if (sourceAction && sourceAction.toolName === 'meals_upsert_grocery_intent') {
         var args = Object.assign({}, sourceAction.args || {});
         args.display_name = args.display_name || item.displayName;
@@ -2419,7 +2969,7 @@ export function getGroceryListWidgetHtml(): string {
         try {
           for (var index = 0; index < stagedItems.length; index += 1) {
             var stagedItem = stagedItems[index];
-            await callTool(stagedItem.action.toolName, stagedItem.action.args);
+            await callStagedGroceryAction(callTool, viewModel, stagedItem);
             completedCount += 1;
           }
 
@@ -2429,8 +2979,15 @@ export function getGroceryListWidgetHtml(): string {
         syncSent = true;
         render();
 
-        var refreshed = await callTool('meals_render_grocery_list_v2', { week_start: viewModel.weekStart });
-        applyRenderResult(refreshed);
+        try {
+          var refreshed = await refreshGroceryList(callTool, viewModel);
+          applyRenderResult(refreshed);
+        } catch (refreshError) {
+          syncPending = false;
+          syncSent = true;
+          syncError = 'Changes saved. Refresh did not return a new grocery list yet.';
+          render();
+        }
       } catch (error) {
         syncSent = false;
         syncPending = false;
@@ -2593,6 +3150,36 @@ export function getGroceryListWidgetHtml(): string {
   })();
 </script>`;
 }
+export function getVNextGroceryListWidgetHtml(): string {
+  return getGroceryListWidgetHtml()
+    .replaceAll('var vNextSurface = false;', 'var vNextSurface = true;')
+    .replaceAll(MEALS_GROCERY_LIST_WIDGET_VERSION, FLUENT_VNEXT_GROCERY_LIST_WIDGET_VERSION)
+    .replaceAll(
+      "callTool('meals_render_grocery_list_v2', { week_start: viewModel.weekStart })",
+      "callTool('fluent_render_surface', { surface: 'meals_grocery_list', week_start: viewModel.weekStart })",
+    )
+    .replaceAll(
+      "var addedResult = await callTool('meals_upsert_grocery_intent', addArgs);",
+      [
+        "var addedResult = await callTool('fluent_apply_grocery_list_change', {",
+        "          approval: 'explicit_user_approved',",
+        "          change: {",
+        "            display_name: itemName,",
+        "            kind: 'add_item',",
+        "            target_window: viewModel.weekStart,",
+        "          },",
+        "          list_id: viewModel.listId || undefined,",
+        "          list_version: viewModel.version || undefined,",
+        "          response_mode: 'full',",
+        "          week_start: viewModel.weekStart,",
+        "        });",
+      ].join('\n'),
+    )
+    .replaceAll('meals_delete_grocery_plan_action', 'fluent_apply_grocery_list_change')
+    .replaceAll('meals_upsert_grocery_plan_action', 'fluent_apply_grocery_list_change')
+    .replaceAll('meals_upsert_grocery_intent', 'fluent_apply_grocery_list_change');
+}
+
 export function getGrocerySmokeWidgetHtml(): string {
   return `
 <div class="fluent-grocery-smoke">

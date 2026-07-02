@@ -21,7 +21,7 @@ Public release references:
 - open `GET /health`
 - open `GET /codex-probe`
 - same MCP contract as managed Fluent early access
-- supported minimum contract version: `2026-05-17.fluent-core-v1.84`
+- supported minimum contract version: `2026-06-01.fluent-core-v1.85`
 - local DB and artifacts stored under `~/.fluent/` by default
 - no OAuth, no `/authorize`, no `/token`
 - direct runtime support is documented for Node.js `22.x`
@@ -33,10 +33,42 @@ This guide ships in both the canonical source repo and the generated public repo
 
 ## Local Laptop Usage
 
+Use Node.js 22.x for the direct runtime. With `nvm`, run:
+
+```bash
+nvm install 22
+nvm use 22
+node --version
+```
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Optional but recommended for evaluation: isolate Fluent state from your real home directory before bootstrapping a token. `FLUENT_OSS_ROOT` is honored by `oss:token:*`, `oss:seed:demo`, `oss:start`, `scaffold:mcp`, and `verify:oss-parity`.
+
+```bash
+export FLUENT_OSS_ROOT="$(pwd)/tmp/fluent-oss-demo-root"
+```
+
+PowerShell:
+
+```powershell
+$env:FLUENT_OSS_ROOT = Join-Path (Get-Location) 'tmp\fluent-oss-demo-root'
+```
+
 Bootstrap a token:
 
 ```bash
 npm run oss:token:bootstrap
+```
+
+Seed the OSS demo profile. This command is safe to rerun: stable style, recipe, meal-plan, inventory, and budget records are updated; budget spend is only topped up to the fixture target.
+
+```bash
+npm run oss:seed:demo
 ```
 
 Start the server:
@@ -49,6 +81,13 @@ Print the token:
 
 ```bash
 npm run oss:token:print
+```
+
+Prove `/mcp` answers with the bearer token and seeded data:
+
+```bash
+export TOKEN="$(npm run -s oss:token:print | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).token))')"
+node --input-type=module -e "import { Client } from '@modelcontextprotocol/sdk/client/index.js'; import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'; const transport = new StreamableHTTPClientTransport(new URL('http://127.0.0.1:8788/mcp'), { requestInit: { headers: { Authorization: 'Bearer ' + process.env.TOKEN } } }); const client = new Client({ name: 'fluent-oss-proof', version: '1.0.0' }, { capabilities: {} }); await client.connect(transport); const result = await client.callTool({ name: 'fluent_list_items', arguments: { domain: 'style', item_type: 'style_item', limit: 5 } }); console.log(JSON.stringify(result.structuredContent ?? result.content, null, 2)); await transport.close();"
 ```
 
 Generate a Codex config:
@@ -148,6 +187,10 @@ Token state lives under:
 
 - `~/.fluent/auth/oss-access-token.json`
 
+If `FLUENT_OSS_ROOT` is set, token state instead lives under:
+
+- `$FLUENT_OSS_ROOT/auth/oss-access-token.json`
+
 Preferred auth environment variable:
 
 - `FLUENT_OSS_TOKEN`
@@ -156,6 +199,10 @@ Bridge compatibility remains available for:
 
 - `FLUENT_LOCAL_TOKEN`
 - `~/.fluent/auth/local-access-token.json`
+
+Preferred storage-root environment variable:
+
+- `FLUENT_OSS_ROOT`
 
 ## Snapshot Import / Export
 
@@ -221,6 +268,8 @@ Start OSS, then run:
 ```bash
 npm run verify:oss-parity -- --base-url "http://127.0.0.1:8788"
 ```
+
+For isolated evaluation, keep `FLUENT_OSS_ROOT` exported in the same shell, or pass `--root ./tmp/fluent-oss-demo-root`. The verifier also honors `FLUENT_OSS_BASE_URL` if npm flag forwarding is unavailable in your shell.
 
 This verifies:
 

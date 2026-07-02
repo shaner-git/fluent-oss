@@ -15,6 +15,28 @@ import {
 } from './contract';
 import { isStylePurchaseEvalReady, normalizeStyleProfile } from './domains/style/helpers';
 import { getFluentIdentityContext } from './fluent-identity';
+import {
+  type ConsentEventLite,
+  type ConsentVisibility,
+  type FactAnnotation,
+  type PcDomain,
+  type PcHost,
+  type PersonFact,
+  type PersonFactKind,
+  type PersonFactRejectAck,
+  type PersonFactSource,
+  type PersonFactStatus,
+  type PersonFactWriteAck,
+  PERSON_FACT_SCHEMA_VERSION,
+  consentScopeChain,
+  defaultVisibilityForKind,
+  pathForFact,
+  sectionForKind,
+  validateConsentScopeKey,
+  validateConsentVisibility,
+  validatePersonFactValue,
+  visibleTo,
+} from './personal-context';
 import type { FluentDatabase } from './storage';
 import {
   calculateLapsedRetentionDeadline,
@@ -139,6 +161,7 @@ export interface FluentToolDiscoveryGroup {
   guidanceResourceUris: string[];
   toolPrefixes: string[];
   starterReadTools: string[];
+  detailReadTools?: string[];
   starterWriteTools: string[];
   whenToUse: string;
   domainReady: boolean;
@@ -155,6 +178,23 @@ export interface FluentToolDirectory {
 export type FluentHostFamily = 'chatgpt_app' | 'claude' | 'openclaw' | 'codex' | 'generic_mcp' | 'unknown';
 export type FluentIntentKind = 'read' | 'write' | 'render' | 'plan' | 'onboard' | 'unknown';
 export type FluentNextActionDomain = 'core' | 'health' | 'meals' | 'style' | 'unknown';
+
+export function resolveHostFamily(): FluentHostFamily {
+  const clientName = getFluentAuthProps().oauthClientName?.trim().toLowerCase() ?? '';
+  if (clientName.includes('claude')) {
+    return 'claude';
+  }
+  if (clientName.includes('chatgpt') || clientName.includes('openai')) {
+    return 'chatgpt_app';
+  }
+  if (clientName.includes('openclaw')) {
+    return 'openclaw';
+  }
+  if (clientName.includes('codex')) {
+    return 'codex';
+  }
+  return 'unknown';
+}
 
 export interface FluentNextActionsInput {
   domainHint?: FluentNextActionDomain | null;
@@ -783,6 +823,288 @@ export class FluentCoreService {
     }
   }
 
+  // ---- Personal-Context Schema v1 (D18): canonical cross-domain person facts ----
+
+  // THE consent chokepoint. No unfiltered read exists: callers MUST pass consumerDomain + host,
+  // and the result is filtered server-side via visibleTo (incl. the host-boundary drop).
+  async listPersonFacts(input: { consumerDomain: PcDomain; host: PcHost }): Promise<PersonFact[]> {
+    const [factResult, consentResult] = await Promise.all([
+      this.db
+        .prepare(
+          `SELECT ${PERSON_FACT_COLUMNS}
+             FROM person_facts
+            WHERE tenant_id = ? AND profile_id = ? AND status IN ('confirmed', 'system')`,
+        )
+        .bind(this.tenantId, this.profileId)
+        .all<PersonFactRow>(),
+      this.db
+        .prepare(
+          `SELECT scope_key, visibility_json, occurred_at
+             FROM person_consent_events
+            WHERE tenant_id = ? AND profile_id = ?
+            ORDER BY occurred_at DESC`,
+        )
+        .bind(this.tenantId, this.profileId)
+        .all<{ scope_key: string; visibility_json: string; occurred_at: string }>(),
+    ]);
+
+    // Defensive parse: a malformed stored consent row is skipped, never crashes the read.
+    const consent: ConsentEventLite[] = (consentResult.results ?? []).flatMap((row) => {
+      try {
+        return [
+          {
+            scope_key: validateConsentScopeKey(row.scope_key),
+            visibility: validateConsentVisibility(safeParse(row.visibility_json)),
+            occurred_at: row.occurred_at,
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
+    return (factResult.results ?? [])
+      .map((row) => personFactFromRow(row))
+      .filter((fact) => {
+        const chain = consentScopeChain(fact);
+        return visibleTo(
+          fact,
+          input.consumerDomain,
+          input.host,
+          consent.filter((event) => chain.includes(event.scope_key)),
+        );
+      });
+  }
+
+  private async getPersonFactByPath(path: string): Promise<PersonFact | null> {
+    const row = await this.db
+      .prepare(`SELECT ${PERSON_FACT_COLUMNS} FROM person_facts WHERE tenant_id = ? AND profile_id = ? AND path = ?`)
+      .bind(this.tenantId, this.profileId, path)
+      .first<PersonFactRow>();
+    return row ? personFactFromRow(row) : null;
+  }
+
+  // D16-for-data: a write with status 'inferred' may ONLY append to annotations[]; it can NEVER set,
+  // mutate, or supersede a confirmed `value`. Confirmed/system writes upsert the canonical row.
+  async upsertPersonFact(
+    input: {
+      kind: PersonFactKind;
+      value: unknown;
+      status: PersonFactStatus;
+      source: PersonFactSource;
+      visibility?: ConsentVisibility;
+      note?: string | null;
+      questionId?: string | null;
+      staleAfter?: string | null;
+      confidence?: number;
+    },
+    provenance: MutationProvenance,
+  ): Promise<PersonFactWriteAck> {
+    const value = validatePersonFactValue(input.kind, input.value);
+    const path = pathForFact(input.kind, value);
+    const section = sectionForKind(input.kind);
+    const existing = await this.getPersonFactByPath(path);
+    const now = new Date().toISOString();
+
+    if (input.status === 'inferred') {
+      const annotation: FactAnnotation = {
+        observed_value: value,
+        status: 'inferred',
+        source: input.source,
+        confidence: clampConfidenceValue(input.confidence ?? 0.5),
+        observed_at: now,
+        promotable: true,
+      };
+      if (existing && existing.status !== 'inferred') {
+        // Confirmed/system canonical row exists: append the inference, never touch `value`.
+        const annotations = [...existing.annotations, annotation].slice(-12);
+        await this.db
+          .prepare(
+            `UPDATE person_facts SET annotations_json = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE tenant_id = ? AND profile_id = ? AND path = ?`,
+          )
+          .bind(stringifyJson(annotations), this.tenantId, this.profileId, path)
+          .run();
+        const after: PersonFact = { ...existing, annotations };
+        await this.recordCoreEvent({
+          after,
+          before: existing,
+          entityId: existing.fact_id,
+          entityType: 'person_fact',
+          eventType: 'person_fact.annotated',
+          patch: { annotation },
+          provenance,
+        });
+        // Return only an ack — never the existing confirmed value/visibility (a write must not become
+        // an unfiltered read). Host-facing read-after-write goes through listPersonFacts.
+        return { factId: existing.fact_id, path, status: existing.status };
+      }
+      // No canonical (confirmed/system) row yet: store an inferred row (never surfaces — visibleTo drops it).
+      const inferred: PersonFact = {
+        fact_id: existing?.fact_id ?? `pf_${crypto.randomUUID()}`,
+        path,
+        section,
+        kind: input.kind,
+        value,
+        status: 'inferred',
+        confidence: clampConfidenceValue(input.confidence ?? 0.5),
+        source: input.source,
+        question_id: input.questionId ?? null,
+        note: input.note ?? null,
+        visibility: input.visibility ?? defaultVisibilityForKind(input.kind),
+        annotations: [...(existing?.annotations ?? []), annotation].slice(-12),
+        supersedes: null,
+        observed_at: existing?.observed_at ?? now,
+        confirmed_at: null,
+        stale_after: input.staleAfter ?? null,
+        schema_version: PERSON_FACT_SCHEMA_VERSION,
+      };
+      await this.writePersonFactRow(inferred);
+      await this.recordCoreEvent({
+        after: inferred,
+        before: existing,
+        entityId: inferred.fact_id,
+        entityType: 'person_fact',
+        eventType: 'person_fact.inferred',
+        patch: { annotation },
+        provenance,
+      });
+      return { factId: inferred.fact_id, path, status: inferred.status };
+    }
+
+    // confirmed | system: upsert the canonical row ("confirmed wins" via the per-path primary key).
+    // Supersedes is computed per path; value-keyed kinds corrected to a different value land on
+    // a new path, leaving old-value removal to an explicit reject.
+    const fact: PersonFact = {
+      fact_id: `pf_${crypto.randomUUID()}`,
+      path,
+      section,
+      kind: input.kind,
+      value,
+      status: input.status,
+      confidence: 1,
+      source: input.source,
+      question_id: input.questionId ?? null,
+      note: input.note ?? null,
+      visibility: input.visibility ?? existing?.visibility ?? defaultVisibilityForKind(input.kind),
+      annotations: existing?.annotations ?? [],
+      supersedes: existing?.fact_id ?? null,
+      observed_at: existing?.observed_at ?? now,
+      confirmed_at: input.status === 'confirmed' ? now : (existing?.confirmed_at ?? null),
+      stale_after: input.staleAfter ?? null,
+      schema_version: PERSON_FACT_SCHEMA_VERSION,
+    };
+    await this.writePersonFactRow(fact);
+    await this.recordCoreEvent({
+      after: fact,
+      before: existing,
+      entityId: fact.fact_id,
+      entityType: 'person_fact',
+      eventType: existing ? 'profile.fact_superseded' : 'person_fact.confirmed',
+      patch: { value, status: input.status },
+      provenance,
+    });
+    return { factId: fact.fact_id, path, status: fact.status };
+  }
+
+  async rejectPersonFact(
+    input: { kind: PersonFactKind; value: unknown },
+    provenance: MutationProvenance,
+  ): Promise<PersonFactRejectAck> {
+    const value = validatePersonFactValue(input.kind, input.value);
+    const path = pathForFact(input.kind, value);
+    const existing = await this.getPersonFactByPath(path);
+    if (!existing) {
+      return { path, removed: false };
+    }
+
+    await this.db
+      .prepare('DELETE FROM person_facts WHERE tenant_id = ? AND profile_id = ? AND path = ?')
+      .bind(this.tenantId, this.profileId, path)
+      .run();
+    await this.recordCoreEvent({
+      after: null,
+      before: existing,
+      entityId: existing.fact_id,
+      entityType: 'person_fact',
+      eventType: 'profile.fact_rejected',
+      patch: { kind: input.kind, path, value },
+      provenance,
+    });
+    return { path, removed: true };
+  }
+
+  async appendPersonConsentEvent(
+    input: { scopeKey: string; visibility: ConsentVisibility },
+    provenance: MutationProvenance,
+  ): Promise<void> {
+    const scopeKey = validateConsentScopeKey(input.scopeKey);
+    const visibility = validateConsentVisibility(input.visibility);
+    await this.db
+      .prepare(
+        `INSERT INTO person_consent_events (tenant_id, profile_id, event_id, scope_key, visibility_json, source_json, occurred_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        this.tenantId,
+        this.profileId,
+        `pce_${crypto.randomUUID()}`,
+        scopeKey,
+        stringifyJson(visibility),
+        stringifyJson({ sourceAgent: provenance.sourceAgent, sourceType: provenance.sourceType }),
+        new Date().toISOString(),
+      )
+      .run();
+    await this.recordCoreEvent({
+      after: { scopeKey, visibility },
+      before: null,
+      entityId: scopeKey,
+      entityType: 'person_consent',
+      eventType: 'person_consent.set',
+      provenance,
+    });
+  }
+
+  private async writePersonFactRow(fact: PersonFact): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO person_facts (
+           tenant_id, profile_id, fact_id, path, section, kind, value_json, status, confidence,
+           source_json, visibility_json, annotations_json, supersedes, question_id, note,
+           observed_at, confirmed_at, stale_after, schema_version, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(tenant_id, profile_id, path) DO UPDATE SET
+           fact_id = excluded.fact_id, section = excluded.section, kind = excluded.kind,
+           value_json = excluded.value_json, status = excluded.status, confidence = excluded.confidence,
+           source_json = excluded.source_json, visibility_json = excluded.visibility_json,
+           annotations_json = excluded.annotations_json, supersedes = excluded.supersedes,
+           question_id = excluded.question_id, note = excluded.note, observed_at = excluded.observed_at,
+           confirmed_at = excluded.confirmed_at, stale_after = excluded.stale_after,
+           schema_version = excluded.schema_version, updated_at = CURRENT_TIMESTAMP`,
+      )
+      .bind(
+        this.tenantId,
+        this.profileId,
+        fact.fact_id,
+        fact.path,
+        fact.section,
+        fact.kind,
+        stringifyJson(fact.value),
+        fact.status,
+        fact.confidence,
+        stringifyJson(fact.source),
+        stringifyJson(fact.visibility),
+        stringifyJson(fact.annotations),
+        fact.supersedes,
+        fact.question_id,
+        fact.note,
+        fact.observed_at,
+        fact.confirmed_at,
+        fact.stale_after,
+        fact.schema_version,
+      )
+      .run();
+  }
+
   private async recordCoreEvent(input: {
     entityType: string;
     entityId: string | null;
@@ -818,6 +1140,56 @@ export class FluentCoreService {
       )
       .run();
   }
+}
+
+const PERSON_FACT_COLUMNS =
+  `fact_id, path, section, kind, value_json, status, confidence, source_json, visibility_json, ` +
+  `annotations_json, supersedes, question_id, note, observed_at, confirmed_at, stale_after, schema_version`;
+
+interface PersonFactRow {
+  fact_id: string;
+  path: string;
+  section: string;
+  kind: string;
+  value_json: string;
+  status: string;
+  confidence: number;
+  source_json: string;
+  visibility_json: string;
+  annotations_json: string;
+  supersedes: string | null;
+  question_id: string | null;
+  note: string | null;
+  observed_at: string;
+  confirmed_at: string | null;
+  stale_after: string | null;
+  schema_version: number;
+}
+
+function personFactFromRow(row: PersonFactRow): PersonFact {
+  return {
+    fact_id: row.fact_id,
+    path: row.path,
+    section: row.section as PersonFact['section'],
+    kind: row.kind as PersonFactKind,
+    value: safeParse(row.value_json) as PersonFact['value'],
+    status: row.status as PersonFactStatus,
+    confidence: row.confidence,
+    source: safeParse(row.source_json) as PersonFactSource,
+    question_id: row.question_id,
+    note: row.note,
+    visibility: safeParse(row.visibility_json) as ConsentVisibility,
+    annotations: (safeParse(row.annotations_json) as FactAnnotation[] | null) ?? [],
+    supersedes: row.supersedes,
+    observed_at: row.observed_at,
+    confirmed_at: row.confirmed_at,
+    stale_after: row.stale_after,
+    schema_version: row.schema_version,
+  };
+}
+
+function clampConfidenceValue(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.5;
 }
 
 function normalizeNullableText(value: string | null | undefined): string | null {
@@ -925,7 +1297,8 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
   return {
     canonicalRegistry: 'mcp_tools_list',
     guidanceResources: [...FLUENT_GUIDANCE_RESOURCE_URIS],
-    note: 'Guidance only. MCP tools/list and contract.tools remain the authoritative full tool registry.',
+    note:
+      'Guidance only. MCP tools/list is authoritative for the connected runtime profile. Hosted public /mcp exposes the curated product-safe vNext assistant profile, not the legacy full contract or a developer escape hatch.',
     groups: [
       {
         id: 'core',
@@ -954,8 +1327,16 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         label: 'Meals Planning',
         domainId: 'meals',
         guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/meals-planning'],
-        toolPrefixes: ['meals_'],
-        starterReadTools: ['meals_get_onboarding_calibration', 'meals_get_preferences', 'meals_get_plan', 'meals_list_plan_history'],
+        toolPrefixes: ['fluent_', 'meals_'],
+        starterReadTools: ['fluent_get_context'],
+        detailReadTools: [
+          'meals_get_onboarding_calibration',
+          'meals_get_plan',
+          'meals_list_plan_history',
+          'meals_get_preferences',
+          'meals_get_inventory_summary',
+          'meals_list_recipes',
+        ],
         starterWriteTools: [
           'meals_record_calibration_response',
           'meals_generate_plan',
@@ -963,7 +1344,7 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
           'meals_generate_grocery_plan',
         ],
         whenToUse:
-          'Weekly planning, plan revision, setup/calibration, inferred food preference confirmation, or grocery-plan generation from an approved week. Start setup and confidence-sensitive planning from meals_get_onboarding_calibration.',
+          'Weekly planning, plan revision, setup/calibration, inferred food preference confirmation, or grocery-plan generation from an approved week. Start broad planning/currentness/"what Fluent knows" turns from fluent_get_context(domain="meals", intent="planning"); use meals_get_onboarding_calibration only for explicit setup/calibration detail or when vNext context is unavailable.',
         domainReady: isReady('meals'),
       },
       {
@@ -1000,7 +1381,13 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         id: 'style',
         label: 'Style',
         domainId: 'style',
-        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/style-purchase-analysis'],
+        guidanceResourceUris: [
+          'fluent://guidance/routing',
+          'fluent://guidance/host-capabilities',
+          'fluent://guidance/style-purchase-analysis',
+          'fluent://guidance/style-shopping',
+          'fluent://guidance/style-enrichment',
+        ],
         toolPrefixes: ['style_'],
         starterReadTools: [
           'style_get_onboarding_calibration',
@@ -1224,12 +1611,13 @@ function readyDomainActions(input: {
     return [
       {
         kind: 'read',
-        reason: 'Start weekly planning from preferences, current plan, and recent plan history.',
-        tool: 'meals_get_preferences',
+        reason:
+          'Start broad Meals planning from the vNext context packet so confirmed facts, inferred signals, stale/missing currentness, evidence gaps, and write boundaries stay together.',
+        tool: 'fluent_get_context',
       },
       {
         kind: 'read',
-        reason: 'Read the current or target week plan before generating or revising.',
+        reason: 'Use only if the user asks for current or target-week plan detail beyond the vNext context packet.',
         tool: 'meals_get_plan',
       },
       {
@@ -1394,7 +1782,13 @@ function guidanceForDomain(domain: FluentNextActionDomain): string[] {
         'fluent://guidance/meals-shopping',
       ];
     case 'style':
-      return ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/style-purchase-analysis'];
+      return [
+        'fluent://guidance/routing',
+        'fluent://guidance/host-capabilities',
+        'fluent://guidance/style-purchase-analysis',
+        'fluent://guidance/style-shopping',
+        'fluent://guidance/style-enrichment',
+      ];
     case 'core':
     case 'unknown':
       return ['fluent://guidance/routing', 'fluent://guidance/host-capabilities'];
