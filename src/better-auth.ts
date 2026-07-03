@@ -136,8 +136,18 @@ export async function maybeHandleBetterAuthRequest(
     return handleBetterAuthApiRequest(request, env);
   }
 
-  if (request.method === 'GET' && url.pathname === '/sign-in') {
-    return handleSignInPage(request, env);
+  if (url.pathname === '/sign-in') {
+    if (request.method === 'HEAD') {
+      return new Response(null, {
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+        },
+        status: 200,
+      });
+    }
+    if (request.method === 'GET') {
+      return handleSignInPage(request, env);
+    }
   }
 
   if (request.method === 'GET' && url.pathname === '/consent') {
