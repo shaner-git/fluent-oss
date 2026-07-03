@@ -1,4 +1,4 @@
-import type { MutationProvenance } from './auth';
+import { getFluentAuthProps, type MutationProvenance } from './auth';
 import { hasDietaryNegationOrHedgeCue, recognizeDietaryPattern, type DietaryPattern } from './domains/meals/dietary-patterns';
 import type { BudgetCategory } from './domains/budgets/service';
 import { STYLE_ITEM_FIT_FIELDS, type StyleDuplicateCandidate } from './domains/style/service';
@@ -15,6 +15,7 @@ import type {
   PersonFactWriteAck,
 } from './personal-context';
 import type { FluentVNextDomain } from './vnext-contract';
+import { enforcePublicWriteRateLimit, type FluentRateLimitBinding } from './rate-limits';
 import {
   getFluentVNextCurrentGroceryListItem,
   getFluentVNextItem,
@@ -56,6 +57,7 @@ type FluentStyleImageType = 'primary' | 'alternate' | 'fit';
 export type FluentVNextWriteStatus = 'applied' | 'not_implemented';
 
 export interface FluentVNextWriteServices extends FluentVNextReadServices {
+  publicWriteRateLimiter?: FluentRateLimitBinding;
   core: FluentVNextReadServices['core'] & {
     appendPersonConsentEvent: (
       input: { scopeKey: string; visibility: ConsentVisibility },
@@ -278,7 +280,7 @@ export async function saveFluentVNextRecipe(
     recipe: unknown;
   },
 ): Promise<FluentVNextWriteAck> {
-  requireExplicitRecipeWriteApproval(input.approval);
+  await requireExplicitRecipeWriteApproval(services, input.approval);
   if (!services.meals?.createRecipe) {
     return notImplementedAck('meals', 'recipe_save', input.recipe, {
       id: stringField(input.recipe, 'id'),
@@ -307,7 +309,7 @@ export async function updateFluentVNextRecipePatch(
     recipeId: string;
   },
 ): Promise<FluentVNextWriteAck> {
-  requireExplicitRecipeWriteApproval(input.approval);
+  await requireExplicitRecipeWriteApproval(services, input.approval);
   if (!input.recipeId) {
     throw new Error('fluent_update_recipe_patch requires recipe_id.');
   }
@@ -343,7 +345,7 @@ export async function recordFluentVNextRecipeFeedback(
     recipeId: string;
   },
 ): Promise<FluentVNextWriteAck> {
-  requireExplicitRecipeWriteApproval(input.approval);
+  await requireExplicitRecipeWriteApproval(services, input.approval);
   if (!input.recipeId) {
     throw new Error('fluent_record_recipe_feedback requires recipe_id.');
   }
@@ -391,7 +393,7 @@ export async function applyFluentVNextGroceryListChange(
     weekStart?: string | null;
   },
 ): Promise<FluentVNextWriteAck> {
-  requireExplicitRecipeWriteApproval(input.approval);
+  await requireExplicitRecipeWriteApproval(services, input.approval);
   const change = asRecord(input.change);
   const kind = stringField(change, 'kind');
   if (!kind) {
@@ -562,6 +564,7 @@ export async function applyFluentVNextGroceryListChange(
 export async function applyFluentVNextGroceryShoppingResult(
   services: FluentVNextWriteServices,
   input: {
+    approval: FluentVNextRecipeWriteApproval;
     boughtItems?: Array<{ itemKey: string; status?: 'bought' | 'skipped' }>;
     currentnessConfirmed?: boolean;
     listId?: string | null;
@@ -572,6 +575,7 @@ export async function applyFluentVNextGroceryShoppingResult(
     weekStart?: string | null;
   },
 ): Promise<FluentVNextWriteAck> {
+  await requireExplicitRecipeWriteApproval(services, input.approval);
   const hasExplicit = Array.isArray(input.boughtItems) && input.boughtItems.length > 0;
   if (!hasExplicit && input.markAllToBuyBought !== true) {
     throw new Error(
@@ -644,7 +648,7 @@ export async function saveFluentVNextMealPlan(
     provenance: MutationProvenance;
   },
 ): Promise<FluentVNextWriteAck> {
-  requireExplicitRecipeWriteApproval(input.approval);
+  await requireExplicitRecipeWriteApproval(services, input.approval);
   const plan = asRecord(input.plan);
   const weekStart = stringField(plan, 'week_start') ?? stringField(plan, 'weekStart');
   if (!weekStart) {
@@ -695,6 +699,7 @@ export async function updateFluentVNextSharedProfilePatch(
     provenance: MutationProvenance;
   },
 ): Promise<FluentVNextWriteAck> {
+  await enforcePublicWriteRateLimit(services.publicWriteRateLimiter, getFluentAuthProps());
   const host = input.host ?? 'unknown';
   const rawPatch = asRecord(input.patch);
   const publicFactPatch = publicSharedProfileFactPatch(rawPatch);
@@ -795,10 +800,14 @@ export async function updateFluentVNextSharedProfilePatch(
   return notImplementedAck(input.domain, 'shared_profile_patch', input.patch);
 }
 
-function requireExplicitRecipeWriteApproval(approval: unknown): asserts approval is FluentVNextRecipeWriteApproval {
+async function requireExplicitRecipeWriteApproval(
+  services: Pick<FluentVNextWriteServices, 'publicWriteRateLimiter'>,
+  approval: unknown,
+): Promise<void> {
   if (approval !== 'explicit_user_approved') {
     throw new Error('Recipe writes require approval="explicit_user_approved".');
   }
+  await enforcePublicWriteRateLimit(services.publicWriteRateLimiter, getFluentAuthProps());
 }
 
 function budgetDomain(category: BudgetCategory): FluentVNextDomain {

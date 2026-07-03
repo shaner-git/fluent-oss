@@ -1,5 +1,6 @@
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import type { HostedEmailBinding } from './hosted-email';
+import type { FluentRateLimitBinding } from './rate-limits';
 import type { FluentBlobStore, FluentDatabase } from './storage';
 import { wrapCloudflareBlobStore, wrapCloudflareDatabase } from './storage';
 
@@ -15,6 +16,7 @@ export interface CoreRuntimeBindings {
   imageDeliverySecret?: string;
   localArtifactsDir?: string;
   publicBaseUrl?: string;
+  publicWriteRateLimiter?: FluentRateLimitBinding;
   storageBackend: FluentStorageBackend;
 }
 
@@ -26,6 +28,8 @@ export interface CloudRuntimeEnv {
   PURCHASE_BROWSER: Fetcher;
   PURCHASE_RUN_STATE: DurableObjectNamespace;
   PURCHASE_WORKFLOW: Workflow<import('./cloud/purchase/types').PurchaseRunCreateInput>;
+  FLUENT_AUTH_RATE_LIMITER?: FluentRateLimitBinding;
+  FLUENT_PUBLIC_WRITE_RATE_LIMITER?: FluentRateLimitBinding;
   IMAGE_DELIVERY_SECRET?: string;
   PUBLIC_BASE_URL?: string;
   PURCHASE_RUNNER_INTERNAL_TOKEN?: string;
@@ -107,6 +111,7 @@ export function coreBindingsFromCloudEnv(env: CloudRuntimeEnv): CoreRuntimeBindi
     deploymentTrack: 'cloud',
     imageDeliverySecret: env.IMAGE_DELIVERY_SECRET ?? env.COOKIE_ENCRYPTION_KEY,
     publicBaseUrl: env.PUBLIC_BASE_URL,
+    publicWriteRateLimiter: env.FLUENT_PUBLIC_WRITE_RATE_LIMITER,
     storageBackend: 'd1-r2',
   };
 }

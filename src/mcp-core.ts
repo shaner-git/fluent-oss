@@ -8,6 +8,7 @@ import {
   FLUENT_MEALS_WRITE_SCOPE,
   FLUENT_STYLE_READ_SCOPE,
   FLUENT_STYLE_WRITE_SCOPE,
+  getFluentAuthProps,
   requireAnyScope,
   requireScopes,
 } from './auth';
@@ -52,6 +53,7 @@ import { getFluentGuidanceDocument } from './fluent-guidance';
 import { FluentCoreService, resolveHostFamily, type FluentAccountStatus } from './fluent-core';
 import { iconFor, jsonResource, provenanceInputSchema, readViewSchema, toolResult, writeResponseModeSchema } from './mcp-shared';
 import { createFetchTimeoutSignal, fetchStyleVisualBundleImage, STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES } from './mcp-style';
+import { enforcePublicWriteRateLimit, type FluentRateLimitBinding } from './rate-limits';
 import {
   getFluentVNextContext,
   getFluentVNextItem,
@@ -900,10 +902,15 @@ function buildStyleClosetMutationProvenance(
   } as Parameters<typeof buildMutationProvenance>[1]);
 }
 
-function requireExplicitPublicWriteApproval(approval: unknown, toolName: string): void {
+async function requireExplicitPublicWriteApproval(
+  approval: unknown,
+  toolName: string,
+  publicWriteRateLimiter?: FluentRateLimitBinding,
+): Promise<void> {
   if (approval !== 'explicit_user_approved') {
     throw new Error(`${toolName} requires approval="explicit_user_approved".`);
   }
+  await enforcePublicWriteRateLimit(publicWriteRateLimiter, getFluentAuthProps());
 }
 
 function buildStyleItemProfileRefreshFieldEvidence(
@@ -1001,6 +1008,7 @@ export function registerCoreMcpSurface(
   style: StyleService,
   budgets: BudgetsService,
   origin: string,
+  options: { publicWriteRateLimiter?: FluentRateLimitBinding } = {},
 ) {
   const homeWidgetMeta = buildFluentHomeWidgetMeta(origin);
   const budgetsEnvelopeSetupWidgetMeta = buildBudgetsEnvelopeSetupWidgetMeta(origin);
@@ -1261,7 +1269,9 @@ export function registerCoreMcpSurface(
   );
 
   const vNextReadServices = buildFluentVNextReadServices(fluentCore, meals, style, budgets);
-  const vNextWriteServices = buildFluentVNextWriteServices(fluentCore, meals, style, budgets);
+  const vNextWriteServices = buildFluentVNextWriteServices(fluentCore, meals, style, budgets, {
+    publicWriteRateLimiter: options.publicWriteRateLimiter,
+  });
 
   server.registerTool(
     'fluent_get_shared_profile',
@@ -1527,7 +1537,11 @@ export function registerCoreMcpSurface(
       _meta: { 'openai/widgetAccessible': true },
     }),
     async (args) => {
-      requireExplicitPublicWriteApproval(args.approval, 'fluent_set_budget_envelope');
+      await requireExplicitPublicWriteApproval(
+        args.approval,
+        'fluent_set_budget_envelope',
+        options.publicWriteRateLimiter,
+      );
       const authProps = requireBudgetWriteScope(args.category);
       return vNextToolResult(
         await setFluentBudgetEnvelope(vNextWriteServices, {
@@ -1558,7 +1572,7 @@ export function registerCoreMcpSurface(
       annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     }),
     async (args) => {
-      requireExplicitPublicWriteApproval(args.approval, 'fluent_log_budget_spend');
+      await requireExplicitPublicWriteApproval(args.approval, 'fluent_log_budget_spend', options.publicWriteRateLimiter);
       const authProps = requireBudgetWriteScope(args.category);
       return vNextToolResult(
         await logFluentBudgetSpend(vNextWriteServices, {
@@ -1731,6 +1745,7 @@ export function registerCoreMcpSurface(
       description:
         'Reconcile a completed shopping trip: in one explicit user-approved action, mark the current Meals grocery list bought items purchased (plan items and manual intents) and refresh inventory presence, returning read-after-write proof. Provide bought_items OR mark_all_to_buy_bought. This does not browse retailers, mutate carts, place orders, invent new items, or infer quantities.',
       inputSchema: {
+        approval: fluentVNextRecipeWriteApprovalSchema,
         bought_items: z
           .array(
             z.object({
@@ -1772,6 +1787,7 @@ export function registerCoreMcpSurface(
       return vNextToolResult(
         await applyFluentVNextGroceryShoppingResult(vNextWriteServices, {
           boughtItems: args.bought_items?.map((entry) => ({ itemKey: entry.item_key, status: entry.status })),
+          approval: args.approval,
           currentnessConfirmed: args.currentness_confirmed,
           listId: args.list_id,
           listVersion: args.list_version,
@@ -1807,7 +1823,11 @@ export function registerCoreMcpSurface(
       },
     }),
     async (args) => {
-      requireExplicitPublicWriteApproval(args.approval, 'fluent_update_style_item_patch');
+      await requireExplicitPublicWriteApproval(
+        args.approval,
+        'fluent_update_style_item_patch',
+        options.publicWriteRateLimiter,
+      );
       const authProps = requireStyleClosetWriteScope();
       const ack = await updateFluentStyleItemPatch(vNextWriteServices, {
         itemId: args.item_id,
@@ -1863,7 +1883,7 @@ export function registerCoreMcpSurface(
       },
     }),
     async (args) => {
-      requireExplicitPublicWriteApproval(args.approval, 'fluent_create_style_item');
+      await requireExplicitPublicWriteApproval(args.approval, 'fluent_create_style_item', options.publicWriteRateLimiter);
       const authProps = requireStyleClosetWriteScope();
       const profile = stripStyleItemFitFields((args.profile ?? {}) as Record<string, unknown>);
       const ack = await createFluentStyleItem(vNextWriteServices, {
@@ -2096,7 +2116,11 @@ export function registerCoreMcpSurface(
       },
     }),
     async (args) => {
-      requireExplicitPublicWriteApproval(args.approval, 'fluent_refresh_style_item_profile');
+      await requireExplicitPublicWriteApproval(
+        args.approval,
+        'fluent_refresh_style_item_profile',
+        options.publicWriteRateLimiter,
+      );
       const authProps = requireStyleClosetWriteScope();
       const profile = stripStyleItemFitFields(args.profile as Record<string, unknown>);
       const ack = await refreshFluentStyleItemProfile(vNextWriteServices, {
@@ -2146,7 +2170,11 @@ export function registerCoreMcpSurface(
       },
     }),
     async (args) => {
-      requireExplicitPublicWriteApproval(args.approval, 'fluent_set_style_item_image');
+      await requireExplicitPublicWriteApproval(
+        args.approval,
+        'fluent_set_style_item_image',
+        options.publicWriteRateLimiter,
+      );
       const authProps = requireStyleClosetWriteScope();
       const ack = await setFluentStyleItemImage(vNextWriteServices, {
         caption: args.caption ?? null,
@@ -2239,7 +2267,7 @@ export function registerCoreMcpSurface(
       },
     }),
     async (args) => {
-      requireExplicitPublicWriteApproval(args.approval, 'fluent_archive_item');
+      await requireExplicitPublicWriteApproval(args.approval, 'fluent_archive_item', options.publicWriteRateLimiter);
       const authProps = requireArchiveItemWriteScope(args.domain);
       return vNextToolResult(
         await archiveFluentVNextItem(vNextWriteServices, {
@@ -2505,9 +2533,11 @@ function buildFluentVNextWriteServices(
   meals: MealsService,
   style: StyleService,
   budgets: BudgetsService,
+  options: { publicWriteRateLimiter?: FluentRateLimitBinding } = {},
 ): FluentVNextWriteServices {
   return {
     ...buildFluentVNextReadServices(fluentCore, meals, style, budgets),
+    publicWriteRateLimiter: options.publicWriteRateLimiter,
     budgets: {
       getPurchaseContext: (input) => budgets.getPurchaseContext(input),
       logBudgetSpend: (input) => budgets.logBudgetSpend(input),

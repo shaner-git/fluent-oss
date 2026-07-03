@@ -92,7 +92,9 @@ export function createFluentMcpServer(
     }) as typeof server.registerTool;
   }
 
-  registerCoreMcpSurface(server, fluentCore, meals, health, style, budgets, origin);
+  registerCoreMcpSurface(server, fluentCore, meals, health, style, budgets, origin, {
+    publicWriteRateLimiter: bindings.publicWriteRateLimiter,
+  });
   registerHealthMcpSurface(server, health, origin);
   registerMealsMcpSurface(server, meals, fluentCore, origin, { budgets });
   registerStyleMcpSurface(server, style, origin, {
