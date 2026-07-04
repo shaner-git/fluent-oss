@@ -88,8 +88,9 @@ CREATE TABLE IF NOT EXISTS domain_events (
 );
 
 CREATE TABLE IF NOT EXISTS meal_recipes (
-  id TEXT PRIMARY KEY,
-  slug TEXT UNIQUE,
+  tenant_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  slug TEXT,
   name TEXT NOT NULL,
   meal_type TEXT NOT NULL,
   servings INTEGER,
@@ -108,7 +109,9 @@ CREATE TABLE IF NOT EXISTS meal_recipes (
   status TEXT NOT NULL DEFAULT 'active',
   raw_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (tenant_id, id),
+  FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS meal_plans (
@@ -149,8 +152,7 @@ CREATE TABLE IF NOT EXISTS meal_plan_entries (
   cooked_at TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE,
-  FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id) ON DELETE CASCADE,
-  FOREIGN KEY (recipe_id) REFERENCES meal_recipes(id) ON DELETE SET NULL
+  FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS meal_inventory_items (
@@ -189,8 +191,7 @@ CREATE TABLE IF NOT EXISTS meal_memory (
   notes_json TEXT,
   last_used_at TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE,
-  FOREIGN KEY (recipe_id) REFERENCES meal_recipes(id) ON DELETE CASCADE
+  FOREIGN KEY (tenant_id) REFERENCES fluent_tenants(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS meal_brand_preferences (
@@ -229,8 +230,7 @@ CREATE TABLE IF NOT EXISTS meal_feedback (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (tenant_id, profile_id) REFERENCES fluent_profile(tenant_id, profile_id) ON DELETE CASCADE,
   FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id) ON DELETE SET NULL,
-  FOREIGN KEY (meal_plan_entry_id) REFERENCES meal_plan_entries(id) ON DELETE SET NULL,
-  FOREIGN KEY (recipe_id) REFERENCES meal_recipes(id) ON DELETE CASCADE
+  FOREIGN KEY (meal_plan_entry_id) REFERENCES meal_plan_entries(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS meal_plan_reviews (
@@ -699,6 +699,9 @@ CREATE TABLE IF NOT EXISTS health_block_reviews (
 
 CREATE INDEX IF NOT EXISTS idx_meal_plans_week_start ON meal_plans(tenant_id, week_start);
 CREATE INDEX IF NOT EXISTS idx_meal_plans_status ON meal_plans(tenant_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meal_recipes_tenant_slug_unique ON meal_recipes(tenant_id, slug) WHERE slug IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_meal_recipes_tenant_status_type_name ON meal_recipes(tenant_id, status, meal_type, name);
+CREATE INDEX IF NOT EXISTS idx_meal_recipes_tenant_type_status_name ON meal_recipes(tenant_id, meal_type, status, name);
 CREATE INDEX IF NOT EXISTS idx_meal_plan_entries_plan_id ON meal_plan_entries(tenant_id, meal_plan_id);
 CREATE INDEX IF NOT EXISTS idx_meal_plan_entries_date ON meal_plan_entries(tenant_id, date);
 CREATE INDEX IF NOT EXISTS idx_meal_inventory_name ON meal_inventory_items(tenant_id, normalized_name);

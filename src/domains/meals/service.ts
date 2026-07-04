@@ -147,6 +147,7 @@ export type PersonFactsReader = (input: { consumerDomain: PcDomain; host: PcHost
 
 export class MealsService {
   private readonly repository: MealsRepository;
+  private mealRecipesTenantColumnExistsPromise: Promise<boolean> | null = null;
 
   constructor(
     private readonly db: FluentDatabase,
@@ -642,13 +643,18 @@ export class MealsService {
   }
 
   async getRecipe(recipeId: string): Promise<MealRecipeRecord | null> {
+    const tenantScopedRecipes = await this.mealRecipesHaveTenantId();
     const row = await this.db
       .prepare(
-        `SELECT id, slug, name, meal_type, status, raw_json
-         FROM meal_recipes
-         WHERE id = ?`,
+        tenantScopedRecipes
+          ? `SELECT id, slug, name, meal_type, status, raw_json
+             FROM meal_recipes
+             WHERE tenant_id = ? AND id = ?`
+          : `SELECT id, slug, name, meal_type, status, raw_json
+             FROM meal_recipes
+             WHERE id = ?`,
       )
-      .bind(recipeId)
+      .bind(...(tenantScopedRecipes ? [this.tenantId, recipeId] : [recipeId]))
       .first<{
         id: string;
         slug: string | null;
@@ -685,16 +691,20 @@ export class MealsService {
 
     const derived = deriveRecipeColumns(recipe);
     const now = new Date().toISOString();
+    const tenantScopedRecipes = await this.mealRecipesHaveTenantId();
 
-    await this.db
-      .prepare(
-        `INSERT INTO meal_recipes (
+    const insertSql = tenantScopedRecipes
+      ? `INSERT INTO meal_recipes (
+          tenant_id, id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, macros_json,
+          cost_per_serving_cad, kid_friendly, instructions_json, mise_en_place_json, prep_notes,
+          reheat_guidance, serving_notes, status, raw_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      : `INSERT INTO meal_recipes (
           id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, macros_json,
           cost_per_serving_cad, kid_friendly, instructions_json, mise_en_place_json, prep_notes,
           reheat_guidance, serving_notes, status, raw_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    const insertBindings = [
         recipe.id,
         derived.slug,
         derived.name,
@@ -714,7 +724,11 @@ export class MealsService {
         derived.rawJson,
         now,
         now,
-      )
+      ];
+
+    await this.db
+      .prepare(insertSql)
+      .bind(...(tenantScopedRecipes ? [this.tenantId, ...insertBindings] : insertBindings))
       .run();
 
     const created = await this.getRecipe(recipe.id);
@@ -739,40 +753,62 @@ export class MealsService {
   }
 
   async listRecipes(mealType?: string, status = 'active'): Promise<MealRecipeRecord[]> {
+    const tenantScopedRecipes = await this.mealRecipesHaveTenantId();
     const includeAnyStatus = status === 'any';
     const statement = mealType
       ? includeAnyStatus
         ? this.db
             .prepare(
-              `SELECT id, slug, name, meal_type, status, raw_json
-               FROM meal_recipes
-               WHERE meal_type = ?
-               ORDER BY name ASC`,
+              tenantScopedRecipes
+                ? `SELECT id, slug, name, meal_type, status, raw_json
+                   FROM meal_recipes
+                   WHERE tenant_id = ? AND meal_type = ?
+                   ORDER BY name ASC`
+                : `SELECT id, slug, name, meal_type, status, raw_json
+                   FROM meal_recipes
+                   WHERE meal_type = ?
+                   ORDER BY name ASC`,
             )
-            .bind(mealType)
+            .bind(...(tenantScopedRecipes ? [this.tenantId, mealType] : [mealType]))
         : this.db
             .prepare(
-              `SELECT id, slug, name, meal_type, status, raw_json
-               FROM meal_recipes
-               WHERE meal_type = ? AND status = ?
-               ORDER BY name ASC`,
+              tenantScopedRecipes
+                ? `SELECT id, slug, name, meal_type, status, raw_json
+                   FROM meal_recipes
+                   WHERE tenant_id = ? AND meal_type = ? AND status = ?
+                   ORDER BY name ASC`
+                : `SELECT id, slug, name, meal_type, status, raw_json
+                   FROM meal_recipes
+                   WHERE meal_type = ? AND status = ?
+                   ORDER BY name ASC`,
             )
-            .bind(mealType, status)
+            .bind(...(tenantScopedRecipes ? [this.tenantId, mealType, status] : [mealType, status]))
       : includeAnyStatus
         ? this.db
             .prepare(
-              `SELECT id, slug, name, meal_type, status, raw_json
-               FROM meal_recipes
-               ORDER BY meal_type ASC, name ASC`,
+              tenantScopedRecipes
+                ? `SELECT id, slug, name, meal_type, status, raw_json
+                   FROM meal_recipes
+                   WHERE tenant_id = ?
+                   ORDER BY meal_type ASC, name ASC`
+                : `SELECT id, slug, name, meal_type, status, raw_json
+                   FROM meal_recipes
+                   ORDER BY meal_type ASC, name ASC`,
             )
+            .bind(...(tenantScopedRecipes ? [this.tenantId] : []))
         : this.db
             .prepare(
-              `SELECT id, slug, name, meal_type, status, raw_json
-               FROM meal_recipes
-               WHERE status = ?
-               ORDER BY meal_type ASC, name ASC`,
+              tenantScopedRecipes
+                ? `SELECT id, slug, name, meal_type, status, raw_json
+                   FROM meal_recipes
+                   WHERE tenant_id = ? AND status = ?
+                   ORDER BY meal_type ASC, name ASC`
+                : `SELECT id, slug, name, meal_type, status, raw_json
+                   FROM meal_recipes
+                   WHERE status = ?
+                   ORDER BY meal_type ASC, name ASC`,
             )
-            .bind(status);
+            .bind(...(tenantScopedRecipes ? [this.tenantId, status] : [status]));
 
     const result = await statement.all<{
       id: string;
@@ -1633,15 +1669,23 @@ export class MealsService {
 
     const derived = deriveRecipeColumns({ ...nextRecipe, id: input.recipeId });
     const updatedAt = new Date().toISOString();
+    const tenantScopedRecipes = await this.mealRecipesHaveTenantId();
 
     await this.db
       .prepare(
-        `UPDATE meal_recipes
-         SET slug = ?, name = ?, meal_type = ?, status = ?, servings = ?, total_time_minutes = ?,
-             active_time_minutes = ?, macros_json = ?, cost_per_serving_cad = ?, kid_friendly = ?,
-             instructions_json = ?, mise_en_place_json = ?, prep_notes = ?, reheat_guidance = ?,
-             serving_notes = ?, raw_json = ?, updated_at = ?
-         WHERE id = ?`,
+        tenantScopedRecipes
+          ? `UPDATE meal_recipes
+             SET slug = ?, name = ?, meal_type = ?, status = ?, servings = ?, total_time_minutes = ?,
+                 active_time_minutes = ?, macros_json = ?, cost_per_serving_cad = ?, kid_friendly = ?,
+                 instructions_json = ?, mise_en_place_json = ?, prep_notes = ?, reheat_guidance = ?,
+                 serving_notes = ?, raw_json = ?, updated_at = ?
+             WHERE tenant_id = ? AND id = ?`
+          : `UPDATE meal_recipes
+             SET slug = ?, name = ?, meal_type = ?, status = ?, servings = ?, total_time_minutes = ?,
+                 active_time_minutes = ?, macros_json = ?, cost_per_serving_cad = ?, kid_friendly = ?,
+                 instructions_json = ?, mise_en_place_json = ?, prep_notes = ?, reheat_guidance = ?,
+                 serving_notes = ?, raw_json = ?, updated_at = ?
+             WHERE id = ?`,
       )
       .bind(
         derived.slug,
@@ -1661,7 +1705,7 @@ export class MealsService {
         derived.servingNotes,
         derived.rawJson,
         updatedAt,
-        input.recipeId,
+        ...(tenantScopedRecipes ? [this.tenantId, input.recipeId] : [input.recipeId]),
       )
       .run();
 
@@ -4477,6 +4521,15 @@ export class MealsService {
 
   private async dateToWeekday(date: string): Promise<string> {
     return this.repository.dateToWeekday(date);
+  }
+
+  private async mealRecipesHaveTenantId(): Promise<boolean> {
+    this.mealRecipesTenantColumnExistsPromise ??= this.db
+      .prepare(`SELECT COUNT(*) AS count FROM pragma_table_info('meal_recipes') WHERE name = 'tenant_id'`)
+      .first<{ count: number | string | null }>()
+      .then((row) => Number(row?.count ?? 0) > 0)
+      .catch(() => false);
+    return this.mealRecipesTenantColumnExistsPromise;
   }
 }
 
