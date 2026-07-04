@@ -49,6 +49,7 @@ async function main() {
     await currentWeekGroceryListBeatsPastAndUpcomingFallbacks();
     await upcomingGroceryListWithinLookaheadBeatsStalePastList();
     await upcomingIntentOnlyWeekBeatsStalePastList();
+    await fullyPurchasedIntentWeekStillAnchors();
     await upcomingAnchorPrefersNearestOfPlanAndIntent();
     await currentGroceryListFallsBackToPastWhenNoUpcomingList();
     await futureGroceryListBeyondLookaheadDoesNotHidePastList();
@@ -1217,6 +1218,64 @@ async function upcomingIntentOnlyWeekBeatsStalePastList() {
     );
     assert.equal(currentList.intents.some((intent) => intent.displayName === 'flour tortillas'), true);
     assert.equal(currentList.groceryPlan, null);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function fullyPurchasedIntentWeekStillAnchors() {
+  // Real-world 2026-07-04 regression: after the user marked EVERY manual intent on the
+  // upcoming week purchased, the pending-only anchor lost the week entirely and cold
+  // reads fell back to a stale past list. A fully purchased list is still that week's
+  // list; it must resolve with everything covered instead of vanishing.
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const currentWeekStart = '2026-07-06';
+    const today = shiftDateString(currentWeekStart, 3);
+    const pastWeekStart = shiftDateString(currentWeekStart, -56);
+    const futureWeekStart = shiftDateString(currentWeekStart, 7);
+    await createSingleRecipePlan(service, {
+      weekStart: pastWeekStart,
+      recipeId: 'grocery-actions-purchased-anchor-past',
+      recipeName: 'Stale Past Grocery List',
+      ingredient: { item: 'salmon fillets', quantity: 640, unit: 'g' },
+      mealType: 'dinner',
+    });
+    await service.generateGroceryPlan({ weekStart: pastWeekStart, provenance });
+
+    await service.upsertGroceryIntent({
+      displayName: 'flour tortillas',
+      status: 'purchased',
+      targetWindow: futureWeekStart,
+      provenance,
+    });
+    await service.upsertGroceryIntent({
+      displayName: 'jalapeno pepper',
+      status: 'skipped',
+      targetWindow: futureWeekStart,
+      provenance,
+    });
+
+    const currentList = await service.getCurrentGroceryList({ today });
+    assert.equal(currentList.weekStart, futureWeekStart);
+    assert.equal(currentList.intents.some((intent) => intent.displayName === 'flour tortillas'), true);
+
+    // Deleted intents must NOT anchor: remove both and the week should fall back again.
+    // Keep targetWindow on the delete so the fallback assertion can't pass vacuously
+    // via a cleared window (upsert writes target_window = input.targetWindow ?? null).
+    for (const intent of currentList.intents) {
+      await service.upsertGroceryIntent({
+        id: intent.id,
+        displayName: intent.displayName,
+        status: 'deleted',
+        targetWindow: futureWeekStart,
+        provenance,
+      });
+    }
+    const afterDelete = await service.getCurrentGroceryList({ today });
+    assert.equal(afterDelete.weekStart, pastWeekStart);
   } finally {
     runtime.sqliteDb.close();
   }

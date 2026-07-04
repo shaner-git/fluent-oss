@@ -3376,9 +3376,12 @@ export class MealsService {
     maxWeekStart: string;
     weekStart: string;
   }): Promise<string | null> {
-    const intents = await this.listGroceryIntents('pending');
+    // Anchor on any open-or-settled intent: a fully purchased/skipped list is still that
+    // week's list (it must resolve and render as done, not vanish to a past fallback).
+    // Archived intents don't anchor — they're excluded from render membership too.
+    const intents = await this.listGroceryIntents();
     const weeks = intents
-      .filter((intent) => !intent.mealPlanId)
+      .filter((intent) => !intent.mealPlanId && intent.status !== 'archived')
       // Match the loose target-window semantics used by the current-week path: extract an
       // ISO date from strings like "week of 2026-07-13" rather than requiring a bare date.
       .map((intent) => intent.targetWindow?.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? '')
@@ -3388,9 +3391,9 @@ export class MealsService {
   }
 
   private async hasCurrentWeekGroceryIntent(weekStart: string): Promise<boolean> {
-    const intents = await this.listGroceryIntents('pending');
+    const intents = await this.listGroceryIntents();
     return intents.some((intent) => {
-      if (intent.mealPlanId) {
+      if (intent.mealPlanId || intent.status === 'archived') {
         return false;
       }
       if (!intent.targetWindow) {
