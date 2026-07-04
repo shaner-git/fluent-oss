@@ -58,6 +58,11 @@ import {
 import { hasHostedEmailDelivery, sendHostedMagicLinkEmail } from './hosted-email';
 import { resolveHostedCloudAccess, resolveHostedCloudClientDecision } from './hosted-access-state';
 import { escapeHeaderQuotedString } from './http-header';
+import {
+  assertSelfServeProvisioningAllowed,
+  checkSelfServeProvisioningBrake,
+  isSelfServeProvisioningBrakeError,
+} from './self-serve-provisioning-brake';
 import { createFluentMcpServer } from './mcp';
 import {
   isProfiledMcpPath,
@@ -336,7 +341,20 @@ async function handleSignInPage(request: Request, env: CloudRuntimeEnv): Promise
   if (earlyAccessResponse) {
     return earlyAccessResponse;
   }
-  const provisioning = await maybeProvisionHostedSession(env, session);
+  const provisioning = await maybeProvisionHostedSession(env, session, request);
+  if (provisioning.accessFailureCode) {
+    const details = buildFluentCloudAccessFailureDetails(provisioning.accessFailureCode, {
+      email: session?.user?.email ?? null,
+      title: 'Sign in | Fluent',
+    });
+    return html(
+      renderFluentCloudAccessFailurePage(provisioning.accessFailureCode, {
+        email: session?.user?.email ?? null,
+        title: 'Sign in | Fluent',
+      }),
+      details.status,
+    );
+  }
   const postSignInRedirectUrl = derivePostSignInRedirectUrl(request.url, Boolean(session?.user));
   if (postSignInRedirectUrl) {
     return Response.redirect(postSignInRedirectUrl, 302);
@@ -374,7 +392,20 @@ async function handleConsentPage(request: Request, env: CloudRuntimeEnv): Promis
   if (earlyAccessResponse) {
     return earlyAccessResponse;
   }
-  const provisioning = await maybeProvisionHostedSession(env, session);
+  const provisioning = await maybeProvisionHostedSession(env, session, request);
+  if (provisioning.accessFailureCode) {
+    const details = buildFluentCloudAccessFailureDetails(provisioning.accessFailureCode, {
+      email: session?.user?.email ?? null,
+      title: 'Authorize | Fluent',
+    });
+    return html(
+      renderFluentCloudAccessFailurePage(provisioning.accessFailureCode, {
+        email: session?.user?.email ?? null,
+        title: 'Authorize | Fluent',
+      }),
+      details.status,
+    );
+  }
   const consentInfo = await getConsentClientSummary(auth, request);
   return html(
     renderConsentPage({
@@ -769,7 +800,7 @@ export function createBetterAuthConfig(request: Request, env: CloudRuntimeEnv) {
       allowPublicClientPrelogin: true,
       allowUnauthenticatedClientRegistration: true,
       consentPage: '/consent',
-      customAccessTokenClaims: async ({ user }) => buildHostedAccessTokenClaims(env, user),
+      customAccessTokenClaims: async ({ user }) => buildHostedAccessTokenClaims(env, user, request),
       loginPage: '/sign-in',
       scopes: [...FLUENT_PUBLIC_HOSTED_OAUTH_SCOPES],
       validAudiences: [
@@ -815,13 +846,15 @@ async function getBetterAuthSession(auth: ReturnType<typeof createBetterAuth>, r
 async function maybeProvisionHostedSession(
   env: CloudRuntimeEnv,
   session: BetterAuthSessionPayload,
+  request: Request,
 ): Promise<{
+  accessFailureCode: Parameters<typeof buildFluentCloudAccessFailureDetails>[0] | null;
   error: string | null;
   result: Awaited<ReturnType<typeof ensureHostedUserProvisioned>> | null;
 }> {
   const user = session?.user;
   if (!user?.id) {
-    return { error: null, result: null };
+    return { accessFailureCode: null, error: null, result: null };
   }
 
   try {
@@ -833,7 +866,7 @@ async function maybeProvisionHostedSession(
       sessionId: typeof session?.session?.id === 'string' ? session.session.id : null,
     });
     if (deletionCode) {
-      return { error: null, result: null };
+      return { accessFailureCode: null, error: null, result: null };
     }
 
     const accessDecision = await resolveHostedCloudAccess(db, env, {
@@ -841,7 +874,12 @@ async function maybeProvisionHostedSession(
       userId: user.id,
     });
     if (!accessDecision.allowed) {
-      return { error: null, result: null };
+      return { accessFailureCode: null, error: null, result: null };
+    }
+
+    const brake = await checkSelfServeProvisioningBrake(db, env, accessDecision, request);
+    if (!brake.allowed) {
+      return { accessFailureCode: brake.code, error: null, result: null };
     }
 
     const result = await ensureHostedUserProvisioned(db, {
@@ -858,6 +896,7 @@ async function maybeProvisionHostedSession(
       userId: user.id,
     });
     return {
+      accessFailureCode: null,
       error: null,
       result,
     };
@@ -871,6 +910,7 @@ async function maybeProvisionHostedSession(
       userId: user.id,
     });
     return {
+      accessFailureCode: null,
       error: error instanceof Error ? error.message : String(error),
       result: null,
     };
@@ -1448,7 +1488,7 @@ async function lookupHostedOpaqueAccessTokenPayload(
     }
   }
 
-  const customClaims = await buildHostedAccessTokenClaims(env, user);
+  const customClaims = await buildHostedAccessTokenClaims(env, user, request);
   const createdAt = accessToken.createdAt ? new Date(accessToken.createdAt) : new Date();
   const scopes = parseJsonStringArray(accessToken.scopes);
 
@@ -1575,6 +1615,7 @@ async function buildHostedAccessTokenClaims(
       }
     | null
     | undefined,
+  request: Request,
 ): Promise<Record<string, string>> {
   if (!user?.id) {
     return {};
@@ -1594,13 +1635,16 @@ async function buildHostedAccessTokenClaims(
   }
 
   const provisioning = accessDecision.needsProvisioning
-    ? await ensureHostedUserProvisioned(db, {
-        email: typeof user.email === 'string' ? user.email : null,
-        id: user.id,
-        name: typeof user.name === 'string' ? user.name : null,
-      }, {
-        cloudAccess: accessDecision.provisioningSource,
-      })
+    ? await (async () => {
+        await assertSelfServeProvisioningAllowed(db, env, accessDecision, request);
+        return ensureHostedUserProvisioned(db, {
+          email: typeof user.email === 'string' ? user.email : null,
+          id: user.id,
+          name: typeof user.name === 'string' ? user.name : null,
+        }, {
+          cloudAccess: accessDecision.provisioningSource,
+        });
+      })()
     : {
         created: false,
         inviteId: null,
@@ -1795,6 +1839,11 @@ function betterAuthConfigErrorResponse(error: unknown): Response {
 }
 
 function betterAuthRuntimeErrorResponse(request: Request, error: unknown): Response {
+  if (isSelfServeProvisioningBrakeError(error)) {
+    const details = buildFluentCloudAccessFailureDetails(error.code);
+    return json(createFluentCloudAccessFailurePayload(error.code), details.status);
+  }
+
   const url = new URL(request.url);
   console.error('Better Auth request failed', {
     message: error instanceof Error ? error.message : String(error),

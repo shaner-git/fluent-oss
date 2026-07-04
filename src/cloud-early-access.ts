@@ -23,6 +23,7 @@ export type FluentCloudAccessFailureCode =
   | 'auth_expired'
   | 'contract_version_unsupported'
   | 'client_unsupported'
+  | 'self_serve_capacity_reached'
   | 'temporarily_unavailable';
 
 type EarlyAccessMessageOptions = {
@@ -209,6 +210,15 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     oauthError: 'invalid_client',
     ossFallback: true,
     status: 400,
+    waitlist: false,
+  },
+  self_serve_capacity_reached: {
+    explanationTemplate: 'Fluent has reached today\'s self-serve account capacity.',
+    heading: 'Fluent is at capacity today',
+    nextActionTemplate: 'Try again tomorrow, or run the open-source runtime today.',
+    oauthError: 'temporarily_unavailable',
+    ossFallback: true,
+    status: 429,
     waitlist: false,
   },
   temporarily_unavailable: {
@@ -427,6 +437,7 @@ export function isFluentCloudEarlyAccessDenial(input: unknown): boolean {
     'fluent_cloud_failure',
     'not on the fluent waitlist',
     'onboarding is not complete',
+    'self-serve account capacity',
     'temporarily unavailable',
     'waitlist',
   ].some((needle) => value.includes(needle));

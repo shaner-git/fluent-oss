@@ -29,7 +29,9 @@ export interface CloudRuntimeEnv {
   PURCHASE_RUN_STATE: DurableObjectNamespace;
   PURCHASE_WORKFLOW: Workflow<import('./cloud/purchase/types').PurchaseRunCreateInput>;
   FLUENT_AUTH_RATE_LIMITER?: FluentRateLimitBinding;
+  FLUENT_PROVISION_RATE_LIMITER?: FluentRateLimitBinding;
   FLUENT_PUBLIC_WRITE_RATE_LIMITER?: FluentRateLimitBinding;
+  FLUENT_SELF_SERVE_DAILY_PROVISION_CAP?: string;
   IMAGE_DELIVERY_SECRET?: string;
   PUBLIC_BASE_URL?: string;
   PURCHASE_RUNNER_INTERNAL_TOKEN?: string;
