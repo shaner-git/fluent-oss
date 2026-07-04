@@ -665,12 +665,13 @@ export async function saveFluentVNextMealPlan(
     });
   }
 
+  const normalizedPlan = mealPlanForUpsert(plan, entries, weekStart);
   const result = await services.meals.upsertPlan({
     createNewPlan: true,
     plan: {
-      ...plan,
-      source_snapshot: {
-        ...(asRecord(plan.source_snapshot ?? plan.sourceSnapshot) ?? {}),
+      ...normalizedPlan,
+      sourceSnapshot: {
+        ...(objectOrNull(plan.source_snapshot ?? plan.sourceSnapshot) ?? {}),
         planner: 'host_model',
         public_tool: 'fluent_save_meal_plan',
         write_boundary: 'explicit_user_approved',
@@ -688,6 +689,54 @@ export async function saveFluentVNextMealPlan(
     source: 'meals.upsertPlan',
     target: { id: targetId, type: 'meal_plan' },
   });
+}
+
+function mealPlanForUpsert(
+  plan: Record<string, unknown>,
+  entries: unknown[],
+  weekStart: string,
+): Record<string, unknown> {
+  return {
+    id: stringOrNull(plan.id),
+    weekStart,
+    weekEnd: stringOrNull(plan.week_end ?? plan.weekEnd),
+    generatedAt: stringOrNull(plan.generated_at ?? plan.generatedAt),
+    profileOwner: stringOrNull(plan.profile_owner ?? plan.profileOwner),
+    requirements: objectOrNull(plan.requirements) ?? {},
+    summary: objectOrNull(plan.summary) ?? {},
+    entries: entries.map((entry, index) => mealPlanEntryForUpsert(entry, index)),
+  };
+}
+
+function mealPlanEntryForUpsert(entry: unknown, index: number): Record<string, unknown> {
+  const record = objectOrNull(entry);
+  if (!record) {
+    throw new Error(`fluent_save_meal_plan entry ${index} must be an object.`);
+  }
+  const mealType = stringOrNull(record.meal_type ?? record.mealType);
+  const recipeNameSnapshot =
+    stringOrNull(record.recipe_name_snapshot ?? record.recipeNameSnapshot) ??
+    stringOrNull(record.recipe_name ?? record.recipeName);
+  if (!mealType || !recipeNameSnapshot) {
+    throw new Error(`fluent_save_meal_plan entry ${index} requires meal_type and recipe_name.`);
+  }
+  const notes = objectOrNull(record.notes);
+  return {
+    id: stringOrNull(record.id),
+    date: stringOrNull(record.date),
+    dayLabel: stringOrNull(record.day_label ?? record.dayLabel),
+    instructionsSnapshot: stringArray(record.instructionsSnapshot ?? record.instructions),
+    leftoversExpected: booleanOrDefault(record.leftovers_expected ?? record.leftoversExpected, false),
+    mealType,
+    notes,
+    prepMinutes: nonNegativeIntegerOrNull(record.prep_minutes ?? record.prepMinutes),
+    recipeId: stringOrNull(record.recipe_id ?? record.recipeId),
+    recipeNameSnapshot,
+    selectionStatus: stringOrNull(record.selection_status ?? record.selectionStatus),
+    serves: positiveIntegerOrNull(record.serves),
+    status: stringOrNull(record.status),
+    totalMinutes: nonNegativeIntegerOrNull(record.total_minutes ?? record.totalMinutes),
+  };
 }
 
 export async function updateFluentVNextSharedProfilePatch(
@@ -981,8 +1030,20 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function positiveIntegerOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : null;
+}
+
+function nonNegativeIntegerOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null;
+}
+
 function booleanOrDefault(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
 type PublicSharedProfileFactPatch = {

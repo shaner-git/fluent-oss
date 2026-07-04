@@ -139,6 +139,9 @@ const GROCERY_PLAN_ACTION_STATUSES: GroceryPlanActionRecord['actionStatus'][] = 
   'needs_purchase',
   ...PREPARED_ORDER_SUFFICIENCY_STATUSES,
 ];
+// Treat the next one or two planning weeks as relevant for "current grocery list"
+// reads before the week starts; farther-future lists should not hide recent past state.
+const CURRENT_GROCERY_LIST_UPCOMING_LOOKAHEAD_DAYS = 14;
 
 export type PersonFactsReader = (input: { consumerDomain: PcDomain; host: PcHost }) => Promise<PersonFact[]>;
 
@@ -204,12 +207,20 @@ export class MealsService {
     return row?.id ? this.getPlanById(row.id) : null;
   }
 
-  async getPlan(weekStart: string): Promise<MealPlanRecord | null> {
-    return this.getPlanByWeek(weekStart);
+  async getPlan(input?: string | { today?: string | null; weekStart?: string | null }): Promise<MealPlanRecord | null> {
+    if (typeof input === 'string') {
+      return this.getPlanByWeek(input);
+    }
+    if (input?.weekStart) {
+      return this.getPlanByWeek(input.weekStart);
+    }
+    return this.getCurrentPlan(input?.today ?? undefined);
   }
 
-  async listPlanHistory(limit = 12): Promise<MealPlanHistoryRecord[]> {
-    const boundedLimit = Math.max(1, Math.min(limit, 52));
+  async listPlanHistory(limit: number | { limit?: number | null } = 12): Promise<MealPlanHistoryRecord[]> {
+    const rawLimit = typeof limit === 'number' ? limit : limit?.limit;
+    const requestedLimit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : 12;
+    const boundedLimit = Math.max(1, Math.min(Math.trunc(requestedLimit), 52));
     const result = await this.db
       .prepare(
         `SELECT p.id, p.week_start, p.week_end, p.status, p.generated_at, p.approved_at, p.updated_at,
@@ -529,10 +540,10 @@ export class MealsService {
           entry.recipeId ?? null,
           entry.recipeNameSnapshot,
           entry.selectionStatus ?? null,
-          entry.serves ?? null,
-          entry.prepMinutes ?? null,
-          entry.totalMinutes ?? null,
-          entry.leftoversExpected ? 1 : 0,
+          sqliteIntegerOrNull(entry.serves),
+          sqliteIntegerOrNull(entry.prepMinutes),
+          sqliteIntegerOrNull(entry.totalMinutes),
+          sqliteBoolean(entry.leftoversExpected),
           stringifyJson(entry.instructionsSnapshot ?? []),
           stringifyJson(entry.notes ?? null),
           entry.status ?? 'planned',
@@ -3207,6 +3218,33 @@ export class MealsService {
       };
     }
 
+    const upcomingBound = shiftDateString(currentWeekStart, CURRENT_GROCERY_LIST_UPCOMING_LOOKAHEAD_DAYS);
+    const upcomingPlanWeek = await this.findNearestGroceryPlanWeek({
+      direction: 'future',
+      maxWeekStart: upcomingBound,
+      weekStart: currentWeekStart,
+    });
+    // Manual list changes targeted at an upcoming week anchor the list too — a host can build
+    // next week's list purely from intents without generating a grocery plan first.
+    const upcomingIntentWeek = await this.findNearestGroceryIntentWeek({
+      maxWeekStart: upcomingBound,
+      weekStart: currentWeekStart,
+    });
+    const latestUpcomingWeekStart =
+      [upcomingPlanWeek, upcomingIntentWeek].filter((week): week is string => Boolean(week)).sort()[0] ?? null;
+    if (latestUpcomingWeekStart) {
+      const groceryPlan = await this.getGroceryPlan(latestUpcomingWeekStart);
+      const plan =
+        (groceryPlan?.mealPlanId ? await this.getPlanById(groceryPlan.mealPlanId) : null) ??
+        (await this.getPlanByWeek(latestUpcomingWeekStart));
+      return {
+        groceryPlan,
+        plan,
+        selectionReason: `No list exists for the current week, so Fluent is showing the upcoming week's list (weekStart ${latestUpcomingWeekStart}).`,
+        weekStart: latestUpcomingWeekStart,
+      };
+    }
+
     const latestPastWeekStart = await this.findNearestGroceryPlanWeek({
       direction: 'past_or_current',
       weekStart: currentWeekStart,
@@ -3221,23 +3259,6 @@ export class MealsService {
         plan,
         selectionReason: `No current-week grocery list exists, so Fluent is showing the most recent list from ${latestPastWeekStart}.`,
         weekStart: latestPastWeekStart,
-      };
-    }
-
-    const nextFutureWeekStart = await this.findNearestGroceryPlanWeek({
-      direction: 'future',
-      weekStart: currentWeekStart,
-    });
-    if (nextFutureWeekStart) {
-      const groceryPlan = await this.getGroceryPlan(nextFutureWeekStart);
-      const plan =
-        (groceryPlan?.mealPlanId ? await this.getPlanById(groceryPlan.mealPlanId) : null) ??
-        (await this.getPlanByWeek(nextFutureWeekStart));
-      return {
-        groceryPlan,
-        plan,
-        selectionReason: `No current or past grocery list exists, so Fluent is showing upcoming meal-plan needs from ${nextFutureWeekStart}.`,
-        weekStart: nextFutureWeekStart,
       };
     }
 
@@ -3269,23 +3290,45 @@ export class MealsService {
 
   private async findNearestGroceryPlanWeek(input: {
     direction: 'past_or_current' | 'future';
+    maxWeekStart?: string;
     weekStart: string;
   }): Promise<string | null> {
     const operator = input.direction === 'past_or_current' ? '<=' : '>';
     const ordering = input.direction === 'past_or_current' ? 'DESC' : 'ASC';
+    const upperBoundClause = input.direction === 'future' && input.maxWeekStart ? ' AND week_start <= ?' : '';
+    const bindings =
+      input.direction === 'future' && input.maxWeekStart
+        ? [this.tenantId, input.weekStart, input.maxWeekStart]
+        : [this.tenantId, input.weekStart];
     const row = await this.db
       .prepare(
         `SELECT week_start
          FROM meal_grocery_plans
          WHERE tenant_id = ?
-           AND week_start ${operator} ?
-         ORDER BY week_start ${ordering}
-         LIMIT 1`,
+            AND week_start ${operator} ?
+           ${upperBoundClause}
+          ORDER BY week_start ${ordering}
+          LIMIT 1`,
       )
-      .bind(this.tenantId, input.weekStart)
+      .bind(...bindings)
       .first<{ week_start: string }>();
 
     return row?.week_start ?? null;
+  }
+
+  private async findNearestGroceryIntentWeek(input: {
+    maxWeekStart: string;
+    weekStart: string;
+  }): Promise<string | null> {
+    const intents = await this.listGroceryIntents('pending');
+    const weeks = intents
+      .filter((intent) => !intent.mealPlanId)
+      // Match the loose target-window semantics used by the current-week path: extract an
+      // ISO date from strings like "week of 2026-07-13" rather than requiring a bare date.
+      .map((intent) => intent.targetWindow?.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? '')
+      .filter((window) => window > input.weekStart && window <= input.maxWeekStart)
+      .sort();
+    return weeks[0] ?? null;
   }
 
   private async hasCurrentWeekGroceryIntent(weekStart: string): Promise<boolean> {
@@ -4435,6 +4478,14 @@ export class MealsService {
   private async dateToWeekday(date: string): Promise<string> {
     return this.repository.dateToWeekday(date);
   }
+}
+
+function sqliteIntegerOrNull(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+
+function sqliteBoolean(value: unknown): 0 | 1 {
+  return value === true ? 1 : 0;
 }
 
 function isMissingMealPreferencesError(error: unknown): boolean {

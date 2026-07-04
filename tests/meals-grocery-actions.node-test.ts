@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { MealsService } from '../src/domains/meals/service';
 import { summarizeGroceryPlan } from '../src/domains/meals/summaries';
 import { createLocalRuntime } from '../src/local/runtime';
+import { shiftDateString } from '../src/time';
 
 const tempRoots: string[] = [];
 const provenance = {
@@ -45,7 +46,12 @@ async function main() {
     await coverageActionsRefreshInventoryEvidence();
     await rejectsInventoryActionsWhenGroceryPlanMissingWithoutGenerating();
     await exposesCurrentGroceryListLifecycleState();
-    await currentGroceryListDefaultsToMostRecentPastListInsteadOfFuturePlaceholder();
+    await currentWeekGroceryListBeatsPastAndUpcomingFallbacks();
+    await upcomingGroceryListWithinLookaheadBeatsStalePastList();
+    await upcomingIntentOnlyWeekBeatsStalePastList();
+    await upcomingAnchorPrefersNearestOfPlanAndIntent();
+    await currentGroceryListFallsBackToPastWhenNoUpcomingList();
+    await futureGroceryListBeyondLookaheadDoesNotHidePastList();
     await currentWeekManualIntentSelectsLivingListBeforeStalePastPlan();
     await manualIntentWritesRefreshCurrentGroceryListProjection();
     await regeneratesLegacyGroceryPlanRowsForUpdatedMealPlans();
@@ -1083,18 +1089,27 @@ async function exposesCurrentGroceryListLifecycleState() {
   }
 }
 
-async function currentGroceryListDefaultsToMostRecentPastListInsteadOfFuturePlaceholder() {
+async function currentWeekGroceryListBeatsPastAndUpcomingFallbacks() {
   const runtime = createTempRuntime();
   const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
 
   try {
-    const pastWeekStart = '2026-04-27';
-    const futureWeekStart = '2026-05-11';
+    const currentWeekStart = '2026-07-06';
+    const today = shiftDateString(currentWeekStart, 3);
+    const pastWeekStart = shiftDateString(currentWeekStart, -56);
+    const futureWeekStart = shiftDateString(currentWeekStart, 7);
     await createSingleRecipePlan(service, {
       weekStart: pastWeekStart,
       recipeId: 'grocery-actions-current-list-past',
       recipeName: 'Past Full Grocery List',
       ingredient: { item: 'salmon fillets', quantity: 640, unit: 'g' },
+      mealType: 'dinner',
+    });
+    await createSingleRecipePlan(service, {
+      weekStart: currentWeekStart,
+      recipeId: 'grocery-actions-current-list-current',
+      recipeName: 'Current Grocery List',
+      ingredient: { item: 'romaine hearts', quantity: 2, unit: 'count' },
       mealType: 'dinner',
     });
     await createSingleRecipePlan(service, {
@@ -1106,9 +1121,180 @@ async function currentGroceryListDefaultsToMostRecentPastListInsteadOfFuturePlac
     });
 
     await service.generateGroceryPlan({ weekStart: pastWeekStart, provenance });
+    await service.generateGroceryPlan({ weekStart: currentWeekStart, provenance });
     await service.generateGroceryPlan({ weekStart: futureWeekStart, provenance });
 
-    const currentList = await service.getCurrentGroceryList({ today: '2026-05-09' });
+    const currentList = await service.getCurrentGroceryList({ today });
+    assert.equal(currentList.weekStart, currentWeekStart);
+    assert.equal(currentList.weekRelation, 'contains_today');
+    assert.equal(currentList.selectionReason, null);
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'romaine hearts'), true);
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'salmon fillets'), false);
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'plain greek yogurt'), false);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function upcomingGroceryListWithinLookaheadBeatsStalePastList() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const currentWeekStart = '2026-07-06';
+    const today = shiftDateString(currentWeekStart, 3);
+    const pastWeekStart = shiftDateString(currentWeekStart, -56);
+    const futureWeekStart = shiftDateString(currentWeekStart, 7);
+    await createSingleRecipePlan(service, {
+      weekStart: pastWeekStart,
+      recipeId: 'grocery-actions-upcoming-beats-past',
+      recipeName: 'Stale Past Grocery List',
+      ingredient: { item: 'salmon fillets', quantity: 640, unit: 'g' },
+      mealType: 'dinner',
+    });
+    await createSingleRecipePlan(service, {
+      weekStart: futureWeekStart,
+      recipeId: 'grocery-actions-upcoming-wins',
+      recipeName: 'Upcoming Grocery List',
+      ingredient: { item: 'plain greek yogurt', quantity: 490, unit: 'g' },
+      mealType: 'breakfast',
+    });
+
+    await service.generateGroceryPlan({ weekStart: pastWeekStart, provenance });
+    await service.generateGroceryPlan({ weekStart: futureWeekStart, provenance });
+
+    const currentList = await service.getCurrentGroceryList({ today });
+    assert.equal(currentList.weekStart, futureWeekStart);
+    assert.equal(currentList.weekRelation, 'future');
+    assert.equal(currentList.stale, true);
+    assert.equal(
+      currentList.selectionReason,
+      `No list exists for the current week, so Fluent is showing the upcoming week's list (weekStart ${futureWeekStart}).`,
+    );
+    assert.equal(currentList.subtitle.includes(`includes next plan (${futureWeekStart})`), true);
+    assert.equal(currentList.staleReasons[0], currentList.selectionReason);
+    assert.ok(currentList.sourceProvenance.some((source) => source.weekStart === futureWeekStart));
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'plain greek yogurt'), true);
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'salmon fillets'), false);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function upcomingIntentOnlyWeekBeatsStalePastList() {
+  // Real-world 2026-07-03 shape: a host built next week's list purely from manual
+  // list changes (intents targeted at the upcoming week) without generating a
+  // grocery plan. Those intents must anchor the cold read.
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const currentWeekStart = '2026-07-06';
+    const today = shiftDateString(currentWeekStart, 3);
+    const pastWeekStart = shiftDateString(currentWeekStart, -56);
+    const futureWeekStart = shiftDateString(currentWeekStart, 7);
+    await createSingleRecipePlan(service, {
+      weekStart: pastWeekStart,
+      recipeId: 'grocery-actions-intent-only-past',
+      recipeName: 'Stale Past Grocery List',
+      ingredient: { item: 'salmon fillets', quantity: 640, unit: 'g' },
+      mealType: 'dinner',
+    });
+    await service.generateGroceryPlan({ weekStart: pastWeekStart, provenance });
+
+    await service.upsertGroceryIntent({
+      displayName: 'flour tortillas',
+      status: 'pending',
+      targetWindow: futureWeekStart,
+      provenance,
+    });
+
+    const currentList = await service.getCurrentGroceryList({ today });
+    assert.equal(currentList.weekStart, futureWeekStart);
+    assert.equal(
+      currentList.selectionReason,
+      `No list exists for the current week, so Fluent is showing the upcoming week's list (weekStart ${futureWeekStart}).`,
+    );
+    assert.equal(currentList.intents.some((intent) => intent.displayName === 'flour tortillas'), true);
+    assert.equal(currentList.groceryPlan, null);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function upcomingAnchorPrefersNearestOfPlanAndIntent() {
+  // Mixed precedence both directions + loose target-window anchoring (review fix-forward).
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const currentWeekStart = '2026-07-06';
+    const today = shiftDateString(currentWeekStart, 3);
+    const nearWeek = shiftDateString(currentWeekStart, 7);
+    const farWeek = shiftDateString(currentWeekStart, 14);
+
+    // Case A: far future plan + near future intent (loose window) -> intent week wins.
+    await createSingleRecipePlan(service, {
+      weekStart: farWeek,
+      recipeId: 'grocery-actions-mixed-far-plan',
+      recipeName: 'Far Future Plan',
+      ingredient: { item: 'plain greek yogurt', quantity: 490, unit: 'g' },
+      mealType: 'breakfast',
+    });
+    await service.generateGroceryPlan({ weekStart: farWeek, provenance });
+    await service.upsertGroceryIntent({
+      displayName: 'corn tortillas',
+      status: 'pending',
+      targetWindow: `week of ${nearWeek}`,
+      provenance,
+    });
+    const mixedA = await service.getCurrentGroceryList({ today });
+    assert.equal(mixedA.weekStart, nearWeek, 'nearest (intent, loose window) must win over farther plan');
+
+    // Case B: retarget the intent to the far week; near plan must win.
+    const intents = await service.listGroceryIntents('pending');
+    for (const intent of intents) {
+      await service.upsertGroceryIntent({ id: intent.id, displayName: intent.displayName, status: 'completed', provenance });
+    }
+    await createSingleRecipePlan(service, {
+      weekStart: nearWeek,
+      recipeId: 'grocery-actions-mixed-near-plan',
+      recipeName: 'Near Future Plan',
+      ingredient: { item: 'romaine hearts', quantity: 2, unit: 'count' },
+      mealType: 'dinner',
+    });
+    await service.generateGroceryPlan({ weekStart: nearWeek, provenance });
+    await service.upsertGroceryIntent({
+      displayName: 'dish soap',
+      status: 'pending',
+      targetWindow: farWeek,
+      provenance,
+    });
+    const mixedB = await service.getCurrentGroceryList({ today });
+    assert.equal(mixedB.weekStart, nearWeek, 'nearest (plan) must win over farther intent');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function currentGroceryListFallsBackToPastWhenNoUpcomingList() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const currentWeekStart = '2026-07-06';
+    const today = shiftDateString(currentWeekStart, 3);
+    const pastWeekStart = shiftDateString(currentWeekStart, -56);
+    await createSingleRecipePlan(service, {
+      weekStart: pastWeekStart,
+      recipeId: 'grocery-actions-past-fallback',
+      recipeName: 'Past Fallback Grocery List',
+      ingredient: { item: 'salmon fillets', quantity: 640, unit: 'g' },
+      mealType: 'dinner',
+    });
+    await service.generateGroceryPlan({ weekStart: pastWeekStart, provenance });
+
+    const currentList = await service.getCurrentGroceryList({ today });
     assert.equal(currentList.weekStart, pastWeekStart);
     assert.equal(currentList.weekRelation, 'past');
     assert.equal(currentList.stale, true);
@@ -1118,6 +1304,46 @@ async function currentGroceryListDefaultsToMostRecentPastListInsteadOfFuturePlac
     );
     assert.ok(currentList.staleReasons.some((reason) => reason.includes('most recent list')));
     assert.ok(currentList.sourceProvenance.some((source) => source.weekStart === pastWeekStart));
+    assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'salmon fillets'), true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function futureGroceryListBeyondLookaheadDoesNotHidePastList() {
+  const runtime = createTempRuntime();
+  const service = new MealsService(runtime.sqliteDb as unknown as D1Database);
+
+  try {
+    const currentWeekStart = '2026-07-06';
+    const today = shiftDateString(currentWeekStart, 3);
+    const pastWeekStart = shiftDateString(currentWeekStart, -56);
+    const farFutureWeekStart = shiftDateString(currentWeekStart, 21);
+    await createSingleRecipePlan(service, {
+      weekStart: pastWeekStart,
+      recipeId: 'grocery-actions-bounded-past',
+      recipeName: 'Bounded Past Grocery List',
+      ingredient: { item: 'salmon fillets', quantity: 640, unit: 'g' },
+      mealType: 'dinner',
+    });
+    await createSingleRecipePlan(service, {
+      weekStart: farFutureWeekStart,
+      recipeId: 'grocery-actions-bounded-future',
+      recipeName: 'Far Future Grocery List',
+      ingredient: { item: 'plain greek yogurt', quantity: 490, unit: 'g' },
+      mealType: 'breakfast',
+    });
+
+    await service.generateGroceryPlan({ weekStart: pastWeekStart, provenance });
+    await service.generateGroceryPlan({ weekStart: farFutureWeekStart, provenance });
+
+    const currentList = await service.getCurrentGroceryList({ today });
+    assert.equal(currentList.weekStart, pastWeekStart);
+    assert.equal(currentList.weekRelation, 'past');
+    assert.equal(
+      currentList.selectionReason,
+      `No current-week grocery list exists, so Fluent is showing the most recent list from ${pastWeekStart}.`,
+    );
     assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'salmon fillets'), true);
     assert.equal(currentList.groceryPlan?.raw.items.some((item) => item.name === 'plain greek yogurt'), false);
   } finally {

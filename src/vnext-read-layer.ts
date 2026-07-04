@@ -3240,6 +3240,9 @@ function mealsLivingListStatus(record: Record<string, unknown> | null): string {
   if (!record) {
     return 'absent';
   }
+  if (record.weekRelation === 'future') {
+    return 'upcoming_week_list';
+  }
   const manualIntentCount = mealsManualIntentCount(record);
   const planStatus = mealsCurrentWeekPlanStatus(record);
   if (manualIntentCount > 0 && planStatus === 'absent') {
@@ -3273,6 +3276,9 @@ function mealsNextUserQuestion(record: Record<string, unknown> | null): string {
   }
   const status = mealsWeeklyCurrentnessStatus(record);
   if (status === 'stale') {
+    if (record.weekRelation === 'future') {
+      return 'Should I treat this upcoming grocery list as the active planning target?';
+    }
     return 'Is this saved grocery list still current for this week, or should we refresh it before planning?';
   }
   if (status === 'missing') {
