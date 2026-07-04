@@ -3431,7 +3431,7 @@ function buildGroceryListViewModel(input: {
     mergeMeasurement(existing.measurements, intent.quantity, intent.unit ?? null);
     existing.bucket = mergeBucket(existing.bucket, bucket);
     existing.note = mergeSentence(existing.note, intent.notes);
-    existing.reason = existing.reason ?? null;
+    existing.reason = existing.reason ?? manualIntentCoveredReason(intent.status);
     existing.provenanceLabel = existing.recipes.length > 0 ? null : 'Manual list item';
     existing.isManual = true;
     existing.manualIntentId = intent.id;
@@ -3719,7 +3719,21 @@ function shouldIncludeIntent(intent: GroceryIntentRecord, weekStart: string, cur
 }
 
 function resolveIntentBucket(intent: GroceryIntentRecord): GroceryListItemViewModel['bucket'] {
-  return intent.status === 'completed' ? 'covered' : 'need_to_buy';
+  return isManualIntentCoveredStatus(intent.status) ? 'covered' : 'need_to_buy';
+}
+
+function isManualIntentCoveredStatus(status: string | null | undefined): boolean {
+  return status === 'completed' || status === 'purchased' || status === 'skipped';
+}
+
+function manualIntentCoveredReason(status: string | null | undefined): string | null {
+  if (status === 'skipped') {
+    return 'Skipped';
+  }
+  if (status === 'purchased') {
+    return 'Purchased';
+  }
+  return null;
 }
 
 function buildManualIntentActions(intent: GroceryIntentRecord, bucket: GroceryListItemViewModel['bucket']): GroceryListActionViewModel[] {

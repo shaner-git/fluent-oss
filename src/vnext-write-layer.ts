@@ -1799,6 +1799,54 @@ export async function archiveFluentVNextItem(
     });
   }
 
+  if (input.domain === 'meals' && input.itemType === 'recipe' && services.meals?.patchRecipe) {
+    const sourceSnapshot = archiveSourceSnapshot(input.sourceSnapshot, input.reason, input.disposition);
+    const recipe = await resolveMealsRecipeArchiveTarget(services, input.itemId, input.itemName);
+    const recipeId = stringField(recipe, 'id');
+    const recipeName = recipeTitle(recipe) ?? input.itemName ?? input.itemId ?? null;
+    if (!recipeId) {
+      return notImplementedAck('meals', 'item_archive', {
+        disposition: input.disposition ?? null,
+        itemId: input.itemId,
+        itemName: input.itemName,
+        reason: input.reason,
+        unsupportedReason: 'meals recipe archive could not resolve a matching recipe by id or exact name.',
+      }, {
+        id: input.itemId ?? null,
+        type: 'recipe',
+      });
+    }
+
+    const result = await services.meals.patchRecipe({
+      operations: [{ op: 'add', path: '/status', value: 'archived' }],
+      provenance: input.provenance,
+      recipeId,
+    });
+    const readAfterWrite = {
+      activeList: await listFluentVNextItemsPage(services, {
+        domain: 'meals',
+        itemType: 'recipe',
+        limit: 10,
+        query: recipeName,
+      }),
+      item: await getFluentVNextItem(services, { domain: 'meals', itemId: recipeId, itemType: 'recipe' }),
+    };
+    return writeAck({
+      domain: 'meals',
+      kind: 'item_archive',
+      payload: {
+        disposition: input.disposition ?? null,
+        durable: true,
+        reason: input.reason ?? null,
+        result,
+        sourceSnapshot,
+      },
+      readAfterWrite,
+      source: 'meals.patchRecipe',
+      target: { id: recipeId, type: 'recipe' },
+    });
+  }
+
   return notImplementedAck(input.domain, 'item_archive', {
     disposition: input.disposition ?? null,
     itemId: input.itemId,
@@ -1850,6 +1898,43 @@ async function resolveMealsInventoryArchiveTarget(
       stringField(record, 'canonical_item_key'),
     ].some((candidate) => normalizeArchiveLookup(candidate) === normalizedQuery);
   }) ?? null;
+}
+
+async function resolveMealsRecipeArchiveTarget(
+  services: FluentVNextWriteServices,
+  itemId: string | null | undefined,
+  itemName: string | null | undefined,
+): Promise<unknown | null> {
+  if (itemId) {
+    const direct = await services.meals?.getRecipe?.(itemId);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  const normalizedName = normalizeArchiveLookup(itemName);
+  if (!normalizedName) {
+    return null;
+  }
+
+  const recipes = await services.meals?.listRecipes?.(undefined, 'active') ?? [];
+  return recipes.find((entry) => {
+    const record = asRecord(entry);
+    const raw = asRecord(record.raw);
+    return [
+      stringField(record, 'name'),
+      stringField(record, 'title'),
+      stringField(record, 'displayName'),
+      stringField(raw, 'name'),
+      stringField(raw, 'title'),
+    ].some((candidate) => normalizeArchiveLookup(candidate) === normalizedName);
+  }) ?? null;
+}
+
+function recipeTitle(value: unknown): string | null {
+  const record = asRecord(value);
+  const raw = asRecord(record.raw);
+  return stringField(record, 'name') ?? stringField(record, 'title') ?? stringField(record, 'displayName') ?? stringField(raw, 'name') ?? stringField(raw, 'title');
 }
 
 export async function recordFluentVNextEvent(

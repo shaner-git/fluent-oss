@@ -755,7 +755,7 @@ function buildVNextManualIntentViewModel(
   if (intent.status === 'deleted') {
     return null;
   }
-  const bucket: GroceryListItemViewModel['bucket'] = intent.status === 'completed' ? 'covered' : 'need_to_buy';
+  const bucket: GroceryListItemViewModel['bucket'] = isManualIntentCoveredStatus(intent.status) ? 'covered' : 'need_to_buy';
   const actions: GroceryListActionViewModel[] = currentList.stale
     ? []
     : [
@@ -778,7 +778,7 @@ function buildVNextManualIntentViewModel(
     provenanceLabel: 'Manual list item',
     quantity: intent.quantity,
     quantityDisplay: formatVNextQuantityDisplay(intent.quantity, intent.unit ?? null),
-    reason: null,
+    reason: manualIntentCoveredReason(intent.status),
     recipes: [],
     unit: intent.unit ?? null,
   };
@@ -865,6 +865,20 @@ function buildVNextManualIntentChangeArgs(
     response_mode: 'full',
     week_start: currentList.weekStart,
   };
+}
+
+function isManualIntentCoveredStatus(status: string | null | undefined): boolean {
+  return status === 'completed' || status === 'purchased' || status === 'skipped';
+}
+
+function manualIntentCoveredReason(status: string | null | undefined): string | null {
+  if (status === 'skipped') {
+    return 'Skipped';
+  }
+  if (status === 'purchased') {
+    return 'Purchased';
+  }
+  return null;
 }
 
 function formatVNextQuantityDisplay(quantity: number | null, unit: string | null): string | null {
@@ -1986,6 +2000,10 @@ export function getGroceryListWidgetHtml(): string {
       return status || 'needs_purchase';
     }
 
+    function manualIntentStatusIsCovered(status) {
+      return status === 'completed' || status === 'purchased' || status === 'skipped';
+    }
+
     function publicChangeForStagedItem(stagedItem) {
       var action = stagedItem && stagedItem.action ? stagedItem.action : null;
       var item = stagedItem && stagedItem.item ? stagedItem.item : {};
@@ -2023,7 +2041,7 @@ export function getGroceryListWidgetHtml(): string {
             display_name: args.display_name || item.displayName,
             intent_id: args.id || args.intent_id || item.intentId || item.id,
             kind: 'update_manual_item',
-            status: args.status === 'completed' ? 'completed' : 'pending',
+            status: manualIntentStatusIsCovered(args.status) ? 'completed' : 'pending',
           };
         }
         return {
@@ -2541,7 +2559,7 @@ export function getGroceryListWidgetHtml(): string {
           return 'need_to_buy';
         }
         if (change.kind === 'update_manual_item') {
-          return change.status === 'completed' ? 'covered' : 'need_to_buy';
+          return manualIntentStatusIsCovered(change.status) ? 'covered' : 'need_to_buy';
         }
         if (change.kind === 'substitute_plan_item') {
           return 'covered';
@@ -2559,7 +2577,7 @@ export function getGroceryListWidgetHtml(): string {
       }
 
       if (action.toolName === 'meals_upsert_grocery_intent') {
-        return args.status === 'completed' ? 'covered' : 'need_to_buy';
+        return manualIntentStatusIsCovered(args.status) ? 'covered' : 'need_to_buy';
       }
 
       if (action.toolName !== 'meals_upsert_grocery_plan_action') {

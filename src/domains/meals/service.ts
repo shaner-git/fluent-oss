@@ -647,10 +647,10 @@ export class MealsService {
     const row = await this.db
       .prepare(
         tenantScopedRecipes
-          ? `SELECT id, slug, name, meal_type, status, raw_json
+          ? `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
              FROM meal_recipes
              WHERE tenant_id = ? AND id = ?`
-          : `SELECT id, slug, name, meal_type, status, raw_json
+          : `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
              FROM meal_recipes
              WHERE id = ?`,
       )
@@ -660,6 +660,9 @@ export class MealsService {
         slug: string | null;
         name: string;
         meal_type: string;
+        servings: number | null;
+        total_time_minutes: number | null;
+        active_time_minutes: number | null;
         status: string;
         raw_json: string | null;
       }>();
@@ -669,11 +672,14 @@ export class MealsService {
     }
 
     return {
+      activeTimeMinutes: row.active_time_minutes ?? null,
       id: row.id,
       slug: row.slug,
       name: row.name,
       mealType: row.meal_type,
+      servings: row.servings ?? null,
       status: row.status,
+      totalTimeMinutes: row.total_time_minutes ?? null,
       raw: safeParse(row.raw_json),
     };
   }
@@ -760,53 +766,53 @@ export class MealsService {
         ? this.db
             .prepare(
               tenantScopedRecipes
-                ? `SELECT id, slug, name, meal_type, status, raw_json
-                   FROM meal_recipes
-                   WHERE tenant_id = ? AND meal_type = ?
-                   ORDER BY name ASC`
-                : `SELECT id, slug, name, meal_type, status, raw_json
-                   FROM meal_recipes
-                   WHERE meal_type = ?
-                   ORDER BY name ASC`,
+                 ? `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
+                    FROM meal_recipes
+                    WHERE tenant_id = ? AND meal_type = ?
+                    ORDER BY name ASC`
+                 : `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
+                    FROM meal_recipes
+                    WHERE meal_type = ?
+                    ORDER BY name ASC`,
             )
             .bind(...(tenantScopedRecipes ? [this.tenantId, mealType] : [mealType]))
         : this.db
             .prepare(
               tenantScopedRecipes
-                ? `SELECT id, slug, name, meal_type, status, raw_json
-                   FROM meal_recipes
-                   WHERE tenant_id = ? AND meal_type = ? AND status = ?
-                   ORDER BY name ASC`
-                : `SELECT id, slug, name, meal_type, status, raw_json
-                   FROM meal_recipes
-                   WHERE meal_type = ? AND status = ?
-                   ORDER BY name ASC`,
+                 ? `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
+                    FROM meal_recipes
+                    WHERE tenant_id = ? AND meal_type = ? AND status = ?
+                    ORDER BY name ASC`
+                 : `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
+                    FROM meal_recipes
+                    WHERE meal_type = ? AND status = ?
+                    ORDER BY name ASC`,
             )
             .bind(...(tenantScopedRecipes ? [this.tenantId, mealType, status] : [mealType, status]))
       : includeAnyStatus
         ? this.db
             .prepare(
               tenantScopedRecipes
-                ? `SELECT id, slug, name, meal_type, status, raw_json
-                   FROM meal_recipes
-                   WHERE tenant_id = ?
-                   ORDER BY meal_type ASC, name ASC`
-                : `SELECT id, slug, name, meal_type, status, raw_json
-                   FROM meal_recipes
-                   ORDER BY meal_type ASC, name ASC`,
+                 ? `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
+                    FROM meal_recipes
+                    WHERE tenant_id = ?
+                    ORDER BY meal_type ASC, name ASC`
+                 : `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
+                    FROM meal_recipes
+                    ORDER BY meal_type ASC, name ASC`,
             )
             .bind(...(tenantScopedRecipes ? [this.tenantId] : []))
         : this.db
             .prepare(
               tenantScopedRecipes
-                ? `SELECT id, slug, name, meal_type, status, raw_json
-                   FROM meal_recipes
-                   WHERE tenant_id = ? AND status = ?
-                   ORDER BY meal_type ASC, name ASC`
-                : `SELECT id, slug, name, meal_type, status, raw_json
-                   FROM meal_recipes
-                   WHERE status = ?
-                   ORDER BY meal_type ASC, name ASC`,
+                 ? `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
+                    FROM meal_recipes
+                    WHERE tenant_id = ? AND status = ?
+                    ORDER BY meal_type ASC, name ASC`
+                 : `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
+                    FROM meal_recipes
+                    WHERE status = ?
+                    ORDER BY meal_type ASC, name ASC`,
             )
             .bind(...(tenantScopedRecipes ? [this.tenantId, status] : [status]));
 
@@ -815,6 +821,9 @@ export class MealsService {
       slug: string | null;
       name: string;
       meal_type: string;
+      servings: number | null;
+      total_time_minutes: number | null;
+      active_time_minutes: number | null;
       status: string;
       raw_json: string | null;
     }>();
@@ -824,6 +833,9 @@ export class MealsService {
       slug: row.slug,
       name: row.name,
       mealType: row.meal_type,
+      servings: row.servings ?? null,
+      totalTimeMinutes: row.total_time_minutes ?? null,
+      activeTimeMinutes: row.active_time_minutes ?? null,
       status: row.status,
       raw: safeParse(row.raw_json),
     }));
@@ -1661,7 +1673,7 @@ export class MealsService {
       throw new Error(`Recipe not found: ${input.recipeId}`);
     }
 
-    const currentRecipe = validateRecipeDocument(current.raw);
+    const currentRecipe = validateRecipeDocument(hydrateRecipeDocumentFromColumns(current));
     const nextRecipe = validateRecipeDocument(applyJsonPatch(currentRecipe, input.operations));
     if (nextRecipe.id !== input.recipeId) {
       throw new Error('Recipe patches may not change the recipe id.');
@@ -4539,6 +4551,29 @@ function sqliteIntegerOrNull(value: number | null | undefined): number | null {
 
 function sqliteBoolean(value: unknown): 0 | 1 {
   return value === true ? 1 : 0;
+}
+
+function hydrateRecipeDocumentFromColumns(recipe: MealRecipeRecord): unknown {
+  const columnBackfill: Record<string, unknown> = {
+    id: recipe.id,
+    meal_type: recipe.mealType || 'unknown',
+    name: recipe.name,
+    status: recipe.status || 'active',
+  };
+  if (recipe.servings != null) {
+    columnBackfill.servings = recipe.servings;
+  }
+  if (recipe.totalTimeMinutes != null) {
+    columnBackfill.total_time = recipe.totalTimeMinutes;
+  }
+  if (recipe.activeTimeMinutes != null) {
+    columnBackfill.active_time = recipe.activeTimeMinutes;
+  }
+
+  return {
+    ...columnBackfill,
+    ...(recipe.raw && typeof recipe.raw === 'object' && !Array.isArray(recipe.raw) ? recipe.raw as Record<string, unknown> : {}),
+  };
 }
 
 function isMissingMealPreferencesError(error: unknown): boolean {

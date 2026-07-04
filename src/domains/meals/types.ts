@@ -70,11 +70,14 @@ export interface MealPlanEntryRecord {
 }
 
 export interface MealRecipeRecord {
+  activeTimeMinutes: number | null;
   id: string;
   slug: string | null;
   name: string;
   mealType: string;
+  servings: number | null;
   status: string;
+  totalTimeMinutes: number | null;
   raw: unknown;
 }
 
