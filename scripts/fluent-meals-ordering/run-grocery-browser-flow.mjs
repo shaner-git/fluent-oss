@@ -95,25 +95,6 @@ export async function runGroceryBrowserFlow(options = {}) {
       : null;
   const browserUseWebSocketUrl =
     String(options.browserUseWebSocketUrl || process.env.FLUENT_BROWSER_USE_CDP_WS || process.env.BU_CDP_WS || '').trim() || null;
-  const purchaseRunnerToken = String(
-    options.purchaseRunnerToken || process.env.FLUENT_PURCHASE_RUNNER_TOKEN || '',
-  ).trim();
-
-  if (browserBackend === 'cloudflare-browser-rendering') {
-    return runHostedCloudflareBrowserFlow({
-      baseUrl,
-      browserBackend,
-      forceOrderSync,
-      orderId,
-      purchaseRunnerToken,
-      reportPath,
-      store,
-      syncConfirmedOrder,
-      syncDeliveryCalendar,
-      weekStart,
-    });
-  }
-
   const stageResults = {};
   const beginStage = (name, details = {}) => {
     stageResults[name] = {
@@ -425,11 +406,7 @@ export async function runGroceryBrowserFlow(options = {}) {
       ok: readyState.executionReady === true,
       checkedAt: new Date().toISOString(),
       browserBackend: adapter.backend,
-      browserProvider: isBrowserUseBackend(browserBackend)
-        ? 'browser-use'
-        : browserBackend === 'cloudflare-browser-rendering'
-          ? 'cloudflare'
-          : 'local',
+      browserProvider: isBrowserUseBackend(browserBackend) ? 'browser-use' : 'local',
       remoteSessionId: adapter.remoteSessionId ?? null,
       remoteRegion: adapter.remoteRegion ?? null,
       sessionReused: adapter.sessionReused === true,
@@ -565,11 +542,7 @@ export async function runGroceryBrowserFlow(options = {}) {
       ok: false,
       checkedAt: new Date().toISOString(),
       browserBackend: adapter?.backend ?? (browserBackend === 'local' ? 'playwright' : browserBackend),
-      browserProvider: isBrowserUseBackend(browserBackend)
-        ? 'browser-use'
-        : browserBackend === 'cloudflare-browser-rendering'
-          ? 'cloudflare'
-          : 'local',
+      browserProvider: isBrowserUseBackend(browserBackend) ? 'browser-use' : 'local',
       remoteSessionId: adapter?.remoteSessionId ?? null,
       remoteRegion: adapter?.remoteRegion ?? null,
       sessionReused: adapter?.sessionReused === true,
@@ -852,7 +825,6 @@ async function main() {
     browserBackend: args.browserBackend,
     weekStart: args.weekStart,
     exportPath: args.file || args.export,
-    purchaseRunnerToken: args.purchaseRunnerToken,
     reportPath: args.report || args.output,
     store: args.store,
     headless: args.headless,
@@ -922,109 +894,6 @@ function todayDateStamp() {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function runHostedCloudflareBrowserFlow(options) {
-  if (!options.purchaseRunnerToken) {
-    throw new Error(
-      'Cloudflare Browser Rendering backend requires FLUENT_PURCHASE_RUNNER_TOKEN or --purchase-runner-token.',
-    );
-  }
-  if (!options.weekStart) {
-    throw new Error('Cloudflare Browser Rendering backend requires a planning week.');
-  }
-
-  const createResponse = await fetch(`${options.baseUrl}/internal/purchase-runs`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-fluent-purchase-runner-token': options.purchaseRunnerToken,
-    },
-    body: JSON.stringify({
-      browserBackendPreference: 'cloudflare_browser_rendering',
-      forceOrderSync: options.forceOrderSync === true,
-      orderId: options.orderId ?? null,
-      retailer: options.store,
-      syncConfirmedOrder: options.syncConfirmedOrder === true,
-      syncDeliveryCalendar: options.syncDeliveryCalendar === true,
-      weekStart: options.weekStart,
-    }),
-  });
-
-  const createText = await createResponse.text();
-  const createPayload = createText ? JSON.parse(createText) : null;
-  if (!createResponse.ok) {
-    throw new Error(createPayload?.error || `Hosted Cloudflare browser flow failed with ${createResponse.status}.`);
-  }
-
-  const runId = String(createPayload?.runId || '').trim();
-  if (!runId) {
-    throw new Error('Hosted Cloudflare browser flow did not return a purchase run id.');
-  }
-
-  const deadline = Date.now() + 10 * 60 * 1000;
-  while (Date.now() < deadline) {
-    const statusResponse = await fetch(
-      `${options.baseUrl}/internal/purchase-runs/${encodeURIComponent(runId)}`,
-      {
-        method: 'GET',
-        headers: {
-          'x-fluent-purchase-runner-token': options.purchaseRunnerToken,
-        },
-      },
-    );
-    const statusText = await statusResponse.text();
-    const statusPayload = statusText ? JSON.parse(statusText) : null;
-    if (!statusResponse.ok) {
-      throw new Error(
-        statusPayload?.error || `Hosted Cloudflare browser flow status check failed with ${statusResponse.status}.`,
-      );
-    }
-
-    const stateStatus = String(statusPayload?.state?.status || '').trim().toLowerCase();
-    const artifact = statusPayload?.artifact;
-    if (artifact && ['complete', 'errored', 'needs_manual_recovery', 'cancelled'].includes(stateStatus)) {
-      if (options.reportPath) {
-        await fs.mkdir(path.dirname(options.reportPath), { recursive: true });
-        await fs.writeFile(options.reportPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
-      }
-      return artifact;
-    }
-
-    if (stateStatus === 'waiting') {
-      const waitingResult = {
-        ok: false,
-        checkedAt: new Date().toISOString(),
-        browserBackend: 'cloudflare-browser-rendering',
-        browserFlowMode: 'fluent_hosted_worker',
-        executionReady: false,
-        store: options.store,
-        runId,
-        waitingForVerification: true,
-        verificationRequest: statusPayload?.state?.verificationRequest ?? null,
-        verificationSubmission: {
-          endpoint: `${options.baseUrl}/internal/purchase-runs/${encodeURIComponent(runId)}/verification`,
-          header: 'x-fluent-purchase-runner-token',
-          method: 'POST',
-        },
-      };
-      if (options.reportPath) {
-        await fs.mkdir(path.dirname(options.reportPath), { recursive: true });
-        await fs.writeFile(options.reportPath, `${JSON.stringify(waitingResult, null, 2)}\n`, 'utf8');
-      }
-      return waitingResult;
-    }
-
-    if (['complete', 'errored', 'needs_manual_recovery', 'cancelled'].includes(stateStatus)) {
-      throw new Error(
-        `Hosted Cloudflare browser flow ended with state "${stateStatus}" before it persisted an artifact.`,
-      );
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 2_500));
-  }
-
-  throw new Error(`Hosted Cloudflare browser flow timed out waiting for purchase run ${runId}.`);
-}
-
 function extractPayload(result) {
   const structured = result?.structuredContent;
   if (!structured || typeof structured !== 'object') {
@@ -1041,7 +910,7 @@ function printUsage() {
       'Options:',
       '  --base-url <url>                       Hosted Fluent base URL for order preflight',
       '  --access-token <token>                Hosted Fluent bearer token for order preflight',
-      '  --browser-backend <mode>              local|browser-use-local-cdp|browser-use-cloud-cdp|cloudflare-browser-rendering',
+      '  --browser-backend <mode>              local|browser-use-local-cdp|browser-use-cloud-cdp',
       '  --browser-use-api-key <token>         Browser Use Cloud API key override',
       '  --browser-use-api-base-url <url>      Browser Use Cloud API base URL override',
       '  --browser-use-session-id <id>         Resume an existing Browser Use Cloud browser session',
@@ -1050,7 +919,6 @@ function printUsage() {
       '  --browser-use-proxy-country-code <cc> Browser Use Cloud proxy country code or empty to disable',
       '  --browser-use-timeout-minutes <n>     Browser Use Cloud session timeout in minutes',
       '  --browser-use-web-socket-url <url>    Explicit local Browser Use/local CDP websocket URL',
-      '  --purchase-runner-token <token>       Internal token for hosted Cloudflare purchase routes',
       '  --week-start <YYYY-MM-DD>             Override the planning week when the export file lacks it',
       '  --report <path>                         Write the execution report JSON to this path',
       '  --store voila                           Retailer profile (voila only in this phase)',

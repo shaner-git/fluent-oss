@@ -3,7 +3,6 @@ export const SUPPORTED_BROWSER_BACKENDS = [
   'local',
   'browser-use-local-cdp',
   'browser-use-cloud-cdp',
-  'cloudflare-browser-rendering',
 ];
 
 export function normalizeBrowserBackend(value) {
