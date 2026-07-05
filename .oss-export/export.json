@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-05T19:08:03.003Z",
-  "generatedFromCommit": "f9c52d651703f8eab236c4208993a6e2efcade82",
+  "generatedAt": "2026-07-05T20:51:09.433Z",
+  "generatedFromCommit": "2cf8d34b8168eb1fe2e338846b7f9e1648daa4ad",
   "sourceManifest": "ops/export-oss.manifest.json",
   "strategy": "curated-export"
 }

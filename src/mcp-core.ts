@@ -104,7 +104,7 @@ const fluentVNextItemQuerySchema = z.string().min(1).max(120).describe(
   'Optional saved-item search text. For Meals recipes, pass a recipe title or stable recipe ID before fetching the exact recipe with fluent_get_item.',
 );
 const fluentVNextSurfaceSchema = z.literal('meals_grocery_list').describe(
-  'Candidate vNext app surface to render. Only meals_grocery_list is implemented in the full runtime, and it is intentionally omitted from the curated public profile until host proof passes.',
+  'Candidate app surface to render. Only meals_grocery_list is implemented in the full runtime, and it is intentionally omitted from the curated public profile until host proof passes.',
 );
 const fluentVNextMediaBundlePurposeSchema = z.enum(['saved_item_review', 'style_purchase_advice', 'visual_evidence_check']).describe(
   'Reason media is being fetched. Use style_purchase_advice for shopping/style advice, saved_item_review for an existing saved item, or visual_evidence_check when checking what images are available.',
@@ -1278,7 +1278,7 @@ export function registerCoreMcpSurface(
     withVNextReadSecurity({
       title: 'Get Fluent Shared Profile',
       description:
-        'Fetch the vNext shared profile envelope: core profile facts, capabilities, boundaries, and provenance-ready fact slots. Domain-specific payloads stay typed and are not flattened into generic memory.',
+        'Fetch the shared profile envelope: core profile facts, capabilities, boundaries, and provenance-ready fact slots. Domain-specific payloads stay typed and are not flattened into generic memory.',
       inputSchema: {
         domains: z.array(fluentVNextDomainSchema).optional().describe('Optional domains to include in the shared profile envelope. Omit for the canonical public MCP profile.'),
         include_provenance: z.boolean().optional().describe('Set true only when the user asks where profile facts came from. Omit for a compact profile read.'),
@@ -1297,7 +1297,7 @@ export function registerCoreMcpSurface(
     withVNextReadSecurity({
       title: 'Start Here: Fluent Context',
       description:
-        'Fetch a compact vNext context packet for a domain and intent. Use this first for broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal planning: call fluent_get_context with domain="meals" and intent="planning". The host model owns reasoning and final judgment; Fluent supplies durable context, typed items, evidence gaps, freshness, and suggested writeback boundaries.',
+        'Fetch a compact context packet for a domain and intent. Use this first for broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal planning: call fluent_get_context with domain="meals" and intent="planning". The host model owns reasoning and final judgment; Fluent supplies durable context, typed items, evidence gaps, freshness, and suggested writeback boundaries.',
       inputSchema: {
         amount: z.number().min(0).optional().describe('Required for domain="style", intent="purchase" with a candidate. Candidate purchase amount in CAD for budget arithmetic; it must match candidate.price_text or fall within its cited range. Fluent will not infer or default it.'),
         candidate: fluentVNextPurchaseCandidateSchema.optional(),
@@ -1329,9 +1329,9 @@ export function registerCoreMcpSurface(
   server.registerTool(
     'fluent_list_items',
     withVNextReadSecurity({
-      title: 'List Fluent vNext Items',
+      title: 'List Fluent Items',
       description:
-        'List typed vNext domain items such as Meals recipes, the living grocery list, inventory items, and Style closet items. For saved Meals recipe discovery, pass item_type="recipe" plus query for the recipe title or ID, then call fluent_get_item with the returned ID before deriving grocery-list deltas. The shared envelope is generic, but the payload remains the canonical typed domain record.',
+        'List typed domain items such as Meals recipes, the living grocery list, inventory items, and Style closet items. For saved Meals recipe discovery, pass item_type="recipe" plus query for the recipe title or ID, then call fluent_get_item with the returned ID before deriving grocery-list deltas. The shared envelope is generic, but the payload remains the canonical typed domain record.',
       inputSchema: {
         cursor: z.string().optional().describe('Optional opaque pagination cursor returned by a prior Fluent list call. Omit for the first page.'),
         domain: fluentVNextDomainSchema,
@@ -1358,9 +1358,9 @@ export function registerCoreMcpSurface(
   server.registerTool(
     'fluent_get_item',
     withVNextReadSecurity({
-      title: 'Get Fluent vNext Item',
+      title: 'Get Fluent Item',
       description:
-        'Fetch one typed vNext domain item with its canonical payload and provenance hooks. For Meals meal plans, use item_type="meal_plan" with item_id="current_meal_plan", a saved plan ID, or a week-start date returned by fluent_list_items. For Meals recipes, use the stable recipe ID returned by fluent_list_items; an exact saved recipe title is accepted as a fallback lookup, but do not invent IDs.',
+        'Fetch one typed domain item with its canonical payload and provenance hooks. For Meals meal plans, use item_type="meal_plan" with item_id="current_meal_plan", a saved plan ID, or a week-start date returned by fluent_list_items. For Meals recipes, use the stable recipe ID returned by fluent_list_items; an exact saved recipe title is accepted as a fallback lookup, but do not invent IDs.',
       inputSchema: {
         domain: fluentVNextDomainSchema,
         item_id: z.string().describe('Stable saved item ID returned by fluent_list_items. For Meals meal plans, current_meal_plan and week-start dates are accepted. For Meals recipes, an exact saved recipe title is accepted when no ID is available.'),
@@ -1385,7 +1385,7 @@ export function registerCoreMcpSurface(
   server.registerTool(
     'fluent_list_evidence',
     withVNextReadSecurity({
-      title: 'List Fluent vNext Evidence',
+      title: 'List Fluent Evidence',
       description:
         'List evidence, provenance, source snapshots, event history, or evidence gaps for a subject or claim. For Meals recipe-to-grocery reasoning, pass the saved recipe ID or exact saved recipe title as subject to ground ingredients before proposing a grocery-list delta. Evidence can inform host reasoning, but it is not a final plan, style verdict, medical judgment, or checkout action.',
       inputSchema: {
@@ -1409,13 +1409,13 @@ export function registerCoreMcpSurface(
   server.registerTool(
     'fluent_get_media_bundle',
     withVNextStyleReadSecurity({
-      title: 'Get Fluent vNext Media Bundle',
+      title: 'Get Fluent Media Bundle',
       description:
         'Fetch host-inspectable media references and constraints for a subject. Fluent provides media provenance and delivery; the host model must inspect images before making visual claims.',
       inputSchema: {
         candidate: fluentVNextMediaCandidateSchema.optional(),
         delivery_mode: fluentVNextMediaBundleDeliveryModeSchema.optional(),
-        domain: z.enum(['style']).describe('Only style media bundles are implemented in the public vNext profile.'),
+        domain: z.enum(['style']).describe('Only style media bundles are implemented in the public profile.'),
         item_ids: z.array(z.string()).max(10).optional().describe(
           'Optional saved Fluent style item IDs to include as visual references or comparators. Use IDs returned by fluent_list_items or fluent_get_item.',
         ),
@@ -1493,9 +1493,9 @@ export function registerCoreMcpSurface(
   server.registerTool(
     'fluent_update_shared_profile_patch',
     withVNextWriteSecurity({
-      title: 'Update Fluent vNext Shared Profile Patch',
+      title: 'Update Fluent Shared Profile Patch',
       description:
-        'Apply an explicit, provenance-backed vNext profile patch through the canonical shared or domain profile service. Use only when the user intends to change durable Fluent memory.',
+        'Apply an explicit, provenance-backed profile patch through the canonical shared or domain profile service. Use only when the user intends to change durable Fluent memory.',
       inputSchema: {
         domain: fluentVNextSharedProfileWriteDomainSchema,
         patch: fluentVNextSharedProfilePatchSchema,
@@ -2194,9 +2194,9 @@ export function registerCoreMcpSurface(
   server.registerTool(
     'fluent_upsert_item',
     withVNextWriteSecurity({
-      title: 'Upsert Fluent vNext Item',
+      title: 'Upsert Fluent Item',
       description:
-        'Create or update a typed vNext domain item through the canonical domain service and return read-after-write proof. The generic envelope does not bypass domain validators.',
+        'Create or update a typed domain item through the canonical domain service and return read-after-write proof. The generic envelope does not bypass domain validators.',
       inputSchema: {
         domain: fluentVNextDomainSchema,
         item: fluentVNextItemInputSchema,
@@ -2236,9 +2236,9 @@ export function registerCoreMcpSurface(
   server.registerTool(
     'fluent_archive_item',
     withVNextBudgetWriteSecurity({
-      title: 'Archive Fluent vNext Item',
+      title: 'Archive Fluent Item',
       description:
-        'Archive a typed vNext domain item through the canonical domain service with an explicit reason, disposition, provenance, and read-after-write proof. Use for returned, sold, donated, gifted, worn-out, never-purchased, duplicate, or otherwise gone items. This removes an item from active memory without deleting audit history.',
+        'Archive a typed domain item through the canonical domain service with an explicit reason, disposition, provenance, and read-after-write proof. Use for returned, sold, donated, gifted, worn-out, never-purchased, duplicate, or otherwise gone items. This removes an item from active memory without deleting audit history.',
       inputSchema: {
         approval: fluentVNextRecipeWriteApprovalSchema,
         domain: fluentVNextDomainSchema,
@@ -2287,7 +2287,7 @@ export function registerCoreMcpSurface(
   server.registerTool(
     'fluent_record_event',
     withVNextWriteSecurity({
-      title: 'Record Fluent vNext Event',
+      title: 'Record Fluent Event',
       description:
         'Record explicit user/model-observed outcomes, feedback, decisions, or evidence with provenance. Fluent stores the event; the host model remains responsible for reasoning from it.',
       inputSchema: {

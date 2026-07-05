@@ -80,7 +80,7 @@ export interface FluentVNextReadServices {
 
 export interface FluentVNextSharedProfile {
   object: 'SharedProfile';
-  source: 'fluent_vnext_read_layer';
+  source: 'fluent_read_layer';
   profile: unknown;
   capabilities: unknown;
   facts: FluentVNextSharedFact[];
@@ -249,7 +249,7 @@ export async function getFluentVNextSharedProfile(
   const facts = buildSharedFactsFromPersonFacts(profile, personFacts);
   return {
     object: 'SharedProfile',
-    source: 'fluent_vnext_read_layer',
+    source: 'fluent_read_layer',
     profile,
     capabilities,
     facts,
@@ -1346,7 +1346,7 @@ export async function getFluentVNextItem(
         responseGuidance: {
           object: 'ResponseGuidance',
           domain: 'style',
-          source: 'fluent_vnext_read_layer',
+          source: 'fluent_read_layer',
           reanalyzeDirective: directive,
         },
       }
@@ -1468,7 +1468,7 @@ function contextPacket(input: {
     relevantItems: input.relevantItems ?? [],
     evidenceGaps: input.evidenceGaps ?? [],
     freshness: {
-      source: 'fluent_vnext_read_layer',
+      source: 'fluent_read_layer',
       status: input.freshnessStatus ?? 'current',
     },
     suggestedWritebacks: input.suggestedWritebacks ?? [],
@@ -2001,7 +2001,7 @@ async function findMealsRecipeEvidence(
     : await findMealsRecipeByQuery(meals, subject);
   if (!recipe) {
     return [
-      evidence('meals', subject, claim, 'fluent_vnext_read_layer.recipe_lookup', {
+      evidence('meals', subject, claim, 'fluent_read_layer.recipe_lookup', {
         object: 'RecipeLookupEvidence',
         matched: false,
         query: subject,
@@ -2011,7 +2011,7 @@ async function findMealsRecipeEvidence(
   }
   if (recipe.kind === 'ambiguous') {
     return [
-      evidence('meals', subject, claim, 'fluent_vnext_read_layer.recipe_lookup', {
+      evidence('meals', subject, claim, 'fluent_read_layer.recipe_lookup', {
         object: 'RecipeLookupEvidence',
         matched: false,
         ambiguous: true,
@@ -2024,7 +2024,7 @@ async function findMealsRecipeEvidence(
   }
   const id = itemId(recipe.recipe, subject);
   return [
-    evidence('meals', id, claim, 'fluent_vnext_read_layer.recipe_lookup', {
+    evidence('meals', id, claim, 'fluent_read_layer.recipe_lookup', {
       object: 'RecipeLookupEvidence',
       matched: true,
       match: recipe.match,
@@ -2088,7 +2088,7 @@ async function findMealsGroceryListEvidence(
   const grocery = await meals.getCurrentGroceryList?.({ skipCalibrationContext: true });
   if (!grocery) {
     return [
-      evidence('meals', subject ?? 'current_grocery_list', claim, 'fluent_vnext_read_layer.grocery_list_lookup', {
+      evidence('meals', subject ?? 'current_grocery_list', claim, 'fluent_read_layer.grocery_list_lookup', {
         object: 'GroceryListEvidence',
         matched: false,
         guidance:
@@ -2099,7 +2099,7 @@ async function findMealsGroceryListEvidence(
   const query = firstGroceryEvidenceQuery(subject, claim);
   const matches = groceryListEvidenceMatches(grocery, query);
   return [
-    evidence('meals', 'current_grocery_list', claim, 'fluent_vnext_read_layer.grocery_list_lookup', {
+    evidence('meals', 'current_grocery_list', claim, 'fluent_read_layer.grocery_list_lookup', {
       object: 'GroceryListEvidence',
       matched: true,
       listId: stringField(grocery, 'listId') ?? stringField(grocery, 'id') ?? 'current_grocery_list',
@@ -2911,9 +2911,9 @@ function styleResponseGuidance(intent: FluentVNextReadIntent, context?: unknown)
     object: 'ResponseGuidance',
     domain: 'style',
     intent,
-    source: 'fluent_vnext_read_layer',
+    source: 'fluent_read_layer',
     productBoundary:
-      'Public vNext Style is a context, evidence, provenance, and media-boundary surface. Fluent does not make final buy/wait/skip verdicts, browse retailer pages, extract product pages, fill carts, check out, or render purchase widgets.',
+      'Public Style is a context, evidence, provenance, and media-boundary surface. Fluent does not make final buy/wait/skip verdicts, browse retailer pages, extract product pages, fill carts, check out, or render purchase widgets.',
     visualBoundary:
       'Before making visual claims, the host model must inspect user-provided images or media returned by fluent_get_media_bundle. If no inspectable image is available, ask for an upload, direct image URL, or description instead of presenting a final style judgment.',
     attributionBoundary:
@@ -2929,11 +2929,11 @@ function styleResponseGuidance(intent: FluentVNextReadIntent, context?: unknown)
     avoidUserFacingClaims: [
       'Do not say Fluent inspected pixels; the host model performs visual inspection.',
       'Do not say Fluent completed, staged, or can complete a purchase.',
-      'Do not expose old Style purchase-analysis, setup-widget, product-page extraction, or render-tool names as public vNext behavior.',
-      'Do not write arbitrary Style memory through the public vNext profile; only the typed closet detail, photo, and no-longer-owned flows are public.',
+      'Do not expose old Style purchase-analysis, setup-widget, product-page extraction, or render-tool names as public behavior.',
+      'Do not write arbitrary Style memory through the public profile; only the typed closet detail, photo, and no-longer-owned flows are public.',
     ],
     ...(pendingReanalyze ? { pendingReanalyze } : {}),
-    writeBoundary: 'Public vNext exposes only typed Style closet-management writes. Ask for explicit confirmation and provenance before changing closet details, saving a host-inspected image URL, or marking an item no longer owned.',
+    writeBoundary: 'The public profile exposes only typed Style closet-management writes. Ask for explicit confirmation and provenance before changing closet details, saving a host-inspected image URL, or marking an item no longer owned.',
   };
   if (intent !== 'purchase') {
     return baseGuidance;
@@ -2966,16 +2966,16 @@ function reservedDomainResponseGuidance(domain: FluentVNextDomain, intent: Fluen
     object: 'ResponseGuidance',
     domain,
     intent,
-    source: 'fluent_vnext_read_layer',
+    source: 'fluent_read_layer',
     productBoundary:
-      `${domainLabel} is reserved and is not a public Fluent vNext product surface yet. Treat this ContextPacket as an explicit no-data boundary, not as evidence of readiness or missing setup.`,
+      `${domainLabel} is reserved and is not a public Fluent product surface yet. Treat this ContextPacket as an explicit no-data boundary, not as evidence of readiness or missing setup.`,
     attributionBoundary:
       `Do not attribute ${domainLabel} facts, recommendations, readiness, transactions, accounts, budgets, health goals, medical context, or private records to Fluent from this packet.`,
     allowedPublicReads: ['fluent_get_context', 'fluent_get_shared_profile'],
     avoidUserFacingClaims: [
       `Do not say Fluent knows ${domainLabel} details.`,
       `Do not present ${domainLabel} advice as grounded in Fluent.`,
-      'Do not request or expose raw private records through public vNext.',
+      'Do not request or expose raw private records through the public profile.',
       'Do not save public writes for this domain.',
     ],
     writeBoundary: 'No public write schema exists for this domain.',
@@ -2988,7 +2988,7 @@ function mealsResponseGuidance(intent: FluentVNextReadIntent): unknown {
     object: 'ResponseGuidance',
     domain: 'meals',
     intent,
-    source: 'fluent_vnext_read_layer',
+    source: 'fluent_read_layer',
     attributionBoundary:
       'If the user asks what Fluent knows, answer from compactFacts, relevantItems, evidenceGaps, freshness, and sourceReads only. Do not call external memory or general model assumptions Fluent knowledge.',
     externalMemoryBoundary:
@@ -3118,7 +3118,7 @@ function buildMealsSuggestedWritebacks(
         value: 'Sunday',
       },
       requiresExplicitUserApproval: true,
-      source: grocery ? 'meals.getCurrentGroceryList' : 'fluent_vnext_read_layer',
+      source: grocery ? 'meals.getCurrentGroceryList' : 'fluent_read_layer',
     });
   }
 
@@ -3142,7 +3142,7 @@ function buildMealsSuggestedWritebacks(
         value: portableCaptureCandidate.value,
       },
       requiresExplicitUserApproval: true,
-      source: 'fluent_vnext_read_layer',
+      source: 'fluent_read_layer',
     });
   }
 
@@ -3316,7 +3316,7 @@ function mealsCurrentnessFact(grocery: unknown, intent: FluentVNextReadIntent): 
     trustLabel: record?.trustLabel ?? null,
     trustState: record?.trustState ?? null,
     weekRelation: record?.weekRelation ?? null,
-    source: record ? 'meals.getCurrentGroceryList' : 'fluent_vnext_read_layer',
+    source: record ? 'meals.getCurrentGroceryList' : 'fluent_read_layer',
   };
 }
 

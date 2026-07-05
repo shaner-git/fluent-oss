@@ -2449,11 +2449,11 @@ function notImplementedAck(
     kind,
     status: 'not_implemented',
     target,
-    source: 'fluent_vnext_write_layer',
+    source: 'fluent_write_layer',
     payload,
     readAfterWrite: null,
     boundaries: [
-      'This vNext write primitive is intentionally narrower than the full legacy surface.',
+      'This Fluent write primitive is intentionally narrower than the full legacy surface.',
       'Unsupported domain/item combinations are rejected as not implemented instead of flattening typed state.',
     ],
   };

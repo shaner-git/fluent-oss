@@ -191,7 +191,7 @@ const mealsCalibrationSignalKindSchema = z.enum([
 const mealsCalibrationSignalStatusSchema = z.enum(['confirmed', 'corrected', 'rejected']);
 const mealsPantryCalibrationStatusSchema = z.enum(['stale', 'accidental', 'not_representative', 'representative']);
 const vNextMealsPlanningFrontDoor =
-  'For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, this is a detail follow-up, not a starter; do not use this as the first read. Start with fluent_get_context(domain="meals", intent="planning") when available, then use this tool only if the user asks for its specific detail or the vNext packet says that detail is required.';
+  'For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, this is a detail follow-up, not a starter; do not use this as the first read. Start with fluent_get_context(domain="meals", intent="planning") when available, then use this tool only if the user asks for its specific detail or the context packet says that detail is required.';
 function buildWidgetMeta(description: string, origin: string) {
   return {
     'openai/widgetCSP': {
@@ -876,27 +876,27 @@ export function registerMealsMcpSurface(
   registerGroceryListWidgetResource(
     'fluent-vnext-meals-grocery-list-widget-legacy-v1',
     MEALS_GROCERY_LIST_VNEXT_LEGACY_TEMPLATE_URI,
-    'Fluent vNext Grocery List Candidate Widget Previous v1',
+    'Fluent Grocery List Candidate Widget Previous v1',
   );
   registerGroceryListWidgetResource(
     'fluent-vnext-meals-grocery-list-widget-previous-v2',
     MEALS_GROCERY_LIST_VNEXT_PREVIOUS_TEMPLATE_URI,
-    'Fluent vNext Grocery List Candidate Widget Previous v2',
+    'Fluent Grocery List Candidate Widget Previous v2',
   );
   registerGroceryListWidgetResource(
     'fluent-vnext-meals-grocery-list-widget-v3',
     MEALS_GROCERY_LIST_VNEXT_BRIDGE_TEMPLATE_URI,
-    'Fluent vNext Grocery List Candidate Widget v3',
+    'Fluent Grocery List Candidate Widget v3',
   );
   registerGroceryListWidgetResource(
     'fluent-vnext-meals-grocery-list-widget-v4',
     MEALS_GROCERY_LIST_VNEXT_MULTIFRAME_TEMPLATE_URI,
-    'Fluent vNext Grocery List Candidate Widget v4',
+    'Fluent Grocery List Candidate Widget v4',
   );
   registerGroceryListWidgetResource(
     'fluent-vnext-meals-grocery-list-widget-v5',
     MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
-    'Fluent vNext Grocery List Candidate Widget v5',
+    'Fluent Grocery List Candidate Widget v5',
   );
 
   const registerPantryDashboardWidgetResource = (name: string, uri: string, title = 'Pantry Dashboard Widget') =>
@@ -2103,7 +2103,7 @@ export function registerMealsMcpSurface(
     {
       title: 'Detail Only: Meals Setup Calibration',
       description:
-        'Read the detailed Meals setup/calibration model for explicit setup, returning/imported inventory calibration, inferred preference confirmation, or starter meal preference collection. For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, start with fluent_get_context(domain="meals", intent="planning") when available; use this tool only when the vNext context packet is unavailable or the user asks for setup/calibration detail. At-home ownership, old plans, accepted recipes, and grocery actions are evidence only; say "your kitchen inventory suggests" or "your meal history suggests" unless the user explicitly confirmed the preference.',
+        'Read the detailed Meals setup/calibration model for explicit setup, returning/imported inventory calibration, inferred preference confirmation, or starter meal preference collection. For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, start with fluent_get_context(domain="meals", intent="planning") when available; use this tool only when the context packet is unavailable or the user asks for setup/calibration detail. At-home ownership, old plans, accepted recipes, and grocery actions are evidence only; say "your kitchen inventory suggests" or "your meal history suggests" unless the user explicitly confirmed the preference.',
       inputSchema: {},
       annotations: {
         readOnlyHint: true,

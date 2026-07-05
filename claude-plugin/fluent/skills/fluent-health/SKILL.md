@@ -18,7 +18,6 @@ Use Fluent only to check public capability/context availability. If the canonica
 - Do not provide medical diagnosis, injury triage, rehab treatment, dermatology guidance, or clinical advice.
 - Casual fitness conversation can proceed without Fluent tools when saved Fluent state is not needed.
 - If Meals context is relevant to an explicit food-planning request, use the Meals path, not Health.
-- If Claude cannot access canonical Fluent tools in the current session, do not answer from prior memory as if it came from Fluent.
 
 ## Expected Answer Shape
 

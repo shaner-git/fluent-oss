@@ -5,8 +5,6 @@ description: Use when the user wants Fluent Meals planning, recipes, grocery cur
 
 # Fluent Meals
 
-Use this skill for Meals help grounded in the canonical Fluent `/mcp` public vNext profile.
-
 See [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-surface-routing-matrix.md) for host-specific rendering rules.
 
 ## Core Rules
@@ -31,8 +29,6 @@ See [docs/fluent-host-surface-routing-matrix.md](../../../../docs/fluent-host-su
 - For saved-plan grocery deltas, make the grocery-list week explicit and consistent: read the grocery list for the week you intend to update, pass the same week as `week_start`, and omit `target_window` unless it exactly matches that readback week. Do not claim a grocery item was added until the same-week read-after-write shows it.
 - Do not use `fluent_save_meal_plan` for tentative drafts, server-side plan generation, hidden generated candidates, grocery-list deltas, pantry/fridge quantity truth, cooking events, inventory, or generic items.
 - Do not run retailer automation, checkout, browser execution, or grocery ordering from Fluent Core.
-- Do not use Claude visualizer widgets, `visualize:show_widget`, MCP Apps resources, or render adapters as public vNext behavior.
-- If Claude cannot access canonical Fluent tools in the current session, say the Fluent read is unavailable and do not answer from prior memory as if it came from Fluent.
 - If the connected runtime only shows old `meals_*` detail tools for this public flow, treat the connection as stale or pre-vNext. Do not call those tools; ask the user to reconnect or refresh Fluent.
 
 ## Normal Operating Pattern

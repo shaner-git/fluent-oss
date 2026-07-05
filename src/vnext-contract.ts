@@ -568,7 +568,7 @@ export const FLUENT_VNEXT_HOST_PROFILES = [
     excludes: [
       'developer or operator diagnostics as default product behavior',
       'external execution as Fluent Core behavior',
-      'legacy detail tools that bypass vNext context-first safety',
+      'legacy detail tools that bypass context-first safety',
       'generic item upsert/event writes until their domain-specific schemas survive zero-based host review',
       'grocery list mutation outside the bounded fluent_apply_grocery_list_change schema',
     ],
@@ -588,7 +588,7 @@ export const FLUENT_VNEXT_HOST_PROFILES = [
     role: 'Private migration and equivalence profile for old tool names during cutover.',
     conceptNames: [],
     surfacePolicy:
-      'Maps old tools to vNext concepts only for migration and deterministic equivalence checks. It is not a launchable public profile.',
+      'Maps old tools to current concepts only for migration and deterministic equivalence checks. It is not a launchable public profile.',
     excludes: ['public app submission', 'new host guidance', 'portfolio demo center'],
   },
 ] as const satisfies readonly FluentVNextHostProfile[];

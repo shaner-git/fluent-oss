@@ -79,7 +79,7 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     rules: [
       'Do not run the weekly planning loop for casual meal chat.',
       'For broad planning/currentness/"what Fluent knows" prompts, start with fluent_get_context(domain="meals", intent="planning") when available so confirmed facts, inferred signals, stale or missing grocery context, evidence gaps, and write boundaries stay together.',
-      'Use legacy detail reads such as meals_get_preferences, meals_get_plan, meals_list_plan_history, meals_get_inventory_summary, and meals_list_recipes only when the user asks for their specific detail or the vNext context packet is unavailable.',
+      'Use legacy detail reads such as meals_get_preferences, meals_get_plan, meals_list_plan_history, meals_get_inventory_summary, and meals_list_recipes only when the user asks for their specific detail or the context packet is unavailable.',
       'Only pass Health training context when the user explicitly asks meals to support training, recovery, cutting, bulking, or workouts.',
       'Treat named weekdays or dates as pinned slot constraints, not soft preferences.',
       'Generate a candidate first; materialize it only after the user approves.',
@@ -87,8 +87,8 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     ],
     defaultFlow: [
       'Read fluent_get_context(domain="meals", intent="planning") first for broad planning/currentness.',
-      'Check readiness with fluent_get_capabilities or fluent_get_next_actions only if the vNext context packet is unavailable or says lifecycle state blocks the request.',
-      'Read meals_get_plan, meals_list_plan_history, meals_get_inventory_summary, or meals_list_recipes only if the vNext packet leaves a specific detail unresolved.',
+      'Check readiness with fluent_get_capabilities or fluent_get_next_actions only if the context packet is unavailable or says lifecycle state blocks the request.',
+      'Read meals_get_plan, meals_list_plan_history, meals_get_inventory_summary, or meals_list_recipes only if the context packet leaves a specific detail unresolved.',
       'Call meals_generate_plan with week_start and any clear constraints.',
       'Present candidate choices and ask for approval or revisions.',
       'On approval, call meals_accept_plan_candidate.',
@@ -141,11 +141,11 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     ],
   },
   'fluent://guidance/style-purchase-analysis': {
-    title: 'Style Purchase Analysis vNext Public Flow',
+    title: 'Style Purchase Analysis Public Flow',
     summary:
-      'Use this for closet-aware purchase decisions in the public vNext profile. Fluent supplies the complete owned-category slice, owned-item media, and budget arithmetic in one read; the host inspects candidate images and makes the stylist judgment in prose.',
+      'Use this for closet-aware purchase decisions in the public profile. Fluent supplies the complete owned-category slice, owned-item media, and budget arithmetic in one read; the host inspects candidate images and makes the stylist judgment in prose.',
     rules: [
-      'Default vNext public flow: call fluent_get_context(domain="style", intent="purchase", candidate={name, category?, subcategory?, image_urls?, price_text}, amount=priced_amount). candidate.price_text must be the exact listing price text you saw, and amount must equal the number in it. Do not start with fluent_list_items.',
+      'Default public flow: call fluent_get_context(domain="style", intent="purchase", candidate={name, category?, subcategory?, image_urls?, price_text}, amount=priced_amount). candidate.price_text must be the exact listing price text you saw, and amount must equal the number in it. Do not start with fluent_list_items.',
       'The host inspects candidate images itself. A product URL, image URL, uploaded photo, or user-supplied item details can ground the candidate, but Fluent does not inspect candidate pixels for the host.',
       'The purchase ContextPacket includes CategoryResolution, StylePurchaseOwnedSlice, StylePurchaseCompleteness, and BudgetArithmeticFact. Use that packet as the sufficient Fluent read for the verdict unless it says complete:false or reports a blocking evidence gap.',
       'State a candidate price only when you have VERIFIED it from the actual product page or listing. Pass candidate.price_text EXACTLY as it appears on the listing, and pass amount only when it equals the number in that price_text; ranges are OK when amount is within the cited range. If you cannot cite a real price_text, ask the user for the price before any budget-sensitive verdict. Never state a typical, approximate, around, or from-memory price for the budget - an unverified estimate is not acceptable; ask instead.',
@@ -159,7 +159,7 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
       'If the ContextPacket says complete:false, say the slice is incomplete and offer to look wider instead of claiming the closet has no comparable item.',
       'When the user says an item was returned, sold, donated, gifted, worn out, never purchased, duplicate, gone, or no longer owned, use fluent_archive_item with the best disposition and report read-after-write proof.',
       'Archive only on an explicit user signal about a specific item. Never infer archiving from purchase advice, a stale comparator, or an item simply being absent from a read; if which item is meant is ambiguous, confirm first. Archive is reversible (restore by setting the item active) and audited — report read-after-write proof and state what you archived.',
-      'LEGACY RUNTIME SECTION: Legacy-only hosts may still expose style_prepare_purchase_analysis, style_get_purchase_vision_packet, style_submit_purchase_visual_observations, style_analyze_purchase, style_render_purchase_analysis, style_show_purchase_analysis_widget, style_apply_purchase_analysis_action, style_archive_item, and style_set_item_product_image. Use those only when the vNext public flow is unavailable.',
+      'LEGACY RUNTIME SECTION: Legacy-only hosts may still expose style_prepare_purchase_analysis, style_get_purchase_vision_packet, style_submit_purchase_visual_observations, style_analyze_purchase, style_render_purchase_analysis, style_show_purchase_analysis_widget, style_apply_purchase_analysis_action, style_archive_item, and style_set_item_product_image. Use those only when the public flow is unavailable.',
     ],
     defaultFlow: [
       'Call fluent_get_context with domain="style", intent="purchase", candidate, and amount when a candidate purchase has a verified listing price_text; amount must match that price_text number or fall within its cited range.',

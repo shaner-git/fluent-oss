@@ -43,7 +43,7 @@ export function buildVNextModelText(value: unknown, options: VNextModelTextOptio
     ? `${json.slice(0, MAX_TEXT_LENGTH)}\n... truncated for model-visible tool text`
     : json;
   return [
-    'Fluent vNext returned this model-visible context. Use it as evidence, not as final judgment.',
+    'Fluent returned this model-visible context. Use it as evidence, not as final judgment.',
     body,
   ].join('\n');
 }

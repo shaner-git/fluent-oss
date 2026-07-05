@@ -224,9 +224,14 @@ for (const filePath of [
   );
 }
 
-for (const filePath of ['plugins/fluent/.codex-plugin/plugin.json', 'openclaw-plugin/fluent/package.json']) {
+for (const filePath of [
+  'plugins/fluent/.codex-plugin/plugin.json',
+  'openclaw-plugin/fluent/package.json',
+  'claude-plugin/fluent/.claude-plugin/plugin.json',
+]) {
   const json = JSON.parse(readRepoFile(filePath)) as {
     'x-fluent'?: {
+      currentReferenceContractVersion?: string;
       minimumContractVersion?: string;
     };
   };
@@ -235,6 +240,13 @@ for (const filePath of ['plugins/fluent/.codex-plugin/plugin.json', 'openclaw-pl
     FLUENT_CONTRACT_VERSION,
     `${filePath} must declare the canonical contract version as its minimum contract version.`,
   );
+  if (filePath === 'claude-plugin/fluent/.claude-plugin/plugin.json') {
+    assert.equal(
+      json['x-fluent']?.currentReferenceContractVersion,
+      FLUENT_CONTRACT_VERSION,
+      `${filePath} must declare the canonical contract version as its current reference contract version.`,
+    );
+  }
 }
 
 const claudeManifest = JSON.parse(readRepoFile('claude-plugin/fluent/.claude-plugin/plugin.json')) as Record<
@@ -252,6 +264,7 @@ const claudeSupportedTopLevelKeys = new Set([
   'keywords',
   'skills',
   'mcpServers',
+  'x-fluent',
 ]);
 assert.deepEqual(
   Object.keys(claudeManifest).filter((key) => !claudeSupportedTopLevelKeys.has(key)),
