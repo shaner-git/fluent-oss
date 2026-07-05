@@ -301,21 +301,27 @@ export async function getFluentVNextContext(
       services.core.listPersonFacts ? services.core.listPersonFacts({ consumerDomain: 'meals', host }) : [],
       budgetSeamRead,
     ]);
-    // Planning needs the user's durable meal memory in the packet itself (single read, not a
-    // detail chain): saved recipes to plan from + an on-hand inventory signal. Without these the
-    // host can only invent generic meals. Read in parallel; both are compacted to summaries below.
-    const [grocery, recipes, inventory] = planningIntent
+    // Planning needs durable meal memory in the packet itself (single reads, not a detail chain):
+    // saved recipes, recent outcomes, and an on-hand inventory signal compacted below.
+    const [grocery, recipes, inventory, mealMemory] = planningIntent
       ? await Promise.all([
           services.meals.getCurrentGroceryList?.({ skipCalibrationContext: true }) ?? null,
           services.meals.listRecipes?.(undefined, 'active') ?? [],
           services.meals.getInventory?.() ?? [],
+          services.meals.getMealMemory?.() ?? [],
         ])
-      : [null, [] as unknown[], [] as unknown[]];
+      : [null, [] as unknown[], [] as unknown[], [] as unknown[]];
     const mealsHardConstraints = buildMealsHardConstraintsCompactFact(personFacts);
     const mealsSoftPreferences = buildMealsSoftPreferencesCompactFact(personFacts, mealsHardConstraints?.confirmedExclusions ?? []);
     const mealsDietaryPatterns = buildMealsDietaryPatternsCompactFact(personFacts);
+    const outcomeSignals = planningIntent ? mealsOutcomeSignals(mealMemory, recipes) : null;
     const recipeIndex = planningIntent
-      ? mealsRecipeIndex(recipes, mealsHardConstraints?.confirmedExclusions ?? [], mealsDietaryPatterns?.patterns ?? [])
+      ? mealsRecipeIndex(
+          recipes,
+          mealsHardConstraints?.confirmedExclusions ?? [],
+          mealsDietaryPatterns?.patterns ?? [],
+          outcomeSignals?.signals ?? [],
+        )
       : null;
     const inventorySummary = planningIntent ? mealsInventorySummary(inventory) : null;
     const sharedPersonFacts = buildPersonFactsCompactFact(personFacts, 'meals');
@@ -329,6 +335,7 @@ export async function getFluentVNextContext(
         sharedPersonFacts,
         budgetsSeam,
         planningIntent ? mealsCurrentnessFact(grocery, intent) : null,
+        outcomeSignals?.fact,
         recipeIndex,
         inventorySummary,
       ].filter(Boolean),
@@ -349,6 +356,7 @@ export async function getFluentVNextContext(
         // perform: mealsRecipeIndex always returns an object even for an empty/absent recipe list.
         ...(planningIntent && services.meals.listRecipes ? ['meals.listRecipes'] : []),
         ...(planningIntent && services.meals.getInventory ? ['meals.getInventory'] : []),
+        ...(planningIntent && services.meals.getMealMemory ? ['meals.getMealMemory'] : []),
       ],
       responseGuidance: mealsResponseGuidance(intent),
       suggestedWritebacks: buildMealsSuggestedWritebacks(calibration, grocery, intent, personFacts),
@@ -2483,6 +2491,7 @@ function evidenceGapsFromPayload(value: unknown): unknown[] {
 
 const RECIPE_INDEX_MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'] as const;
 const RECIPE_INDEX_PER_GROUP_CAP = 12;
+const MEALS_OUTCOME_SIGNAL_CAP = 12;
 const INVENTORY_SUMMARY_SAMPLE_CAP = 8;
 
 function recipeMealTypeFromQuery(query: string | null | undefined): string | null {
@@ -2512,10 +2521,18 @@ function mealsRecipeIndex(
   recipes: unknown[],
   hardConstraints: MealsHardConstraintExclusion[] = [],
   dietaryPatterns: MealsDietaryPatternExclusion[] = [],
+  outcomeSignals: MealsOutcomeSignal[] = [],
 ): unknown {
+  const outcomesByRecipeId = new Map(outcomeSignals.map((signal) => [signal.recipeId, signal]));
   const groups = new Map<
     string,
-    Array<{ id: string; name: string; conflictsWithDietaryPattern?: string; conflictsWithHardConstraint?: string }>
+    Array<{
+      id: string;
+      name: string;
+      conflictsWithDietaryPattern?: string;
+      conflictsWithHardConstraint?: string;
+      recentOutcome?: MealsRecipeIndexOutcome;
+    }>
   >();
   let totalActive = 0;
   for (const entry of recipes) {
@@ -2536,11 +2553,13 @@ function mealsRecipeIndex(
     const list = groups.get(group) ?? [];
     const conflict = firstMatchingHardConstraint(name, hardConstraints);
     const dietaryConflict = firstMatchingDietaryPattern(record, name, dietaryPatterns);
+    const recentOutcome = recipeIndexOutcome(outcomesByRecipeId.get(itemId(record)));
     list.push({
       id: itemId(record),
       name,
       ...(conflict ? { conflictsWithHardConstraint: conflict.value } : {}),
       ...(dietaryConflict ? { conflictsWithDietaryPattern: dietaryConflict.pattern } : {}),
+      ...(recentOutcome ? { recentOutcome } : {}),
     });
     groups.set(group, list);
     totalActive += 1;
@@ -2548,7 +2567,13 @@ function mealsRecipeIndex(
   const byMealType: Record<string, number> = {};
   const recipesByMealType: Record<
     string,
-    Array<{ id: string; name: string; conflictsWithDietaryPattern?: string; conflictsWithHardConstraint?: string }>
+    Array<{
+      id: string;
+      name: string;
+      conflictsWithDietaryPattern?: string;
+      conflictsWithHardConstraint?: string;
+      recentOutcome?: MealsRecipeIndexOutcome;
+    }>
   > = {};
   const overflow: Record<string, number> = {};
   for (const [group, list] of groups) {
@@ -2572,6 +2597,171 @@ function mealsRecipeIndex(
         ? 'Build the requested meals from these saved recipes by name — they are the user\'s durable Meals memory. Do not invent recipes when matching saved ones exist. To open a recipe in full or page past this index, read fluent_list_items(domain="meals", item_type="recipe", query=<recipe name or meal type>).'
         : 'No active saved recipes are available to plan from. Offer to add or import recipes, or ask the user, instead of inventing a saved-recipe plan.',
   };
+}
+
+type MealsOutcomeSignal = {
+  recipeId: string;
+  recipeName: string;
+  status: string;
+  lastFeedback?: MealsOutcomeFeedback;
+  lastUsedAt: string | null;
+};
+
+type MealsOutcomeFeedback = {
+  difficulty?: unknown;
+  family_acceptance?: unknown;
+  repeat_again?: unknown;
+  taste?: unknown;
+  time_reality?: unknown;
+};
+
+type MealsRecipeIndexOutcome = {
+  lastUsedAt: string | null;
+  repeatAgain?: unknown;
+  status: string;
+  summary: string;
+  taste?: unknown;
+};
+
+function mealsOutcomeSignals(mealMemory: unknown[], recipes: unknown[]): { fact: unknown; signals: MealsOutcomeSignal[] } {
+  const recipeNamesById = new Map<string, string>();
+  for (const recipe of recipes) {
+    const record = objectRecord(recipe);
+    const id = itemId(record);
+    const name = recipeTitle(record);
+    if (id !== 'unknown' && name) {
+      recipeNamesById.set(id, name);
+    }
+  }
+  const signals = mealMemory
+    .map((entry) => mealOutcomeSignal(entry, recipeNamesById))
+    .filter((entry): entry is MealsOutcomeSignal & { sortKey: number } => Boolean(entry))
+    .sort((left, right) => right.sortKey - left.sortKey || left.recipeId.localeCompare(right.recipeId))
+    .slice(0, MEALS_OUTCOME_SIGNAL_CAP)
+    .map(({ sortKey: _sortKey, ...entry }) => entry);
+  return {
+    fact: {
+      object: 'MealsOutcomeSignals',
+      domain: 'meals',
+      source: 'meals.getMealMemory',
+      limit: MEALS_OUTCOME_SIGNAL_CAP,
+      entries: signals,
+      usage:
+        'Use these recent saved-recipe outcomes for keep-vs-swap planning: repeat what was liked or would repeat, flag what flopped, and never claim no recipe feedback exists when entries is non-empty.',
+    },
+    signals,
+  };
+}
+
+function mealOutcomeSignal(
+  entry: unknown,
+  recipeNamesById: Map<string, string>,
+): (MealsOutcomeSignal & { sortKey: number }) | null {
+  const record = objectRecord(entry);
+  if (!record) {
+    return null;
+  }
+  const recipeId = firstString(record, ['recipeId', 'recipe_id', 'id']);
+  if (!recipeId) {
+    return null;
+  }
+  const status = stringField(record, 'status') ?? 'unknown';
+  const lastFeedback = compactMealOutcomeFeedback(record.lastFeedback ?? record.last_feedback ?? record.last_feedback_json);
+  const lastUsedAt = firstString(record, ['lastUsedAt', 'last_used_at']);
+  const updatedAt = firstString(record, ['updatedAt', 'updated_at']);
+  return {
+    recipeId,
+    recipeName: recipeNamesById.get(recipeId) ?? firstString(record, ['recipeName', 'recipeNameSnapshot', 'name', 'title', 'displayName']) ?? recipeId,
+    status,
+    ...(lastFeedback ? { lastFeedback } : {}),
+    lastUsedAt,
+    sortKey: Math.max(timestampForSort(lastUsedAt), timestampForSort(updatedAt)),
+  };
+}
+
+function compactMealOutcomeFeedback(value: unknown): MealsOutcomeFeedback | null {
+  const record = objectRecord(value);
+  if (!record) {
+    return null;
+  }
+  const feedback: MealsOutcomeFeedback = {};
+  copyFeedbackField(feedback, record, 'taste');
+  copyFeedbackField(feedback, record, 'difficulty');
+  copyFeedbackField(feedback, record, 'time_reality', 'timeReality');
+  copyFeedbackField(feedback, record, 'repeat_again', 'repeatAgain');
+  copyFeedbackField(feedback, record, 'family_acceptance', 'familyAcceptance');
+  return Object.keys(feedback).length > 0 ? feedback : null;
+}
+
+function copyFeedbackField(
+  output: Record<string, unknown>,
+  input: Record<string, unknown>,
+  outputKey: keyof MealsOutcomeFeedback,
+  alternateKey?: string,
+): void {
+  const value = input[outputKey] ?? (alternateKey ? input[alternateKey] : undefined);
+  if (value !== undefined && value !== null) {
+    output[outputKey] = value;
+  }
+}
+
+function recipeIndexOutcome(signal: MealsOutcomeSignal | undefined): MealsRecipeIndexOutcome | null {
+  if (!signal) {
+    return null;
+  }
+  const taste = signal.lastFeedback?.taste;
+  const repeatAgain = signal.lastFeedback?.repeat_again;
+  return {
+    status: signal.status,
+    ...(taste !== undefined ? { taste } : {}),
+    ...(repeatAgain !== undefined ? { repeatAgain } : {}),
+    lastUsedAt: signal.lastUsedAt,
+    summary: summarizeOutcomeSignal(signal),
+  };
+}
+
+function summarizeOutcomeSignal(signal: MealsOutcomeSignal): string {
+  const taste = normalizeOutcomeToken(signal.lastFeedback?.taste);
+  const repeatAgain = signal.lastFeedback?.repeat_again;
+  const liked = taste === 'good' || taste === 'great' || taste === 'liked' || taste === 'love' || taste === 'loved';
+  if (liked && isPositiveRepeatSignal(repeatAgain)) {
+    return 'liked, would repeat';
+  }
+  if (isNegativeOutcomeSignal(signal.lastFeedback?.taste) || repeatAgain === false || normalizeOutcomeToken(repeatAgain) === 'no') {
+    return 'did not work well';
+  }
+  if (isPositiveRepeatSignal(repeatAgain)) {
+    return 'would repeat';
+  }
+  if (liked) {
+    return 'liked';
+  }
+  return signal.status;
+}
+
+function isPositiveRepeatSignal(value: unknown): boolean {
+  if (value === true) {
+    return true;
+  }
+  const token = normalizeOutcomeToken(value);
+  return token === 'yes' || token === 'true' || token === 'good' || token === 'repeat' || token === 'would repeat';
+}
+
+function isNegativeOutcomeSignal(value: unknown): boolean {
+  const token = normalizeOutcomeToken(value);
+  return token === 'bad' || token === 'poor' || token === 'disliked' || token === 'flop' || token === 'no';
+}
+
+function normalizeOutcomeToken(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null;
+}
+
+function timestampForSort(value: string | null): number {
+  if (!value) {
+    return 0;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function firstMatchingHardConstraint(
@@ -2816,7 +3006,7 @@ function mealsResponseGuidance(intent: FluentVNextReadIntent): unknown {
     softPreferenceBoundary: MEALS_SOFT_PREFERENCES_USAGE,
     dietaryPatternBoundary: MEALS_DIETARY_PATTERNS_USAGE,
     recommendedAnswerShape:
-      'For broad planning or "what Fluent knows" prompts, answer in this order: useful confirmed Meals facts and preferences, the saved recipes you will build the plan from (by name, from MealsRecipeIndex in this packet), inferred signals clearly labeled as inferred, currentness/grocery and on-hand inventory trust boundary, one tentative planning move when safe, missing facts, then one compact user question. Ground the plan in the packet\'s saved recipes, confirmed preferences, hard avoids, and dietary patterns, deferring to hardConstraintBoundary for any MealsHardConstraints conflict, applying dietaryPatternBoundary before soft preferences, and using MealsSoftPreferences only as a ranking/variety input that defers to hard constraints and dietary patterns — do not invent recipes when matching saved ones exist. Do not stop at a broad intake dump. Do not lead with stale grocery detail unless the user asked specifically about groceries.',
+      'For broad planning or "what Fluent knows" prompts, answer in this order: useful confirmed Meals facts and preferences, recent saved-recipe outcomes from MealsOutcomeSignals (repeat what was loved, flag what flopped), the saved recipes you will build the plan from (by name, from MealsRecipeIndex in this packet), inferred signals clearly labeled as inferred, currentness/grocery and on-hand inventory trust boundary, one tentative planning move when safe, missing facts, then one compact user question. Ground the plan in the packet\'s saved recipes, confirmed preferences, hard avoids, dietary patterns, and recent outcomes, deferring to hardConstraintBoundary for any MealsHardConstraints conflict, applying dietaryPatternBoundary before soft preferences, and using MealsSoftPreferences only as a ranking/variety input that defers to hard constraints and dietary patterns — do not invent recipes when matching saved ones exist. If MealsOutcomeSignals.entries is non-empty, never claim no cooked/feedback status exists and do not offer to log feedback already present in the packet. Do not stop at a broad intake dump. Do not lead with stale grocery detail unless the user asked specifically about groceries.',
     tentativePlanningBoundary:
       'When grocery state is stale, missing, or incomplete, suggest a lightweight meal framework from confirmed/inferred Meals facts when available, but must not present it as based on current groceries or as a finalized shopping plan. If only Meals context was read, say exactly: "I did not read outside meals or cross-domain Fluent context for this turn." Also say exactly: "Nothing has been saved" unless a public write returned success and read-after-write evidence.',
     weeklyMealPlanningBoundary:
@@ -2836,6 +3026,7 @@ function mealsResponseGuidance(intent: FluentVNextReadIntent): unknown {
           answerFromPacketForTentativePlanning: true,
           packetProvidesForPlanning: [
             'MealsRecipeIndex (the saved recipes to plan from, grouped by meal type)',
+            'MealsOutcomeSignals (recent saved-recipe outcomes for keep-vs-swap planning)',
             'MealsHardConstraints (confirmed allergies and hard avoids that must be honored before selecting recipes)',
             'MealsDietaryPatterns (confirmed vegetarian/vegan/pescatarian identity defaults surfaced as ingredient-class exclusions and recipe annotations)',
             'MealsSoftPreferences (confirmed likes/dislikes used only for ranking and variety after hard constraints)',
@@ -2863,7 +3054,7 @@ function mealsResponseGuidance(intent: FluentVNextReadIntent): unknown {
             'The user asks to inspect evidence/provenance rather than asking for a tentative broad plan.',
           ],
           broadPlanningInstruction:
-            'Plan from this packet: honor MealsHardConstraints first, apply MealsDietaryPatterns as standing default ingredient-class exclusions, then build the requested meals from MealsRecipeIndex and the confirmed preferences/hard-avoids, use MealsSoftPreferences only to rank otherwise-acceptable options and vary toward likes/away from dislikes, and use MealsInventorySummary as an on-hand signal. The planning memory is already here — do not chain detail reads before answering, and do not invent recipes when the index has matching saved ones. Exclude recipes tagged conflictsWithHardConstraint with a brief reason; treat conflictsWithDietaryPattern as an annotate-only planning signal unless the user explicitly asks off-pattern this turn; never exclude solely for a soft preference. Only read a recipe or item in full (meals_list_recipes/fluent_list_items) when the user names it or asks to page beyond the index.',
+            'Plan from this packet: honor MealsHardConstraints first, apply MealsDietaryPatterns as standing default ingredient-class exclusions, then build the requested meals from MealsRecipeIndex and the confirmed preferences/hard-avoids, use MealsOutcomeSignals and MealsRecipeIndex.recentOutcome for keep-vs-swap reasoning, use MealsSoftPreferences only to rank otherwise-acceptable options and vary toward likes/away from dislikes, and use MealsInventorySummary as an on-hand signal. The planning memory is already here — do not chain detail reads before answering, and do not invent recipes when the index has matching saved ones. Exclude recipes tagged conflictsWithHardConstraint with a brief reason; treat conflictsWithDietaryPattern as an annotate-only planning signal unless the user explicitly asks off-pattern this turn; never exclude solely for a soft preference. Only read a recipe or item in full (meals_list_recipes/fluent_list_items) when the user names it or asks to page beyond the index.',
         }
       : undefined,
     writeApprovalBoundary: 'Public Meals writes require approval="explicit_user_approved", and the host may also prompt the user to approve the action before it runs. Offer the write and get an explicit yes from the user BEFORE calling the tool — do not fire a write from a bare narration. If a write is not approved or the result says no approval was received, tell the user plainly that it needs their approval and re-offer it; never attribute a write failure to session tokens, write permissions, connectivity, or trying again in a fresh session unless the Fluent tool result text says exactly that.',
