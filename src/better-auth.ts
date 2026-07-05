@@ -159,6 +159,10 @@ export async function maybeHandleBetterAuthRequest(
     return handleConsentPage(request, env);
   }
 
+  if (request.method === 'GET' && url.pathname === '/account') {
+    return handleAccountPage(request, env);
+  }
+
   if (request.method === 'GET' && url.pathname === '/account/delete') {
     return handleAccountDeletionPage(request, env);
   }
@@ -416,6 +420,48 @@ async function handleConsentPage(request: Request, env: CloudRuntimeEnv): Promis
       requestedScopes: consentInfo.requestedScopes,
       session,
       switchAccountUrl: buildAccountSwitchSignInPath(request.url),
+    }),
+  );
+}
+
+async function handleAccountPage(request: Request, env: CloudRuntimeEnv): Promise<Response> {
+  let auth;
+  try {
+    auth = createBetterAuth(request, env);
+  } catch {
+    return html(renderAuthUnavailablePage(env, 'Account'), 503);
+  }
+
+  const session = await getBetterAuthSession(auth, request);
+  if (!session?.user?.id) {
+    return Response.redirect(buildSignInRedirectUrl(request.url), 302);
+  }
+
+  const earlyAccessResponse = await maybeCreateFluentCloudEarlyAccessPage(request, env, session, 'Account');
+  if (earlyAccessResponse) {
+    return earlyAccessResponse;
+  }
+  const provisioning = await maybeProvisionHostedSession(env, session, request);
+  if (provisioning.accessFailureCode) {
+    const details = buildFluentCloudAccessFailureDetails(provisioning.accessFailureCode, {
+      email: session?.user?.email ?? null,
+      title: 'Account | Fluent',
+    });
+    return html(
+      renderFluentCloudAccessFailurePage(provisioning.accessFailureCode, {
+        email: session?.user?.email ?? null,
+        title: 'Account | Fluent',
+      }),
+      details.status,
+    );
+  }
+
+  return html(
+    renderAccountNextStepsPage({
+      origin: new URL(request.url).origin,
+      provisioningError: provisioning.error,
+      provisioningResult: provisioning.result,
+      session,
     }),
   );
 }
@@ -1867,6 +1913,7 @@ const FLUENT_LOGO_SVG = `<svg viewBox="0 0 1024 1024" fill="none" xmlns="http://
   <path d="M248 238H488C548.751 238 598 287.249 598 348V666C598 726.751 647.249 776 708 776H776" stroke="#FAF9F6" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M248 512H552" stroke="#FAF9F6" stroke-width="92" stroke-linecap="round"/>
 </svg>`;
+const FLUENT_CONNECT_DOCS_URL = 'https://docs.meetfluent.app/guides/connect';
 
 function renderAuthUnavailablePage(env: CloudRuntimeEnv, title: string): string {
   const status = buildBetterAuthStatus(env);
@@ -1895,14 +1942,12 @@ function renderSignInPage(input: {
 }): string {
   const signedIn = Boolean(input.session?.user);
   const signedInBody = signedIn
-    ? `
-<div class="notice success">
-  <p class="notice-title">You're signed in to Fluent.</p>
-  <p>Return to the app or browser tab that opened this page to continue the connection.</p>
-  <p class="meta">Signed in as <strong>${escapeHtml(input.session?.user?.email ?? input.session?.user?.id ?? 'your email')}</strong>.</p>
-  <button id="sign-out-current-account" type="button" class="btn-secondary">Use a different account</button>
-  <div id="signed-in-status" class="meta status-live" aria-live="polite"></div>
-</div>`
+    ? renderSignedInAccountBody({
+        mcpUrl: `${input.origin}/mcp`,
+        provisioningError: null,
+        provisioningResult: input.provisioningResult,
+        session: input.session,
+      })
     : '';
 
   const provisioningWarning = input.provisioningError
@@ -1968,6 +2013,7 @@ const submitButton = document.getElementById('magic-link-submit');
 const passwordSubmitButton = document.getElementById('password-submit');
 const signOutCurrentAccountButton = document.getElementById('sign-out-current-account');
 const signedInStatus = document.getElementById('signed-in-status');
+const copyMcpUrlButton = document.getElementById('copy-mcp-url');
 const callbackUrl = ${JSON.stringify(input.callbackUrl)};
 const passwordRedirectUrl = ${JSON.stringify(input.passwordRedirectUrl)};
 async function signOutCurrentAccount(redirectUrl) {
@@ -1991,6 +2037,17 @@ async function signOutCurrentAccount(redirectUrl) {
   }
 }
 signOutCurrentAccountButton?.addEventListener('click', () => signOutCurrentAccount(window.location.href));
+copyMcpUrlButton?.addEventListener('click', async () => {
+  const originalText = copyMcpUrlButton.textContent;
+  try {
+    await navigator.clipboard.writeText(copyMcpUrlButton.dataset.copyValue || '');
+    copyMcpUrlButton.textContent = 'Copied';
+  } catch {
+    copyMcpUrlButton.textContent = 'Copy failed';
+  } finally {
+    setTimeout(() => { copyMcpUrlButton.textContent = originalText || 'Copy'; }, 1600);
+  }
+});
 passwordForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (passwordSubmitButton) passwordSubmitButton.disabled = true;
@@ -2042,6 +2099,121 @@ form?.addEventListener('submit', async (event) => {
 </script>`,
     title: 'Sign in | Fluent',
   });
+}
+
+function renderAccountNextStepsPage(input: {
+  origin: string;
+  provisioningError: string | null;
+  provisioningResult: Awaited<ReturnType<typeof ensureHostedUserProvisioned>> | null;
+  session: BetterAuthSessionPayload;
+}): string {
+  const warning = input.provisioningError
+    ? `<div class="notice warn"><p class="notice-title">Hosted bootstrap warning</p><p>${escapeHtml(input.provisioningError)}</p></div>`
+    : '';
+
+  return renderAuthShell({
+    body: `${renderSignedInAccountBody({
+      mcpUrl: `${input.origin}/mcp`,
+      provisioningError: null,
+      provisioningResult: input.provisioningResult,
+      session: input.session,
+    })}
+${warning}
+<script>
+const accountSignOutButton = document.getElementById('sign-out-current-account');
+const accountStatus = document.getElementById('signed-in-status');
+const accountCopyMcpUrlButton = document.getElementById('copy-mcp-url');
+accountSignOutButton?.addEventListener('click', async () => {
+  if (accountSignOutButton) accountSignOutButton.disabled = true;
+  if (accountStatus) accountStatus.textContent = 'Signing out...';
+  try {
+    const response = await fetch('${input.origin}/api/auth/sign-out', {
+      method: 'POST',
+      headers: { 'accept': 'application/json', 'content-type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.message || data?.error || 'Unable to sign out.');
+    if (accountStatus) accountStatus.textContent = 'Signed out. Reloading...';
+    window.location.assign('${input.origin}/sign-in');
+  } catch (error) {
+    if (accountStatus) accountStatus.textContent = error instanceof Error ? error.message : String(error);
+    if (accountSignOutButton) accountSignOutButton.disabled = false;
+  }
+});
+accountCopyMcpUrlButton?.addEventListener('click', async () => {
+  const originalText = accountCopyMcpUrlButton.textContent;
+  try {
+    await navigator.clipboard.writeText(accountCopyMcpUrlButton.dataset.copyValue || '');
+    accountCopyMcpUrlButton.textContent = 'Copied';
+  } catch {
+    accountCopyMcpUrlButton.textContent = 'Copy failed';
+  } finally {
+    setTimeout(() => { accountCopyMcpUrlButton.textContent = originalText || 'Copy'; }, 1600);
+  }
+});
+</script>`,
+    title: 'Account | Fluent',
+  });
+}
+
+function renderSignedInAccountBody(input: {
+  mcpUrl: string;
+  provisioningError: string | null;
+  provisioningResult: Awaited<ReturnType<typeof ensureHostedUserProvisioned>> | null;
+  session: BetterAuthSessionPayload;
+}): string {
+  const signedInAs = escapeHtml(input.session?.user?.email ?? input.session?.user?.id ?? 'your account');
+  const statusTitle = input.provisioningResult?.created
+    ? 'Your Fluent account was created.'
+    : 'You are signed in to Fluent.';
+  const statusDetail = input.provisioningResult?.created
+    ? 'The hosted account is provisioned and ready for a client connection.'
+    : 'The hosted account is ready for a client connection.';
+  const provisioningWarning = input.provisioningError
+    ? `<div class="notice warn"><p class="notice-title">Hosted bootstrap warning</p><p>${escapeHtml(input.provisioningError)}</p></div>`
+    : '';
+
+  return `
+<p class="eyebrow">⟩ Fluent account</p>
+<h1 class="display">Fluent is <span class="accent">ready</span></h1>
+<p class="lede">Signed in as <strong>${signedInAs}</strong>.</p>
+<div class="notice success">
+  <p class="notice-title">${escapeHtml(statusTitle)}</p>
+  <p>${escapeHtml(statusDetail)}</p>
+</div>
+<div class="connect-card" aria-labelledby="connect-card-title">
+  <p id="connect-card-title" class="connect-title">Fluent is ready. Now connect it to your AI app:</p>
+  <div class="copy-row">
+    <input class="copy-field" type="text" readonly value="${escapeHtml(input.mcpUrl)}" aria-label="Fluent MCP URL" />
+    <button id="copy-mcp-url" type="button" class="btn-secondary" data-copy-value="${escapeHtml(input.mcpUrl)}">Copy</button>
+  </div>
+  <div class="quick-steps">
+    <div class="quick-step-card">
+      <p class="eyebrow-sm">Claude.ai</p>
+      <ol>
+        <li>Open Claude.ai settings.</li>
+        <li>Add a custom connector.</li>
+        <li>Paste the MCP URL and approve Fluent.</li>
+      </ol>
+    </div>
+    <div class="quick-step-card">
+      <p class="eyebrow-sm">ChatGPT Developer Mode</p>
+      <ol>
+        <li>Open ChatGPT connector settings.</li>
+        <li>Create a Developer Mode MCP connector.</li>
+        <li>Paste the MCP URL and finish authorization.</li>
+      </ol>
+    </div>
+  </div>
+  <p class="notice-link">Full setup guide: <a href="${escapeHtml(FLUENT_CONNECT_DOCS_URL)}">${escapeHtml(FLUENT_CONNECT_DOCS_URL)}</a></p>
+</div>
+<div class="actions">
+  <button id="sign-out-current-account" type="button" class="btn-secondary">Use a different account</button>
+</div>
+<div id="signed-in-status" class="meta status-live" aria-live="polite"></div>
+${provisioningWarning}`;
 }
 
 function renderConsentPage(input: {
@@ -2454,11 +2626,16 @@ function renderAuthShell(input: { body: string; title: string }): string {
     .divider::before, .divider::after {
       content: ""; height: 1px; flex: 1; background: var(--border);
     }
-    input[type="email"], input[type="password"] {
+    input[type="email"], input[type="password"], .copy-field {
       border: 1px solid var(--border); border-radius: 10px;
       padding: 13px 15px; font: inherit; font-size: 15px;
       background: rgba(0,0,0,0.3); color: var(--ink-strong);
       transition: border-color .18s ease, background .18s ease;
+    }
+    .copy-field {
+      min-width: 0; width: 100%;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 12.5px;
     }
     input[type="email"]::placeholder, input[type="password"]::placeholder { color: var(--faint); }
     input:focus-visible, button:focus-visible {
@@ -2520,6 +2697,34 @@ function renderAuthShell(input: { body: string; title: string }): string {
     .notice.soft .notice-title { color: var(--accent); }
     .notice.warn { border-color: rgba(224,155,125,0.3); }
     .notice.warn .notice-title { color: var(--warn); }
+    .connect-card {
+      margin-top: 20px; padding: 20px; border-radius: 14px;
+      background: rgba(0,0,0,0.22); border: 1px solid var(--border);
+      display: grid; gap: 16px;
+    }
+    .connect-title {
+      margin: 0; color: var(--ink-strong); font-weight: 600; font-size: 15px;
+    }
+    .copy-row {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px;
+    }
+    .quick-steps { display: grid; gap: 12px; }
+    .quick-step-card {
+      padding: 14px 16px; border-radius: 12px;
+      background: rgba(250,249,246,0.03); border: 1px solid var(--border);
+    }
+    .quick-step-card ol {
+      margin: 0; padding-left: 20px; color: var(--muted); font-size: 13.5px;
+    }
+    .quick-step-card li + li { margin-top: 4px; }
+    .connect-card .notice-link {
+      margin: 0; font-size: 13.5px; color: var(--muted);
+    }
+    .connect-card .notice-link a {
+      color: var(--accent-strong); text-decoration-color: rgba(225,211,186,0.5);
+      text-underline-offset: 3px;
+    }
+    .connect-card .notice-link a:hover { color: var(--ink-strong); text-decoration-color: var(--ink-strong); }
     .client-card {
       display: flex; align-items: center; gap: 16px;
       padding: 18px; margin: 4px 0 20px;
