@@ -79,6 +79,12 @@ for (const [label, skill] of [
     `${label} meals skill must reject stale pre-vNext meals_* detail tools for the public flow.`,
   );
   assert(
+    skill.includes(
+      'If you offered to save a plan and the user did not answer, ask once more before ending the task or moving past planning. An unanswered offer is not a decline; never save without an answer.',
+    ),
+    `${label} meals skill must resurface unanswered meal-plan save offers before moving past planning.`,
+  );
+  assert(
     !skill.includes('meals_mark_meal_cooked'),
     `${label} meals skill must not route current public vNext through retired meals_mark_meal_cooked guidance.`,
   );

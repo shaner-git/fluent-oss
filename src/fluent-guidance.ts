@@ -83,6 +83,7 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
       'Only pass Health training context when the user explicitly asks meals to support training, recovery, cutting, bulking, or workouts.',
       'Treat named weekdays or dates as pinned slot constraints, not soft preferences.',
       'Generate a candidate first; materialize it only after the user approves.',
+      'If you offered to save a plan and the user did not answer, ask once more before ending the task or moving past planning. An unanswered offer is not a decline; never save without an answer.',
     ],
     defaultFlow: [
       'Read fluent_get_context(domain="meals", intent="planning") first for broad planning/currentness.',
