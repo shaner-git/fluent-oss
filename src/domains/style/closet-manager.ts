@@ -1185,8 +1185,8 @@ export function getStyleClosetWidgetHtml(): string {
             // VERIFY persistence — do not trust the optimistic removal. Claude does not reliably
             // execute or hand back widget-initiated writes, so refetch the active set as the source
             // of truth. If the item is STILL active after the refetch, the archive did not take
-            // effect on the host: surface that loudly instead of a silent snap-back (the bug Shane
-            // reported), and let the grid show the item as still owned (which it is).
+            // effect on the host: surface that loudly instead of a silent snap-back (a bug found
+            // in live use), and let the grid show the item as still owned (which it is).
             await rerender();
             const after = itemById(item.id);
             if (after && after.status !== 'archived') {
@@ -1787,7 +1787,7 @@ function isFavorite(item: StyleItemRecord): boolean {
 function clampLimit(limit: number | null | undefined): number {
   if (typeof limit !== 'number' || !Number.isFinite(limit)) {
     // A closet viewer should show the whole active closet, not a page of it. Default to the cap
-    // so a normal-size closet (Shane's ~96 active) renders in full; >120 would need cursor paging.
+    // so a normal-size closet (~96 active items in the reference account) renders in full; >120 would need cursor paging.
     return 120;
   }
   return Math.min(Math.max(Math.trunc(limit), 1), 120);

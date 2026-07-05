@@ -117,7 +117,7 @@ const SECTION_OF: Record<PersonFactKind, PersonFactSection> = {
 };
 
 // Per-section visibility defaults (codified here, NOT scattered — a wrong default would exfiltrate an
-// allergy to another host). Sensitive sections default hosts:'all' per Shane's values call (D18):
+// allergy to another host). Sensitive sections default hosts:'all' per the owner's values decision (D18):
 // under-sharing a medical allergy to the user's own assistant is the worse failure.
 const SECTION_VISIBILITY_DEFAULTS: Record<PersonFactSection, ConsentVisibility> = {
   identity: { domains: 'all', hosts: 'all', derived_only_across: [] },
