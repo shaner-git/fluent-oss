@@ -178,7 +178,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
   server.registerTool(
     'health_get_preferences',
     {
-      annotations: { idempotentHint: true, readOnlyHint: true },
+      annotations: { title: 'Get Health Preferences', idempotentHint: true, readOnlyHint: true },
       description: 'Fetch saved Health preferences for fitness-first planning.',
       inputSchema: {
         view: readViewSchema,
@@ -206,6 +206,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
         ...provenanceInputSchema,
       },
       title: 'Update Health Preferences',
+      annotations: { title: 'Update Health Preferences' },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_HEALTH_WRITE_SCOPE);
@@ -230,7 +231,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
   server.registerTool(
     'health_get_context',
     {
-      annotations: { idempotentHint: true, readOnlyHint: true },
+      annotations: { title: 'Get Health Context', idempotentHint: true, readOnlyHint: true },
       description:
         'Fetch current Health training context with active goals, active block state, and recent activity. This is text-first fitness guidance only, not medical diagnosis, treatment, or nutrition prescription.',
       inputSchema: {
@@ -252,7 +253,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
   server.registerTool(
     'health_get_today_context',
     {
-      annotations: { idempotentHint: true, readOnlyHint: true },
+      annotations: { title: 'Get Health Today Context', idempotentHint: true, readOnlyHint: true },
       description:
         `Fetch today’s planned Health training session and any lightweight completion signals already recorded. Use this text-first tool for ordinary asks like "show today's training", "what is my workout today?", or "what training do I have today?" rather than opening Fluent Home. This is fitness training context only, not medical diagnosis, treatment, or nutrition prescription.`,
       inputSchema: {
@@ -275,7 +276,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
   server.registerTool(
     'health_get_review_context',
     {
-      annotations: { idempotentHint: true, readOnlyHint: true },
+      annotations: { title: 'Get Health Review Context', idempotentHint: true, readOnlyHint: true },
       description: 'Fetch a weekly Health review context with planned sessions, lightweight adherence signals, and any saved review.',
       inputSchema: {
         week_start: healthIsoDateInputSchema.optional().describe('Optional week start date formatted exactly as YYYY-MM-DD; omit to use the current training week.'),
@@ -297,7 +298,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
   server.registerTool(
     'health_get_active_block',
     {
-      annotations: { idempotentHint: true, readOnlyHint: true },
+      annotations: { title: 'Get Active Health Block', idempotentHint: true, readOnlyHint: true },
       description:
         'Fetch the active Health training block with inline sessions for fitness planning. This is text-first training context only, not medical diagnosis, treatment, or nutrition prescription.',
       inputSchema: {
@@ -320,7 +321,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
   server.registerTool(
     'health_get_block',
     {
-      annotations: { idempotentHint: true, readOnlyHint: true },
+      annotations: { title: 'Get Health Block', idempotentHint: true, readOnlyHint: true },
       description: 'Fetch a saved Health block by id.',
       inputSchema: {
         block_id: healthBlockIdInputSchema,
@@ -342,7 +343,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
   server.registerTool(
     'health_get_block_projection',
     {
-      annotations: { idempotentHint: true, readOnlyHint: true },
+      annotations: { title: 'Get Health Block Projection', idempotentHint: true, readOnlyHint: true },
       description:
         'Project the current or requested Health week from the active block for fitness planning. This is text-first training context only, not medical diagnosis, treatment, or nutrition prescription.',
       inputSchema: {
@@ -406,6 +407,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
         ...provenanceInputSchema,
       },
       title: 'Upsert Health Block',
+      annotations: { title: 'Upsert Health Block' },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_HEALTH_WRITE_SCOPE);
@@ -467,6 +469,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
         ...provenanceInputSchema,
       },
       title: 'Record Health Block Review',
+      annotations: { title: 'Record Health Block Review' },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_HEALTH_WRITE_SCOPE);
@@ -496,7 +499,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
   server.registerTool(
     'health_list_goals',
     {
-      annotations: { idempotentHint: true, readOnlyHint: true },
+      annotations: { title: 'List Health Goals', idempotentHint: true, readOnlyHint: true },
       description: 'List Health goals, optionally filtered by status.',
       inputSchema: {
         status: goalStatusSchema.optional(),
@@ -539,6 +542,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
         ...provenanceInputSchema,
       },
       title: 'Upsert Health Goal',
+      annotations: { title: 'Upsert Health Goal' },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_HEALTH_WRITE_SCOPE);
@@ -568,7 +572,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
   server.registerTool(
     'health_list_workout_logs',
     {
-      annotations: { idempotentHint: true, readOnlyHint: true },
+      annotations: { title: 'List Workout Logs', idempotentHint: true, readOnlyHint: true },
       description: 'List Health workout logs.',
       inputSchema: {
         date_from: z.string().optional(),
@@ -610,6 +614,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
         ...provenanceInputSchema,
       },
       title: 'Log Workout',
+      annotations: { title: 'Log Workout' },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_HEALTH_WRITE_SCOPE);
@@ -641,7 +646,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
   server.registerTool(
     'health_list_body_metrics',
     {
-      annotations: { idempotentHint: true, readOnlyHint: true },
+      annotations: { title: 'List Body Metrics', idempotentHint: true, readOnlyHint: true },
       description: 'List Health body metrics, optionally filtered by metric type.',
       inputSchema: {
         limit: z.number().int().min(1).max(200).optional(),
@@ -685,6 +690,7 @@ export function registerHealthMcpSurface(server: McpServer, health: HealthServic
         ...provenanceInputSchema,
       },
       title: 'Log Body Metric',
+      annotations: { title: 'Log Body Metric' },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_HEALTH_WRITE_SCOPE);

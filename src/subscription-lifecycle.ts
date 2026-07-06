@@ -5,12 +5,12 @@ import {
   type FluentCloudOnboardingRecord,
   type FluentCloudOnboardingState,
 } from './cloud-onboarding';
+import { purgeCloudAccountData } from './account-purge';
 import type { CoreRuntimeBindings, CloudRuntimeEnv } from './config';
 import type { FluentDatabase } from './storage';
 
 export const FLUENT_SUBSCRIPTION_GRACE_DAYS = 7;
 export const FLUENT_LAPSED_DATA_RETENTION_DAYS = 90;
-export const FLUENT_USER_DELETION_COMPLETION_DAYS = 30;
 
 export const LIMITED_ACCESS_ALLOWED_TOOLS = [
   'fluent_get_account_status',
@@ -358,25 +358,6 @@ async function cleanupExpiredLapsedAccount(
   candidate: CleanupCandidate,
   now: Date,
 ): Promise<void> {
-  const artifactRows = candidate.tenant_id
-    ? await bindings.db
-        .prepare(
-          `SELECT DISTINCT artifacts.r2_key
-           FROM artifacts
-           INNER JOIN style_item_photos ON style_item_photos.artifact_id = artifacts.id
-           WHERE style_item_photos.tenant_id = ? AND artifacts.r2_key IS NOT NULL`,
-        )
-        .bind(candidate.tenant_id)
-        .all<{ r2_key: string | null }>()
-    : { results: [] };
-  if (bindings.artifacts.delete) {
-    for (const artifact of artifactRows.results ?? []) {
-      if (artifact.r2_key) {
-        await bindings.artifacts.delete(artifact.r2_key);
-      }
-    }
-  }
-
   await recordLifecycleAuditEvent(bindings.db, {
     email: candidate.email,
     eventType: 'subscription_lifecycle.retention_cleanup_started',
@@ -388,54 +369,12 @@ async function cleanupExpiredLapsedAccount(
     userId: candidate.user_id,
   });
 
-  const statements = [
-    candidate.tenant_id
-      ? bindings.db
-          .prepare(
-            `DELETE FROM artifacts
-             WHERE id IN (
-               SELECT artifact_id FROM style_item_photos WHERE tenant_id = ? AND artifact_id IS NOT NULL
-             )`,
-          )
-          .bind(candidate.tenant_id)
-      : null,
-    candidate.tenant_id
-      ? bindings.db.prepare('DELETE FROM fluent_tenants WHERE id = ?').bind(candidate.tenant_id)
-      : null,
-    candidate.user_id
-      ? bindings.db.prepare('DELETE FROM oauthAccessToken WHERE userId = ?').bind(candidate.user_id)
-      : null,
-    candidate.user_id ? bindings.db.prepare('DELETE FROM session WHERE userId = ?').bind(candidate.user_id) : null,
-    candidate.user_id ? bindings.db.prepare('DELETE FROM account WHERE userId = ?').bind(candidate.user_id) : null,
-    candidate.user_id
-      ? bindings.db.prepare('DELETE FROM fluent_user_memberships WHERE user_id = ?').bind(candidate.user_id)
-      : null,
-    candidate.user_id
-      ? bindings.db.prepare('DELETE FROM fluent_user_identities WHERE id = ?').bind(candidate.user_id)
-      : null,
-    candidate.user_id ? bindings.db.prepare('DELETE FROM "user" WHERE id = ?').bind(candidate.user_id) : null,
-    bindings.db
-      .prepare(
-        `UPDATE fluent_cloud_onboarding
-         SET current_state = 'deleted',
-             tenant_id = NULL,
-             user_id = NULL,
-             deleted_at = COALESCE(deleted_at, ?),
-             metadata_json = ?,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE email_normalized = ?`,
-      )
-      .bind(
-        now.toISOString(),
-        JSON.stringify({
-          billingRecordsRetainedExternally: true,
-          cleanupReason: 'lapsed_retention_expired',
-          previousState: candidate.current_state,
-        }),
-        candidate.email_normalized,
-      ),
-  ].filter(Boolean) as ReturnType<FluentDatabase['prepare']>[];
-  await bindings.db.batch(statements);
+  await purgeCloudAccountData(bindings, {
+    email: candidate.email,
+    emailNormalized: candidate.email_normalized,
+    tenantId: candidate.tenant_id,
+    userId: candidate.user_id,
+  });
 
   await recordLifecycleAuditEvent(bindings.db, {
     email: candidate.email,

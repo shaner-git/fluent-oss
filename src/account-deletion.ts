@@ -1,4 +1,5 @@
 import { FLUENT_SUPPORT_EMAIL, FLUENT_OSS_AVAILABLE_URL, FLUENT_CLOUD_WAITLIST_URL } from './cloud-early-access';
+import { purgeCloudAccountData, type AccountPurgeBindings } from './account-purge';
 import { getHostedUserMembership, type HostedAuthUser, type HostedIdentityMembership } from './hosted-identity';
 import type { FluentDatabase } from './storage';
 
@@ -60,7 +61,7 @@ export interface AccountDeletionPolicySummary {
 const WAITLIST_ONLY_TIMELINE =
   'Waitlist-only deletions are attempted immediately after confirmation and should finish in the same browser session.';
 const CLOUD_ACCOUNT_TIMELINE =
-  'Full Fluent accounts move into operator review after confirmation and should normally be completed within 30 days unless a retention exception or manual incident review applies.';
+  'Full Fluent account deletions are attempted immediately after confirmation and should finish in the same browser session unless an error requires manual review.';
 
 const WAITLIST_ONLY_DELETED_DATA = [
   'Better Auth sign-in data for the early-access request account, including the Better Auth user row plus its linked sessions, accounts, and opaque access tokens.',
@@ -74,13 +75,13 @@ const CLOUD_ACCOUNT_DELETED_DATA = [
 ];
 
 const RETENTION_EXCEPTIONS = [
-  'Fluent retains the deletion request record and minimal audit metadata so operators can prove fulfillment, investigate abuse, and satisfy security or legal obligations.',
+  'Fluent retains the deletion request record and minimal audit metadata so Fluent can prove fulfillment, investigate abuse, and satisfy security or legal obligations.',
   `If a legal, billing, fraud, or safety hold applies, operators may retain only the minimum required metadata and move the request into manual review. Contact ${FLUENT_SUPPORT_EMAIL} for exceptions.`,
 ];
 
 const CONNECTED_CLIENT_EFFECTS = [
-  'Connected MCP clients keep working until a full Fluent account deletion is completed by an operator.',
-  'Once deletion is completed, Better Auth sessions and OAuth access are revoked and connected clients must reauthenticate. Completed deletions cannot reconnect to Fluent.',
+  'Connected MCP clients lose access immediately when deletion completes because Better Auth sessions and OAuth access are revoked.',
+  'Completed deletions cannot reconnect to Fluent. Create or request a new account if you need Fluent again later.',
   'Waitlist-only self-serve deletions revoke the current waitlist account immediately after completion in the same session.',
 ];
 
@@ -113,7 +114,7 @@ export async function getAccountDeletionFlow(
   return {
     currentRequest,
     membership,
-    selfServeReady: subjectType === 'waitlist_only',
+    selfServeReady: currentRequest?.status === 'manual_review_required' ? false : true,
     subjectType,
   };
 }
@@ -161,9 +162,10 @@ export async function requestAccountDeletion(
 }
 
 export async function confirmAccountDeletion(
-  db: FluentDatabase,
+  bindings: AccountPurgeBindings,
   actor: AccountDeletionActor,
 ): Promise<AccountDeletionFlow> {
+  const db = bindings.db;
   const requested = await requestAccountDeletion(db, actor);
   const currentRequest = requested.currentRequest;
   if (!currentRequest) {
@@ -175,32 +177,10 @@ export async function confirmAccountDeletion(
   }
 
   const now = timestamp();
-  if (!requested.selfServeReady) {
-    const updated = await updateAccountDeletionRequest(db, currentRequest.id, {
-      confirmedAt: currentRequest.confirmedAt ?? now,
-      manualReviewReason:
-        'Self-serve account deletion for provisioned Fluent tenants is not enabled yet. Operator review is required before domain data and client access are fully removed.',
-      status: 'manual_review_required',
-      timelineSummary: CLOUD_ACCOUNT_TIMELINE,
-    });
-    await recordAccountDeletionAuditEvent(db, {
-      after: updated,
-      before: currentRequest,
-      eventType: 'account_deletion.manual_review_required',
-      provenance: buildUserAuditProvenance(actor),
-    });
-    return {
-      ...requested,
-      currentRequest: updated,
-      selfServeReady: false,
-      subjectType: 'cloud_account',
-    };
-  }
-
   const pending = await updateAccountDeletionRequest(db, currentRequest.id, {
     confirmedAt: currentRequest.confirmedAt ?? now,
     status: 'deletion_pending',
-    timelineSummary: WAITLIST_ONLY_TIMELINE,
+    timelineSummary: requested.subjectType === 'waitlist_only' ? WAITLIST_ONLY_TIMELINE : CLOUD_ACCOUNT_TIMELINE,
   });
   await recordAccountDeletionAuditEvent(db, {
     after: pending,
@@ -210,7 +190,17 @@ export async function confirmAccountDeletion(
   });
 
   try {
-    await deleteWaitlistOnlyAccountData(db, actor);
+    if (requested.subjectType === 'waitlist_only') {
+      await deleteWaitlistOnlyAccountData(db, actor);
+    } else {
+      await purgeCloudAccountData(bindings, {
+        email: currentRequest.email ?? actor.email,
+        emailNormalized: currentRequest.emailNormalized ?? normalizeNullableText(actor.email)?.toLowerCase() ?? null,
+        profileId: currentRequest.profileId,
+        tenantId: currentRequest.tenantId,
+        userId: currentRequest.userId ?? actor.id,
+      });
+    }
     const completed = await updateAccountDeletionRequest(db, currentRequest.id, {
       completedAt: now,
       lastError: null,
@@ -226,13 +216,15 @@ export async function confirmAccountDeletion(
       currentRequest: completed,
       membership: null,
       selfServeReady: true,
-      subjectType: 'waitlist_only',
+      subjectType: requested.subjectType,
     };
   } catch (error) {
     const manualReviewRequired = await updateAccountDeletionRequest(db, currentRequest.id, {
       lastError: error instanceof Error ? error.message : String(error),
       manualReviewReason:
-        'The automatic waitlist-only deletion pass could not finish cleanly. Operator review is required to complete deletion.',
+        requested.subjectType === 'waitlist_only'
+          ? 'The automatic waitlist-only deletion pass could not finish cleanly. Operator review is required to complete deletion.'
+          : 'The automatic full-account deletion pass could not finish cleanly. Operator review is required to complete deletion.',
       status: 'manual_review_required',
       timelineSummary: CLOUD_ACCOUNT_TIMELINE,
     });
@@ -246,7 +238,7 @@ export async function confirmAccountDeletion(
       currentRequest: manualReviewRequired,
       membership: null,
       selfServeReady: false,
-      subjectType: 'waitlist_only',
+      subjectType: requested.subjectType,
     };
   }
 }
@@ -278,7 +270,7 @@ export async function cancelAccountDeletion(
 }
 
 export async function applyOperatorAccountDeletionAction(
-  db: FluentDatabase,
+  bindings: AccountPurgeBindings,
   input: {
     action: AccountDeletionOperatorAction;
     failureReason?: string | null;
@@ -286,6 +278,7 @@ export async function applyOperatorAccountDeletionAction(
     requestId: string;
   },
 ): Promise<AccountDeletionRequestRecord | null> {
+  const db = bindings.db;
   const current = await getAccountDeletionRequestById(db, input.requestId);
   if (!current) {
     return null;
@@ -296,6 +289,33 @@ export async function applyOperatorAccountDeletionAction(
   let eventType: string;
   switch (input.action) {
     case 'complete':
+      try {
+        if (current.subjectType === 'waitlist_only') {
+          await deleteWaitlistOnlyAccountData(db, {
+            email: current.email,
+            id: current.userId ?? '',
+            name: current.displayName,
+          });
+        } else {
+          await purgeCloudAccountData(bindings, {
+            email: current.email,
+            emailNormalized: current.emailNormalized,
+            profileId: current.profileId,
+            tenantId: current.tenantId,
+            userId: current.userId,
+          });
+        }
+      } catch (error) {
+        updated = await updateAccountDeletionRequest(db, current.id, {
+          lastError: error instanceof Error ? error.message : String(error),
+          manualReviewReason:
+            'The operator completion purge could not finish cleanly. Manual review is still required to complete deletion.',
+          status: 'manual_review_required',
+          timelineSummary: CLOUD_ACCOUNT_TIMELINE,
+        });
+        eventType = 'account_deletion.manual_review_required';
+        break;
+      }
       updated = await updateAccountDeletionRequest(db, current.id, {
         completedAt: current.completedAt ?? now,
         lastError: null,

@@ -3045,7 +3045,7 @@ export function registerStyleMcpSurface(
       inputSchema: {
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { title: 'Get Style Profile', readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ view }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3062,6 +3062,7 @@ export function registerStyleMcpSurface(
     'style_update_profile',
     {
       title: 'Update Style Profile',
+      annotations: { title: 'Update Style Profile' },
       description: 'Update the lightweight Style calibration profile.',
       inputSchema: {
         profile: z.any(),
@@ -3099,7 +3100,7 @@ export function registerStyleMcpSurface(
       inputSchema: {
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Style Context', readOnlyHint: true, idempotentHint: true },
     },
     async ({ view }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3121,7 +3122,7 @@ export function registerStyleMcpSurface(
       inputSchema: {
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Style Onboarding Calibration', readOnlyHint: true, idempotentHint: true },
     },
     async ({ view }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3148,6 +3149,7 @@ export function registerStyleMcpSurface(
     'style_record_calibration_response',
     {
       title: 'Record Style Calibration Response',
+      annotations: { title: 'Record Style Calibration Response' },
       description:
         'Save explicit Style calibration only after the user clearly confirms, rejects, or corrects a signal; marks known closet items actively worn, stale, or accidental; or gives basic constraints for a profile patch. Use signal rejections for phrase-level feedback such as "neon running tees are not me" or "mark the neon running tee accidental/stale so it does not count as my style preference" when no exact item ID is already available. In that case, call this immediately with a user_confirmed rejected signal, usually kind "aesthetic", value "neon running tee", and a note that no stable closet item match was found. Use kind "hard_avoid" only when the user explicitly says the phrase is a hard avoid. Do not fabricate item IDs, do not ask to use style_upsert_item merely to express phrase-level stale/accidental preference feedback, do not use this from inference alone, and do not treat rejected or stale/accidental evidence as confirmed taste.',
       inputSchema: {
@@ -3219,6 +3221,7 @@ export function registerStyleMcpSurface(
     'style_add_starter_closet_item',
     {
       title: 'Add Starter Closet Item',
+      annotations: { title: 'Add Starter Closet Item' },
       description:
         'Preferred write tool for adding one active starter Style closet item from a user-provided description, product link, or image URL during setup. Preserve obvious descriptive details such as length, structure, silhouette, formality, occasions, and evidence gaps. This is for user-supplied evidence only; do not search for or invent closet items, and do not use style_upsert_item for starter closet onboarding unless the user is doing advanced item maintenance.',
       inputSchema: {
@@ -3256,7 +3259,7 @@ export function registerStyleMcpSurface(
       description:
         'Request the native Style Setup / Calibration card for MCP Apps-capable hosts only after style_get_onboarding_calibration has already been called in this turn. Do not call this as the first Style setup/calibration tool, even when the user asks whether a native surface can mount. Do not call this for Claude.ai text-fallback onboarding; use style_get_onboarding_calibration plus explicit write tools instead. A successful tool call or Claude tool-call card is not proof that a widget rendered; claim native rendering only when the host visibly mounts ui://widget/fluent-style-setup-calibration-v1.html as an app/iframe surface. In Claude.ai/text hosts, the default classification is claude-visualizer-text unless that exact ui:// resource visibly mounts.',
       inputSchema: {},
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Show Style Setup Calibration Widget', readOnlyHint: true, idempotentHint: true },
       _meta: {
         ui: {
           resourceUri: STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
@@ -3299,7 +3302,7 @@ export function registerStyleMcpSurface(
     {
       title: 'List Style Items',
       description: 'List canonical Style closet items.',
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'List Style Items', readOnlyHint: true, idempotentHint: true },
     },
     async () => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3331,7 +3334,7 @@ export function registerStyleMcpSurface(
         item_id: z.string(),
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Style Item', readOnlyHint: true, idempotentHint: true },
     },
     async ({ item_id, view }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3361,6 +3364,7 @@ export function registerStyleMcpSurface(
     'style_upsert_item',
     {
       title: 'Upsert Style Item',
+      annotations: { title: 'Upsert Style Item' },
       description:
         'Create, update, archive, or retire a canonical Style closet item. Use this when the user says they no longer own something, wants an item removed from the closet, or needs a saved item corrected.',
       inputSchema: {
@@ -3401,7 +3405,7 @@ export function registerStyleMcpSurface(
         source_snapshot: z.any().optional(),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
+      annotations: { title: 'Archive Style Item', readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireAnyScope([FLUENT_STYLE_WRITE_SCOPE, FLUENT_MEALS_WRITE_SCOPE]);
@@ -3429,6 +3433,7 @@ export function registerStyleMcpSurface(
     'style_upsert_item_photos',
     {
       title: 'Upsert Style Item Photos',
+      annotations: { title: 'Upsert Style Item Photos' },
       description: 'Replace the linked photo/media set for a Style item.',
       inputSchema: {
         item_id: z.string(),
@@ -3470,7 +3475,7 @@ export function registerStyleMcpSurface(
         source_url: z.string().optional(),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: true },
+      annotations: { title: 'Set Style Item Product Image', readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: true },
     },
     async (args) => {
       const authProps = requireAnyScope([FLUENT_STYLE_WRITE_SCOPE, FLUENT_MEALS_WRITE_SCOPE]);
@@ -3536,7 +3541,7 @@ export function registerStyleMcpSurface(
         item_id: z.string(),
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Style Item Profile', readOnlyHint: true, idempotentHint: true },
     },
     async ({ item_id, view }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3563,6 +3568,7 @@ export function registerStyleMcpSurface(
     'style_upsert_item_profile',
     {
       title: 'Upsert Style Item Profile',
+      annotations: { title: 'Upsert Style Item Profile' },
       description: 'Create or update canonical typed stylist enrichment for a Style item.',
       inputSchema: {
         item_id: z.string(),
@@ -3606,7 +3612,7 @@ export function registerStyleMcpSurface(
         item_id: z.string(),
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Style Item Provenance', readOnlyHint: true, idempotentHint: true },
     },
     async ({ item_id, view }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3637,7 +3643,7 @@ export function registerStyleMcpSurface(
         max_items: z.number().int().positive().max(24).optional(),
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'List Style Descriptor Backlog', readOnlyHint: true, idempotentHint: true },
     },
     async ({ focus, max_items, view }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3663,7 +3669,7 @@ export function registerStyleMcpSurface(
         priority_filter: styleEvidenceGapPriorityFilterSchema,
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'List Style Evidence Gaps', readOnlyHint: true, idempotentHint: true },
     },
     async ({ priority_filter, view }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3686,7 +3692,7 @@ export function registerStyleMcpSurface(
         focus: z.enum(['all', 'gaps', 'replacements', 'buy_next', 'redundancy', 'occasion']).optional(),
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Analyze Wardrobe', readOnlyHint: true, idempotentHint: true },
     },
     async ({ focus, view }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3707,7 +3713,7 @@ export function registerStyleMcpSurface(
       description:
         'Fetch a public product page URL and extract page title plus direct product image references for Style purchase analysis. This returns image references only; the host must still inspect pixels with vision before calling style_show_purchase_analysis_widget or making color, material, texture, condition, or visual-overlap claims.',
       inputSchema: stylePurchasePageEvidenceInputSchema,
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { title: 'Extract Style Purchase Page Evidence', readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ product_url, max_images }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3756,7 +3762,7 @@ export function registerStyleMcpSurface(
         visualObservations: z.array(styleConcreteVisualObservationSchema).optional().describe('Concrete candidate image observations in camelCase shorthand.'),
         visual_observations: z.array(styleConcreteVisualObservationSchema).optional().describe('Concrete candidate image observations in snake_case shorthand.'),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Prepare Style Purchase Analysis', readOnlyHint: true, idempotentHint: true },
     },
     async (args) => {
       const authProps = requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3813,7 +3819,7 @@ export function registerStyleMcpSurface(
           .optional()
           .describe(`Maximum inline images to return, from 1 to ${STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES}.`),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Style Get Purchase Vision Packet', readOnlyHint: true, idempotentHint: true },
     },
     async ({ candidate, comparator_item_ids, max_inline_images }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -3868,7 +3874,7 @@ export function registerStyleMcpSurface(
       description:
         'Submit concrete host-model observations from an inspected candidate product image plus the host agent stylist_judgment. The judgment is the agent-owned buy/skip/wait call; Fluent validates the evidence, stores a short-lived private receipt for the current purchase analysis, and returns renderInput for the native v22 purchase-analysis card. When the host supports MCP Apps and the user request calls for the rich card, pass the returned renderInput to style_show_purchase_analysis_widget. Claude visualizer-only, plain MCP, or text-first clients may use style_render_purchase_analysis instead.',
       inputSchema: styleSubmitPurchaseVisualObservationsInputSchema.shape,
-      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false, readOnlyHint: false },
+      annotations: { title: 'Style Submit Purchase Visual Observations', destructiveHint: false, idempotentHint: false, openWorldHint: false, readOnlyHint: false },
       _meta: {},
     }, styleReadSecuritySchemes),
     async (args) => {
@@ -4030,7 +4036,7 @@ export function registerStyleMcpSurface(
         visualObservations: z.any().optional(),
         visual_observations: z.any().optional(),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Analyze Style Purchase', readOnlyHint: true, idempotentHint: true },
     },
     async (args) => {
       const authProps = requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
@@ -4102,7 +4108,7 @@ export function registerStyleMcpSurface(
         stylistJudgment: stylePurchaseStylistJudgmentSchema.optional(),
         stylist_judgment: stylePurchaseStylistJudgmentSchema.optional(),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Render Purchase Analysis Data', readOnlyHint: true, idempotentHint: true },
       _meta: {},
     }, styleReadSecuritySchemes),
     async (args) => {
@@ -4269,7 +4275,7 @@ export function registerStyleMcpSurface(
         filter: styleClosetFilterSchema,
         limit: z.number().int().min(1).max(120).optional(),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Show Fluent Style Closet', readOnlyHint: true, idempotentHint: true },
       _meta: {
         ui: {
           csp: closetWidgetMeta.ui.csp,
@@ -4335,7 +4341,7 @@ export function registerStyleMcpSurface(
       description:
         'Legacy/compatibility render adapter only — do NOT use in the Phase 1/2 public Style purchase flow. A buy/skip/consider/wait verdict is PROSE from one fluent_get_context(domain="style", intent="purchase", candidate, amount) read; to show the user the owned items that compare to the candidate, render fluent_render_style_closet_surface with filter.item_ids set to those comparator ids — NEVER this tool. Retained only for older hosts still driving the deprecated evidence flow; if somehow used, answer from the structured fallback data in text.',
       inputSchema: stylePurchaseAnalysisWidgetInputSchema,
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Legacy Style Purchase Card (deprecated)', readOnlyHint: true, idempotentHint: true },
       _meta: {
         ui: {
           resourceUri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
@@ -4356,7 +4362,7 @@ export function registerStyleMcpSurface(
       description:
         'Open the rich Fluent Style purchase-analysis widget in ChatGPT / MCP Apps-style hosts only after style_prepare_purchase_analysis has run and the host has actually inspected candidate images. Pass stylist_judgment with the host agent buy/skip/wait call so the card renders the agent-owned stylist decision. Do not call this with only a product URL, text metadata, image references, or uninspected visual evidence. Requires visual_evidence with candidateInspected true and concrete candidateObservations.',
       inputSchema: stylePurchaseAnalysisWidgetInputSchema,
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Show Purchase Analysis Widget', readOnlyHint: true, idempotentHint: true },
       _meta: {
         ui: {
           resourceUri: STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
@@ -4396,7 +4402,7 @@ export function registerStyleMcpSurface(
         candidate: stylePurchaseCandidateInputSchema.describe('Purchase candidate returned by the rendered analysis widget or prior preparation step.'),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Apply Purchase Analysis Action', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
@@ -4498,7 +4504,7 @@ export function registerStyleMcpSurface(
         ? 'Return a curated visual packet for broad stylist tasks outside the canonical staged purchase flow, including authenticated image routes, optional short-lived signed fallbacks, opt-in inline MCP image content, and compact closet comparator context. This tool does not extract arbitrary product pages; for product-link purchase decisions, use style_extract_purchase_page_evidence where exposed, then style_get_purchase_vision_packet followed by style_submit_purchase_visual_observations.'
         : 'Return a curated visual packet for broad stylist tasks outside the canonical staged purchase flow, including authenticated image routes, optional short-lived signed fallbacks, opt-in inline MCP image content, and compact closet comparator context. This full-MCP helper is not part of the curated ChatGPT submitted profile. It does not extract arbitrary product pages; purchase decisions should use style_prepare_purchase_analysis, direct product images or uploaded photos, style_get_purchase_vision_packet, and style_submit_purchase_visual_observations.',
       inputSchema: visualBundleInputSchema,
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Style Visual Bundle', readOnlyHint: true, idempotentHint: true },
     },
     async ({
       candidate,

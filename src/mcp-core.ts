@@ -1185,7 +1185,7 @@ export function registerCoreMcpSurface(
       title: 'Get Fluent Home',
       description:
         `Open the unified Fluent Home overview only when the user asks for Fluent Home, a cross-domain check-in, readiness, or what to do next across Meals, Style, and Health. This is not the Grocery List surface, Health Today surface, Account surface, or a shortcut router. For direct user asks such as "open my grocery list", "show me my grocery list", or "what do I need to buy?", use meals_render_grocery_list_v2 in ChatGPT / MCP Apps-style hosts instead of Home. For "show today's training", "what is my workout today?", or "what training do I have today?", use health_get_today_context instead of Home. For account/access/billing/export/deletion/support asks, use fluent_get_account_status instead of Home. Home may include component actions such as Open grocery list; ChatGPT/App SDK hosts can hand those actions to their dedicated rich surfaces, and text-only hosts should summarize the action result instead. All hosts receive a text fallback and structured summary; text-only hosts should prefer the provided fallback wording instead of rephrasing counts into report-like status telemetry. Does not expose raw internal IDs or billing checkout.`,
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Fluent Home', readOnlyHint: true, idempotentHint: true },
       securitySchemes: fluentHomeReadSecuritySchemes,
       _meta: {
         ui: {
@@ -1220,7 +1220,7 @@ export function registerCoreMcpSurface(
       title: 'Get Fluent Capabilities',
       description:
         'Fetch backend mode, contract version, available domains, enabled domains, onboarding state, and starter workflow discovery hints for Fluent tool routing.',
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Fluent Capabilities', readOnlyHint: true, idempotentHint: true },
     }),
     async () => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
@@ -1240,7 +1240,7 @@ export function registerCoreMcpSurface(
         intent: z.enum(['read', 'write', 'render', 'plan', 'onboard', 'unknown']).optional(),
         user_goal: z.string().optional(),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Fluent Next Actions', readOnlyHint: true, idempotentHint: true },
     },
     async ({ domain_hint, host_family, intent, user_goal }) => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
@@ -1260,7 +1260,7 @@ export function registerCoreMcpSurface(
     {
       title: 'Get Fluent Profile',
       description: 'Fetch the shared Fluent profile for the current Fluent deployment.',
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Fluent Profile', readOnlyHint: true, idempotentHint: true },
     },
     async () => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
@@ -1283,7 +1283,7 @@ export function registerCoreMcpSurface(
         domains: z.array(fluentVNextDomainSchema).optional().describe('Optional domains to include in the shared profile envelope. Omit for the canonical public MCP profile.'),
         include_provenance: z.boolean().optional().describe('Set true only when the user asks where profile facts came from. Omit for a compact profile read.'),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Fluent Shared Profile', readOnlyHint: true, idempotentHint: true },
     }),
     async () => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
@@ -1308,7 +1308,7 @@ export function registerCoreMcpSurface(
         domain: fluentVNextDomainSchema,
         intent: fluentVNextIntentSchema.optional(),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Start Here: Fluent Context', readOnlyHint: true, idempotentHint: true },
     }),
     async ({ amount, candidate, domain, intent }) => {
       requireVNextReadScope(domain);
@@ -1342,7 +1342,7 @@ export function registerCoreMcpSurface(
           'Optional lifecycle filter. Use active for normal saved state, planned for future meal/grocery state, completed for done items, archived for inactive memory, or any when the user asks broadly.',
         ),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'List Fluent Items', readOnlyHint: true, idempotentHint: true },
     }),
     async ({ cursor, domain, item_type, limit, query, status }) => {
       requireVNextReadScope(domain);
@@ -1367,7 +1367,7 @@ export function registerCoreMcpSurface(
         item_type: fluentVNextItemTypeSchema.optional(),
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Fluent Item', readOnlyHint: true, idempotentHint: true },
     }),
     async ({ domain, item_id, item_type, view }) => {
       requireVNextReadScope(domain);
@@ -1393,7 +1393,7 @@ export function registerCoreMcpSurface(
         domain: fluentVNextDomainSchema.optional(),
         subject: fluentVNextEvidenceSubjectSchema.optional(),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'List Fluent Evidence', readOnlyHint: true, idempotentHint: true },
     }),
     async ({ claim, domain, subject }) => {
       if (domain) {
@@ -1424,7 +1424,7 @@ export function registerCoreMcpSurface(
           'Optional saved Fluent style item ID that is the main subject of the media request. Use an ID returned by fluent_list_items or fluent_get_item.',
         ),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Fluent Media Bundle', readOnlyHint: true, idempotentHint: true },
       // Kept widget-callable for transition safety: a host still running a CACHED v1 closet widget may call
       // this read tool on flip. Hosts gate component-initiated calls on this flag; dropping it would
       // make those cached widgets' fit-photo reads fail. The current widget fetches the fit photo
@@ -1478,7 +1478,7 @@ export function registerCoreMcpSurface(
         amount: z.number().min(0).optional().describe('Optional candidate purchase amount in CAD. Omit when no price is known; Fluent will not infer a price.'),
         category: fluentVNextBudgetCategorySchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Fluent Purchase Context', readOnlyHint: true, idempotentHint: true },
     }),
     async ({ amount, category }) => {
       requireBudgetReadScope(category);
@@ -1502,7 +1502,7 @@ export function registerCoreMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Update Fluent Shared Profile Patch', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     }),
     async (args) => {
       const authProps = requireVNextWriteScope(args.domain);
@@ -1531,7 +1531,7 @@ export function registerCoreMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Set Fluent Budget Envelope', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       // The envelope-setup MCP App writes through the app->host bridge; hosts gate
       // widget-initiated tool calls on this flag.
       _meta: { 'openai/widgetAccessible': true },
@@ -1569,7 +1569,7 @@ export function registerCoreMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Log Fluent Budget Spend', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     }),
     async (args) => {
       await requireExplicitPublicWriteApproval(args.approval, 'fluent_log_budget_spend', options.publicWriteRateLimiter);
@@ -1600,7 +1600,7 @@ export function registerCoreMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Save Fluent Recipe', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     }),
     async (args) => {
       const authProps = requireVNextWriteScope('meals');
@@ -1627,7 +1627,7 @@ export function registerCoreMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Update Fluent Recipe Patch', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     }),
     async (args) => {
       const authProps = requireVNextWriteScope('meals');
@@ -1655,7 +1655,7 @@ export function registerCoreMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Record Fluent Recipe Feedback', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     }),
     async (args) => {
       const authProps = requireVNextWriteScope('meals');
@@ -1682,7 +1682,7 @@ export function registerCoreMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Save Fluent Meal Plan', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     }),
     async (args) => {
       const authProps = requireVNextWriteScope('meals');
@@ -1714,7 +1714,7 @@ export function registerCoreMcpSurface(
         week_start: z.string().optional().describe('Optional selected meal-plan week start from the current grocery-list readback.'),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Apply Fluent Grocery List Change', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
         ui: {
@@ -1774,7 +1774,7 @@ export function registerCoreMcpSurface(
         week_start: z.string().optional().describe('Optional selected meal-plan week start from the current grocery-list readback.'),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Apply Fluent Grocery Shopping Result', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
         ui: {
@@ -1814,7 +1814,7 @@ export function registerCoreMcpSurface(
         source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Update Fluent Style Item Patch', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         // Widget-callable for the closet edit form; stays model-visible. All closet write tools
         // (patch, set-image, archive) are model-visible; archive's "explicit user signal only" gate
@@ -1876,7 +1876,7 @@ export function registerCoreMcpSurface(
         source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Create Fluent Style Item', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         // Widget-callable so the onboarding/confirm surface can create items; model-visible like the patch tool.
         'openai/widgetAccessible': true,
@@ -2110,7 +2110,7 @@ export function registerCoreMcpSurface(
         response_mode: fluentStyleClosetWriteResponseModeSchema,
         source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Refresh Fluent Style Item Profile', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
@@ -2164,7 +2164,7 @@ export function registerCoreMcpSurface(
         source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Set Fluent Style Item Image', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
@@ -2209,7 +2209,7 @@ export function registerCoreMcpSurface(
         source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Upsert Fluent Item', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
         ui: {
@@ -2253,7 +2253,7 @@ export function registerCoreMcpSurface(
         source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Archive Fluent Item', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
         ui: {
@@ -2298,7 +2298,7 @@ export function registerCoreMcpSurface(
         subject: z.string().optional().describe('Optional existing Fluent subject ID, such as a recipe ID or calibration subject.'),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Record Fluent Event', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     }),
     async (args) => {
       const authProps = requireVNextWriteScope(args.domain);
@@ -2320,7 +2320,7 @@ export function registerCoreMcpSurface(
       title: 'Get Fluent Account Status',
       description:
         'Fetch the ChatGPT-safe Fluent account/status surface when the user asks about account status, access status, paid-access boundary, export, deletion, reactivation, support, or whether Fluent is ready for their account. Prefer this over fluent_get_home for account/access asks. Returns access state, enabled domains, public entitlement state, account/support links, export and deletion links or instructions, and support email. When summarizing the result, include the support line as plain text instead of a blank heading, for example: "Support: email hello@meetfluent.app." Does not start, sell, upgrade, cancel, or manage paid access inside ChatGPT, and does not expose billing internals or internal IDs.',
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Fluent Account Status', readOnlyHint: true, idempotentHint: true },
     }),
     async () => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
@@ -2336,6 +2336,7 @@ export function registerCoreMcpSurface(
     'fluent_update_profile',
     {
       title: 'Update Fluent Profile',
+      annotations: { title: 'Update Fluent Profile' },
       description: 'Update the shared Fluent profile display name, timezone, or metadata.',
       inputSchema: {
         display_name: z.string().optional(),
@@ -2364,7 +2365,7 @@ export function registerCoreMcpSurface(
     {
       title: 'List Fluent Domains',
       description: 'List available Fluent domains with lifecycle and onboarding state.',
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'List Fluent Domains', readOnlyHint: true, idempotentHint: true },
     },
     async () => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
@@ -2387,7 +2388,7 @@ export function registerCoreMcpSurface(
         limit: z.number().int().min(1).max(200).optional(),
         view: readViewSchema,
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'List Domain Events', readOnlyHint: true, idempotentHint: true },
     },
     async ({ domain, entity_type, entity_id, event_type, since, until, limit, view }) => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
@@ -2412,6 +2413,7 @@ export function registerCoreMcpSurface(
     'fluent_enable_domain',
     {
       title: 'Enable Fluent Domain',
+      annotations: { title: 'Enable Fluent Domain' },
       description: 'Enable a Fluent domain so it can participate in first-use activation and workflows.',
       inputSchema: {
         domain_id: z.string(),
@@ -2428,6 +2430,7 @@ export function registerCoreMcpSurface(
     'fluent_disable_domain',
     {
       title: 'Disable Fluent Domain',
+      annotations: { title: 'Disable Fluent Domain' },
       description: 'Disable a Fluent domain without removing its registry record.',
       inputSchema: {
         domain_id: z.string(),
@@ -2444,6 +2447,7 @@ export function registerCoreMcpSurface(
     'fluent_begin_domain_onboarding',
     {
       title: 'Begin Domain Onboarding',
+      annotations: { title: 'Begin Domain Onboarding' },
       description: 'Mark domain onboarding as started for a Fluent domain.',
       inputSchema: {
         domain_id: z.string(),
@@ -2467,6 +2471,7 @@ export function registerCoreMcpSurface(
     'fluent_complete_domain_onboarding',
     {
       title: 'Complete Domain Onboarding',
+      annotations: { title: 'Complete Domain Onboarding' },
       description: 'Mark domain onboarding as completed for a Fluent domain.',
       inputSchema: {
         domain_id: z.string(),

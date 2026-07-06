@@ -1083,6 +1083,7 @@ export function registerMealsMcpSurface(
       description:
         'List Fluent MCP tool names and starter workflow groups as a discovery fallback when keyword search, deferred core tools, or tool routing are unclear.',
       annotations: {
+        title: 'List Fluent Tools',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -1105,6 +1106,7 @@ export function registerMealsMcpSurface(
         week_start: isoDateInputSchema.optional().describe('Optional plan week start date formatted exactly as YYYY-MM-DD; takes precedence over today when provided.'),
       },
       annotations: {
+        title: 'Detail Only: Meal Plan',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -1131,6 +1133,7 @@ export function registerMealsMcpSurface(
         limit: z.number().int().min(1).max(52).optional(),
       },
       annotations: {
+        title: 'Detail Only: Meal Plan History',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -1162,6 +1165,7 @@ export function registerMealsMcpSurface(
         date: isoDateInputSchema.describe('Date to fetch, formatted exactly as YYYY-MM-DD.'),
       },
       annotations: {
+        title: 'Get Day Meal Plan',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -1196,6 +1200,7 @@ export function registerMealsMcpSurface(
         date: isoDateInputSchema.optional().describe('Optional date formatted exactly as YYYY-MM-DD; omit to use today.'),
       },
       annotations: {
+        title: 'Detail Only: Today Meals',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -1236,6 +1241,7 @@ export function registerMealsMcpSurface(
         view: readViewSchema,
       },
       annotations: {
+        title: 'Get Recipe Data',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -1342,6 +1348,9 @@ export function registerMealsMcpSurface(
           slug: mealRecipeSlugInputSchema.optional().describe('Fallback saved Fluent recipe slug; use only when no recipe_id/id is available.'),
         },
         annotations: {
+          title: options?.preferredAlias
+          ? 'Show Recipe (Preferred ChatGPT/App SDK Alias)'
+          : 'Show Recipe Card (MCP Apps Widget)',
           readOnlyHint: true,
           idempotentHint: true,
         },
@@ -1413,6 +1422,7 @@ export function registerMealsMcpSurface(
           weekStart: isoDateInputSchema.optional().describe('Legacy camelCase week start alias formatted exactly as YYYY-MM-DD; prefer week_start.'),
         },
         annotations: {
+          title: 'Show Grocery List',
           readOnlyHint: true,
           idempotentHint: true,
         },
@@ -1483,6 +1493,7 @@ export function registerMealsMcpSurface(
         'Promoted render adapter for the Fluent budget envelope-setup MCP Apps surface. Use this when the user wants to see, set, or edit their clothing/grocery budget envelopes and the host can mount MCP Apps ui:// resources. Returns the envelope-setup widget resource plus structured fallback data; if the host cannot mount the resource, answer from the structured fallback data in text.',
       inputSchema: {},
       annotations: {
+        title: 'Show Fluent Budget Envelopes',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -1511,6 +1522,7 @@ export function registerMealsMcpSurface(
         weekStart: isoDateInputSchema.optional().describe('Legacy camelCase week start alias formatted exactly as YYYY-MM-DD; prefer week_start.'),
       },
       annotations: {
+        title: 'Render Fluent Grocery List',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -1581,6 +1593,7 @@ export function registerMealsMcpSurface(
         'Legacy compatibility render tool for the retired Pantry Dashboard. Do not use for new user flows, do not promote as an active product surface, and do not use it in the curated ChatGPT app profile. For kitchen or at-home questions, use meals_get_onboarding_calibration, meals_get_current_grocery_list, meals_get_inventory_summary, or meals_get_inventory and answer in text.',
       inputSchema: {},
       annotations: {
+        title: 'Show Legacy Pantry Dashboard (Compatibility)',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -1647,7 +1660,7 @@ export function registerMealsMcpSurface(
         staple_state: z.enum(['ok', 'low', 'out']).optional(),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Apply Legacy Pantry Dashboard Action', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
@@ -1908,6 +1921,7 @@ export function registerMealsMcpSurface(
           'Render a standalone static grocery widget for ChatGPT host verification. Prefer this for prompts about a standalone grocery widget, grocery widget smoke test, host verification, or widget debugging. Use this instead of the real grocery list whenever the user asks for a standalone or verification widget.',
         inputSchema: {},
         annotations: {
+          title: 'Render Standalone Grocery Widget',
           readOnlyHint: true,
           idempotentHint: true,
         },
@@ -1947,6 +1961,7 @@ export function registerMealsMcpSurface(
     'meals_create_recipe',
     {
       title: 'Create Recipe',
+      annotations: { title: 'Create Recipe' },
       description: 'Create a canonical meal recipe from a full recipe document.',
       inputSchema: {
         recipe: z.any(),
@@ -1983,6 +1998,7 @@ export function registerMealsMcpSurface(
         status: z.string().optional(),
       },
       annotations: {
+        title: 'Detail Only: Recipe Discovery',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -2019,6 +2035,7 @@ export function registerMealsMcpSurface(
         'Fetch the structured Meals recipe-book onboarding read model: shelves, recipe cards, why-shown reasons, catalog gaps, and safe recipe-specific learning actions. Use this for recipe-book setup or visual recipe browsing. Browsing is read-only evidence; do not treat it as confirmed preference.',
       inputSchema: {},
       annotations: {
+        title: 'Get Recipe Book',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -2047,7 +2064,7 @@ export function registerMealsMcpSurface(
         week_start: z.string().nullable().optional(),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Apply Recipe Book Action', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
@@ -2083,6 +2100,7 @@ export function registerMealsMcpSurface(
         view: readViewSchema,
       },
       annotations: {
+        title: 'Detail Only: Meals Preferences',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -2106,6 +2124,7 @@ export function registerMealsMcpSurface(
         'Read the detailed Meals setup/calibration model for explicit setup, returning/imported inventory calibration, inferred preference confirmation, or starter meal preference collection. For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, start with fluent_get_context(domain="meals", intent="planning") when available; use this tool only when the context packet is unavailable or the user asks for setup/calibration detail. At-home ownership, old plans, accepted recipes, and grocery actions are evidence only; say "your kitchen inventory suggests" or "your meal history suggests" unless the user explicitly confirmed the preference.',
       inputSchema: {},
       annotations: {
+        title: 'Detail Only: Meals Setup Calibration',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -2200,7 +2219,7 @@ export function registerMealsMcpSurface(
         starter_preference_text: z.string().nullable().optional(),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Record Meals Calibration Response', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
@@ -2297,6 +2316,7 @@ export function registerMealsMcpSurface(
     'meals_update_preferences',
     {
       title: 'Update Meals Preferences',
+      annotations: { title: 'Update Meals Preferences' },
       description:
         'Replace the canonical meal-planning preferences document for advanced maintenance. For normal Meals setup, confirm/correct prompts, starter household signals, kitchen-inventory evidence calibration, allergies, hard avoids, dietary constraints, cooking cadence, weeknight limits, budget sensitivity, leftovers, or grocery expectations, prefer meals_record_calibration_response so provenance and confidence semantics stay intact.',
       inputSchema: {
@@ -2340,7 +2360,7 @@ export function registerMealsMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Upsert Meal Plan', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
@@ -2397,7 +2417,7 @@ export function registerMealsMcpSurface(
           .describe('Optional explicit planning overrides from the user; omit when the setup read model already has enough targets.'),
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Generate Meal Plan', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
@@ -2437,7 +2457,7 @@ export function registerMealsMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Accept Meal Plan Candidate', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
@@ -2471,6 +2491,7 @@ export function registerMealsMcpSurface(
       title: 'Get Inventory',
       description: 'Fetch the current meal inventory.',
       annotations: {
+        title: 'Get Inventory',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -2517,6 +2538,7 @@ export function registerMealsMcpSurface(
         today: z.string().optional(),
       },
       annotations: {
+        title: 'Detail Only: Inventory Summary',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -2536,6 +2558,7 @@ export function registerMealsMcpSurface(
         recipe_id: z.string().optional(),
       },
       annotations: {
+        title: 'Get Meal Memory',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -2569,6 +2592,7 @@ export function registerMealsMcpSurface(
         recipe_id: z.string().optional(),
       },
       annotations: {
+        title: 'List Meal Feedback',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -2598,6 +2622,7 @@ export function registerMealsMcpSurface(
     'meals_patch_recipe',
     {
       title: 'Patch Recipe',
+      annotations: { title: 'Patch Recipe' },
       description: 'Apply a JSON Patch mutation to a canonical recipe document and sync the indexed recipe columns.',
       inputSchema: {
         recipe_id: z.string(),
@@ -2634,6 +2659,7 @@ export function registerMealsMcpSurface(
     'meals_log_feedback',
     {
       title: 'Log Feedback',
+      annotations: { title: 'Log Feedback' },
       description: 'Persist meal feedback and update meal memory status for the recipe.',
       inputSchema: {
         recipe_id: z.string(),
@@ -2675,6 +2701,7 @@ export function registerMealsMcpSurface(
     'meals_mark_meal_cooked',
     {
       title: 'Mark Meal Cooked',
+      annotations: { title: 'Mark Meal Cooked' },
       description:
         'Mark a planned meal entry as cooked for the current or specified date, including pulling a later-in-the-week meal forward and refreshing the remaining schedule when needed.',
       inputSchema: {
@@ -2701,6 +2728,7 @@ export function registerMealsMcpSurface(
     'meals_update_inventory',
     {
       title: 'Update Inventory',
+      annotations: { title: 'Update Inventory' },
       description:
         'Create or update pantry, fridge, freezer, or household inventory for one ingredient or grocery item, including quantity, unit, location, and stock state.',
       inputSchema: {
@@ -2749,6 +2777,7 @@ export function registerMealsMcpSurface(
     'meals_delete_inventory_item',
     {
       title: 'Delete Inventory Item',
+      annotations: { title: 'Delete Inventory Item' },
       description:
         'Legacy/admin cleanup for inventory typos, duplicates, test entries, or stale ghost rows. Do not use as normal Pantry or shopping UX; new user flows should correct quantities/status or start a new meal/grocery plan instead.',
       inputSchema: {
@@ -2771,6 +2800,7 @@ export function registerMealsMcpSurface(
     'meals_update_inventory_batch',
     {
       title: 'Update Inventory Batch',
+      annotations: { title: 'Update Inventory Batch' },
       description:
         'Atomically create or update multiple pantry, fridge, freezer, or household inventory items in one batch for receipt imports or bulk grocery updates.',
       inputSchema: {
@@ -2840,6 +2870,7 @@ export function registerMealsMcpSurface(
     'meals_record_plan_review',
     {
       title: 'Record Plan Review',
+      annotations: { title: 'Record Plan Review' },
       description: 'Persist a short weekly review for a meal plan.',
       inputSchema: {
         meal_plan_id: z.string().optional(),
@@ -2877,6 +2908,7 @@ export function registerMealsMcpSurface(
         status: z.string().optional(),
       },
       annotations: {
+        title: 'List Grocery Intents',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -2918,7 +2950,7 @@ export function registerMealsMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Generate Grocery Plan', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
       const authProps = requireScope(FLUENT_MEALS_WRITE_SCOPE);
@@ -2957,6 +2989,7 @@ export function registerMealsMcpSurface(
         view: readViewSchema,
       },
       annotations: {
+        title: 'Get Current Grocery List',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -2983,6 +3016,7 @@ export function registerMealsMcpSurface(
         view: readViewSchema,
       },
       annotations: {
+        title: 'Get Grocery Plan',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -3018,6 +3052,7 @@ export function registerMealsMcpSurface(
         view: readViewSchema,
       },
       annotations: {
+        title: 'Prepare Grocery Order',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -3047,6 +3082,7 @@ export function registerMealsMcpSurface(
         week_start: z.string(),
       },
       annotations: {
+        title: 'List Grocery Plan Actions',
         readOnlyHint: true,
         idempotentHint: true,
       },
@@ -3115,7 +3151,7 @@ export function registerMealsMcpSurface(
         response_mode: writeResponseModeSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Upsert Grocery Plan Action', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
@@ -3171,7 +3207,7 @@ export function registerMealsMcpSurface(
         item_key: groceryPlanItemKeySchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Delete Grocery Plan Action', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
@@ -3206,7 +3242,7 @@ export function registerMealsMcpSurface(
         metadata: metadataInputSchema,
         ...provenanceInputSchema,
       },
-      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Upsert Grocery Intent', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
@@ -3234,6 +3270,7 @@ export function registerMealsMcpSurface(
     'meals_delete_grocery_intent',
     {
       title: 'Delete Grocery Intent',
+      annotations: { title: 'Delete Grocery Intent' },
       description:
         'Legacy/admin cleanup for a specific grocery intent that should no longer be bought. Restart/reset product flows should start a new meal or grocery plan instead of deleting plan state.',
       inputSchema: {

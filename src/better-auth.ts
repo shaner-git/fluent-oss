@@ -68,7 +68,7 @@ import {
   isProfiledMcpPath,
   resolveMcpRuntimeProfileForRequest,
 } from './chatgpt-profile-routing';
-import { wrapCloudflareDatabase } from './storage';
+import { wrapCloudflareBlobStore, wrapCloudflareDatabase } from './storage';
 import { ensureHostedUserProvisioned } from './hosted-identity';
 import {
   handleAccountBillingCheckoutRequest,
@@ -365,6 +365,8 @@ async function handleSignInPage(request: Request, env: CloudRuntimeEnv): Promise
   }
   const origin = new URL(request.url).origin;
 
+  const selfServe = (env.FLUENT_CLOUD_ACCESS_MODE ?? '').trim().toLowerCase() === 'self_serve';
+
   return html(
     renderSignInPage({
       callbackUrl: deriveMagicLinkCallbackUrl(request.url),
@@ -373,6 +375,7 @@ async function handleSignInPage(request: Request, env: CloudRuntimeEnv): Promise
       passwordRedirectUrl: derivePostSignInRedirectUrl(request.url, true),
       provisioningError: provisioning.error,
       provisioningResult: provisioning.result,
+      selfServe,
       session,
     }),
   );
@@ -482,10 +485,6 @@ async function handleAccountDeletionPage(request: Request, env: CloudRuntimeEnv)
   const db = wrapCloudflareDatabase(env.DB);
   const actor = accountDeletionActorFromSession(session);
   const flow = await getAccountDeletionFlow(db, actor);
-  const accessResponse = await maybeDenyAccountDeletionForHostedAccount(request, env, session, flow, 'Account deletion');
-  if (accessResponse) {
-    return accessResponse;
-  }
   return html(
     renderAccountDeletionPage({
       actionMessage: null,
@@ -515,12 +514,8 @@ async function handleAccountDeletionAction(
   }
 
   const db = wrapCloudflareDatabase(env.DB);
+  const deletionBindings = { artifacts: wrapCloudflareBlobStore(env.ARTIFACTS), db };
   const actor = accountDeletionActorFromSession(session);
-  const initialFlow = await getAccountDeletionFlow(db, actor);
-  const accessResponse = await maybeDenyAccountDeletionForHostedAccount(request, env, session, initialFlow, 'Account deletion');
-  if (accessResponse) {
-    return accessResponse;
-  }
   let flow: AccountDeletionFlow;
   let actionMessage: string;
 
@@ -531,12 +526,12 @@ async function handleAccountDeletionAction(
         'Deletion requested. Review the summary below, then confirm if you want Fluent to continue with deletion.';
       break;
     case 'confirm':
-      flow = await confirmAccountDeletion(db, actor);
+      flow = await confirmAccountDeletion(deletionBindings, actor);
       actionMessage =
         flow.currentRequest?.status === 'deletion_completed'
           ? 'Deletion completed. This account can no longer sign in to Fluent.'
           : flow.currentRequest?.status === 'manual_review_required'
-            ? 'Deletion confirmed. Fluent has queued this account for operator review and manual completion.'
+            ? 'Deletion confirmed, but Fluent needs manual review because the automatic purge did not finish cleanly.'
             : 'Deletion confirmed.';
       break;
     case 'cancel':
@@ -711,40 +706,6 @@ async function handleAccountReactivateRequest(request: Request, env: CloudRuntim
   }
 }
 
-async function maybeDenyAccountDeletionForHostedAccount(
-  request: Request,
-  env: CloudRuntimeEnv,
-  session: BetterAuthSessionPayload,
-  flow: AccountDeletionFlow,
-  title: string,
-): Promise<Response | null> {
-  const user = session?.user;
-  if (!user?.id || flow.subjectType !== 'cloud_account') {
-    return null;
-  }
-
-  const accessDecision = await resolveHostedCloudAccess(wrapCloudflareDatabase(env.DB), env, {
-    email: user.email ?? null,
-    userId: user.id,
-  });
-  if (accessDecision.allowed) {
-    return null;
-  }
-
-  const code = accessDecision.code ?? 'not_on_waitlist';
-  const details = buildFluentCloudAccessFailureDetails(code, {
-    email: user.email ?? null,
-    title: `${title} | Fluent`,
-  });
-  return html(
-    renderFluentCloudAccessFailurePage(code, {
-      email: user.email ?? null,
-      title: `${title} | Fluent`,
-    }),
-    details.status,
-  );
-}
-
 async function maybeDenyBillingForHostedAccount(
   request: Request,
   env: CloudRuntimeEnv,
@@ -806,7 +767,10 @@ async function handleAccountDeletionOpsRequest(request: Request, env: CloudRunti
   }
 
   const db = wrapCloudflareDatabase(env.DB);
-  const updated = await applyOperatorAccountDeletionAction(db, {
+  const updated = await applyOperatorAccountDeletionAction({
+    artifacts: wrapCloudflareBlobStore(env.ARTIFACTS),
+    db,
+  }, {
     action: rawAction as AccountDeletionOperatorAction,
     failureReason: typeof payload.failure_reason === 'string' ? payload.failure_reason : null,
     operatorName: typeof payload.operator_name === 'string' ? payload.operator_name : null,
@@ -1938,9 +1902,11 @@ function renderSignInPage(input: {
   passwordRedirectUrl: string | null;
   provisioningError: string | null;
   provisioningResult: Awaited<ReturnType<typeof ensureHostedUserProvisioned>> | null;
+  selfServe?: boolean;
   session: BetterAuthSessionPayload;
 }): string {
   const signedIn = Boolean(input.session?.user);
+  const selfServe = Boolean(input.selfServe);
   const signedInBody = signedIn
     ? renderSignedInAccountBody({
         mcpUrl: `${input.origin}/mcp`,
@@ -1961,7 +1927,9 @@ function renderSignInPage(input: {
   const signedOutBody = `
 <p class="eyebrow">⟩ Fluent sign-in</p>
 <h1 class="display">Sign in with <span class="accent">email</span></h1>
-<p class="lede">Fluent is in early access and open source. Approved accounts can sign in here today, and everyone else can request early access or explore the open-source runtime.</p>
+<p class="lede">${selfServe
+    ? 'Fluent is in free early access and open source. Sign in — or create your account — with your email below.'
+    : 'Fluent is in early access and open source. Approved accounts can sign in here today, and everyone else can request early access or explore the open-source runtime.'}</p>
 <div class="auth-card">
   <form id="password-form" class="stack">
     <label>
@@ -1991,12 +1959,19 @@ function renderSignInPage(input: {
   <div id="form-status" class="meta status-live" aria-live="polite"></div>
 </div>
 <ul class="support-list">
-  <li>Reviewer demo accounts can sign in with issued credentials.</li>
+  ${selfServe
+    ? `<li>New to Fluent? Sign in with your email to create your account — free while in early access.</li>
+  <li>Prefer passwordless? Use the email sign-in link option above.</li>
+  <li>Open the sign-in link in this same browser. Links expire in 15 minutes.</li>
+  <li>Explore the open-source runtime at <a href="${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}">${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}</a>.</li>
+  <li>Contact <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a> if anything is stuck.</li>
+  <li>Need to delete a Fluent account later? Sign in first, then open <a href="/account/delete">/account/delete</a>.</li>`
+    : `<li>Reviewer demo accounts can sign in with issued credentials.</li>
   <li>Approved early-access accounts may also use a sign-in link.</li>
   <li>Only approved early-access accounts can finish sign-in right now.</li>
   <li>Request early access at <a href="${escapeHtml(FLUENT_CLOUD_WAITLIST_URL)}">${escapeHtml(FLUENT_CLOUD_WAITLIST_URL)}</a>.</li>
   <li>Explore the open-source runtime at <a href="${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}">${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}</a>.</li>
-  <li>Contact <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a> if you expected access.</li>
+  <li>Contact <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a> if you expected access.</li>`}
   <li>Open the sign-in link in this same browser. Links expire in 15 minutes.</li>
   <li>Need to delete a Fluent account later? Sign in first, then open <code>/account/delete</code>.</li>
 </ul>`;
@@ -2237,6 +2212,7 @@ function renderConsentPage(input: {
   const logo = input.logoUrl
     ? `<img class="client-logo" src="${escapeHtml(input.logoUrl)}" alt="" />`
     : `<div class="client-logo client-logo-fallback">${escapeHtml((input.clientName || '?').slice(0, 1).toUpperCase())}</div>`;
+  const connectingAs = escapeHtml(input.session?.user?.email ?? input.session?.user?.id ?? 'your account');
 
   return renderAuthShell({
     body: `${warning}
@@ -2246,7 +2222,7 @@ function renderConsentPage(input: {
   ${logo}
   <div class="client-meta">
     <p class="client-name">${escapeHtml(input.clientName)}</p>
-    <p class="client-sub">Signed in as <strong>${escapeHtml(input.session?.user?.email ?? input.session?.user?.id ?? 'your account')}</strong></p>
+    <p class="client-sub">This app will connect to your Fluent account.</p>
   </div>
 </div>
 <div class="scope-card">
@@ -2257,13 +2233,17 @@ function renderConsentPage(input: {
 <div class="notice soft">
   <p class="notice-title">Before you approve</p>
   <p>Approving lets this app use the requested access with your Fluent account.</p>
-  <p>Fluent keeps the approval record for this connection. Requested exports are kept for 7 days. Account deletion starts with you and is completed with Fluent support today.</p>
+  <p>Fluent keeps the approval record for this connection. Requested exports are kept for 7 days. Account deletion is self-serve and runs immediately when you confirm it.</p>
   <p class="notice-link">Privacy: <a href="https://meetfluent.app/privacy/">meetfluent.app/privacy</a></p>
+</div>
+<div class="notice soft">
+  <p class="notice-title">Connecting as <strong>${connectingAs}</strong></p>
+  <p>Not you? Use a different account before approving this connection.</p>
 </div>
 <div class="actions">
   <button id="approve" class="btn-primary">Approve <span class="btn-arrow">→</span></button>
   <button id="deny" class="btn-secondary">Deny</button>
-  <button id="switch-account" class="btn-secondary">Use a different account</button>
+  <button id="switch-account" class="btn-secondary">Not you? Use a different account</button>
 </div>
 <div id="consent-status" class="meta" aria-live="polite"></div>
 <script>
@@ -2397,7 +2377,7 @@ function renderAccountDeletionPage(input: {
     body: `${actionNotice}
 <p class="eyebrow">⟩ Fluent account deletion</p>
 <h1 class="display">Delete your <span class="accent">Fluent</span> account</h1>
-<p class="lede">This page handles both provisioned Fluent accounts and signed-in early-access request accounts. Fluent always records an audit entry, shows an explicit completion state, and calls out any retention exception before the request is done.</p>
+<p class="lede">This page handles both provisioned Fluent accounts and signed-in early-access request accounts. Confirmation starts an immediate deletion pass, records proof of fulfillment, and calls out any retention exception before the request is done.</p>
 ${statusCard}
 ${requestMeta}
 <div class="scope-card">
@@ -2415,11 +2395,12 @@ ${requestMeta}
 </div>
 ${actions}
 <ul class="support-list">
-  <li>Waitlist-only deletions attempt to finish immediately after confirmation.</li>
-  <li>Provisioned Fluent accounts fall back to operator review until the full self-serve data purge is ready.</li>
-  <li>If deletion completes, connected clients lose OAuth access and must not expect Fluent to reconnect.</li>
+  <li>Deletion attempts to finish immediately after confirmation for both provisioned Fluent accounts and early-access request accounts.</li>
+  <li>If the automatic purge fails, Fluent moves the request into manual review with the last error recorded.</li>
+  <li>If deletion completes, connected clients lose OAuth access immediately and must not expect Fluent to reconnect.</li>
   <li>Need Fluent access instead of deletion? Request early access at <a href="${escapeHtml(input.support.waitlistUrl)}">${escapeHtml(input.support.waitlistUrl)}</a>.</li>
   <li>Need a local alternative? Run Fluent yourself with the open-source runtime at <a href="${escapeHtml(input.support.ossUrl)}">${escapeHtml(input.support.ossUrl)}</a>.</li>
+  <li>Retained after completion: the deletion request record plus minimal audit metadata needed to prove fulfillment and satisfy legal, billing, fraud, or safety obligations.</li>
   <li>Questions or retention exceptions: <a href="mailto:${escapeHtml(input.support.supportEmail)}">${escapeHtml(input.support.supportEmail)}</a>.</li>
   <li>Sign-in page: <a href="${escapeHtml(returnToSignIn)}">${escapeHtml(returnToSignIn)}</a>.</li>
 </ul>`,
