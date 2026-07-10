@@ -3625,6 +3625,7 @@ function mealsCurrentnessFact(grocery: unknown, intent: FluentVNextReadIntent): 
     livingList: mealsLivingListStatus(record),
     manualIntentCount,
     nextUserQuestion: status === 'current' ? null : mealsNextUserQuestion(record),
+    planListRelationship: mealsPlanListRelationship(record),
     planningUse: mealsPlanningUse(status),
     selectionReason: record?.selectionReason ?? null,
     stale: record?.stale ?? null,
@@ -3634,6 +3635,48 @@ function mealsCurrentnessFact(grocery: unknown, intent: FluentVNextReadIntent): 
     trustState: record?.trustState ?? null,
     weekRelation: record?.weekRelation ?? null,
     source: record ? 'meals.getCurrentGroceryList' : 'fluent_read_layer',
+  };
+}
+
+function mealsPlanListRelationship(record: Record<string, unknown> | null): {
+  explanation: string;
+  kind: 'active_plan_with_list' | 'no_active_plan_historical_plan_provenance' | 'no_active_plan_independent_list' | 'no_plan_or_list';
+  retainedPlanWeekStart: string | null;
+} {
+  const currentPlan = mealsCurrentWeekPlanStatus(record);
+  const groceryList = mealsGroceryListReadiness(record);
+  const provenance = record && Array.isArray(record.sourceProvenance) ? record.sourceProvenance : [];
+  const retainedPlan = provenance
+    .map((entry) => objectRecord(entry))
+    .find((entry) => entry?.kind === 'accepted_meal_plan' || entry?.kind === 'draft_meal_plan') ?? null;
+  const retainedPlanWeekStart = typeof retainedPlan?.weekStart === 'string' ? retainedPlan.weekStart : null;
+
+  if (currentPlan === 'accepted' || currentPlan === 'draft') {
+    return {
+      explanation: 'The living grocery list is linked to the active current-week meal plan.',
+      kind: 'active_plan_with_list',
+      retainedPlanWeekStart,
+    };
+  }
+  if (groceryList === 'absent') {
+    return {
+      explanation: 'There is no active current-week meal plan and no current living grocery list.',
+      kind: 'no_plan_or_list',
+      retainedPlanWeekStart: null,
+    };
+  }
+  if (retainedPlan) {
+    const week = retainedPlanWeekStart ? ` for the week of ${retainedPlanWeekStart}` : '';
+    return {
+      explanation: `There is no active current-week meal plan. The living grocery list remains independently active and retains historical provenance from a previously saved meal plan${week}; that provenance does not mean the plan is still active.`,
+      kind: 'no_active_plan_historical_plan_provenance',
+      retainedPlanWeekStart,
+    };
+  }
+  return {
+    explanation: 'There is no active current-week meal plan. The living grocery list remains independently active from manual items or other list state.',
+    kind: 'no_active_plan_independent_list',
+    retainedPlanWeekStart: null,
   };
 }
 

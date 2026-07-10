@@ -527,7 +527,7 @@ export function buildFluentAccountStatusToolView(status: FluentAccountStatus): F
     instructions: status.instructions,
     links: status.links,
     safety: {
-      billingBoundary: 'Billing and account management happen on meetfluent.app, outside ChatGPT.',
+      billingBoundary: 'Billing and account management happen on meetfluent.app, outside your assistant.',
       paymentDetails: 'Payment details stay with the billing provider; Fluent does not collect card data directly.',
       privacyBoundary: 'Private account and billing identifiers are not included in assistant-facing account text.',
     },
@@ -555,7 +555,7 @@ export function buildFluentAccountStatusToolText(status: FluentAccountStatus): s
     exportLine,
     deletionLine,
     `Support: email ${status.supportEmail}.`,
-    'Billing and account management happen on meetfluent.app, outside ChatGPT.',
+    'Billing and account management happen on meetfluent.app, outside your assistant.',
   ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
