@@ -6,7 +6,7 @@ Fluent is open source. This repo lets you run Fluent yourself as a self-hosted M
 - manual grocery and clothing budget envelopes
 - closet-aware style decisions
 
-Use this repo when you want Fluent running on infrastructure you control. If you want managed onboarding, request Fluent early access on meetfluent.app. Early access is invite-based and currently free. Both paths share the same MCP contract.
+Use this repo when you want Fluent running on infrastructure you control. If you want managed onboarding, connect through meetfluent.app. Managed early access is self-serve and currently free. Both paths share the same MCP contract.
 
 ## Public Release
 
