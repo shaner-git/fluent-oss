@@ -34,7 +34,6 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     preferredTools: [
       'fluent_get_next_actions',
       'fluent_get_capabilities',
-      'fluent_get_home',
       'fluent_list_domains',
     ],
     avoidByDefault: [
@@ -48,7 +47,7 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     summary:
       'Use this to separate Fluent’s canonical tool vocabulary from host-specific affordances such as packaged skills, widgets, native visuals, and plain-MCP text fallbacks.',
     rules: [
-      'Do not fork Fluent domain semantics by platform. Meals, Style, Health, and Core tools keep the same canonical meaning across hosts.',
+      'Do not fork Fluent domain semantics by platform. Meals, Style, the narrow budget seam, and Core tools keep the same canonical meaning across hosts.',
       'Treat ChatGPT/App SDK widget tools as presentation adapters, not as the source of Fluent domain truth.',
       'Treat Claude, OpenClaw, and Codex skills as host orchestration layers over the same MCP contract, not as replacement contracts.',
       'When host capability is unknown, assume plain MCP: canonical data tools, resources, and text.',
@@ -64,7 +63,6 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     preferredTools: [
       'fluent_get_capabilities',
       'fluent_get_next_actions',
-      'fluent_get_home',
     ],
     avoidByDefault: [
       'Do not create platform-specific variants of ordinary Fluent domain tools.',
@@ -80,7 +78,6 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
       'Do not run the weekly planning loop for casual meal chat.',
       'For broad planning/currentness/"what Fluent knows" prompts, start with fluent_get_context(domain="meals", intent="planning") when available so confirmed facts, inferred signals, stale or missing grocery context, evidence gaps, and write boundaries stay together.',
       'Use legacy detail reads such as meals_get_preferences, meals_get_plan, meals_list_plan_history, meals_get_inventory_summary, and meals_list_recipes only when the user asks for their specific detail or the context packet is unavailable.',
-      'Only pass Health training context when the user explicitly asks meals to support training, recovery, cutting, bulking, or workouts.',
       'Treat named weekdays or dates as pinned slot constraints, not soft preferences.',
       'Generate a candidate first; materialize it only after the user approves.',
       'If you offered to save a plan and the user did not answer, ask once more before ending the task or moving past planning. An unanswered offer is not a decline; never save without an answer.',
@@ -102,7 +99,6 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
     ],
     avoidByDefault: [
       'Do not accept a generated candidate without user approval.',
-      'Do not read Health just because Health exists.',
       'Do not treat plan nutrition estimates as personalized medical or dietary targets.',
     ],
   },
@@ -159,7 +155,6 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
       'If the ContextPacket says complete:false, say the slice is incomplete and offer to look wider instead of claiming the closet has no comparable item.',
       'When the user says an item was returned, sold, donated, gifted, worn out, never purchased, duplicate, gone, or no longer owned, use fluent_archive_item with the best disposition and report read-after-write proof.',
       'Archive only on an explicit user signal about a specific item. Never infer archiving from purchase advice, a stale comparator, or an item simply being absent from a read; if which item is meant is ambiguous, confirm first. Archive is reversible (restore by setting the item active) and audited — report read-after-write proof and state what you archived.',
-      'LEGACY RUNTIME SECTION: Legacy-only hosts may still expose style_prepare_purchase_analysis, style_get_purchase_vision_packet, style_submit_purchase_visual_observations, style_analyze_purchase, style_render_purchase_analysis, style_show_purchase_analysis_widget, style_apply_purchase_analysis_action, style_archive_item, and style_set_item_product_image. Use those only when the public flow is unavailable.',
     ],
     defaultFlow: [
       'Call fluent_get_context with domain="style", intent="purchase", candidate, and amount when a candidate purchase has a verified listing price_text; amount must match that price_text number or fall within its cited range.',
@@ -186,15 +181,15 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
       'Use this for the host-orchestrated loop from considering a style purchase, to buying or skipping, to saving an owned item with fit feedback, then enriching the saved closet row. It cross-references purchase analysis, onboarding, and enrichment rather than replacing them.',
     rules: [
       'Consideration is ephemeral. For the closet-aware buy/skip judgment, follow fluent://guidance/style-purchase-analysis: ONE fluent_get_context(domain="style", intent="purchase", candidate, amount) read returns the owned-category slice plus the budget over/under fact — do not call fluent_get_purchase_context separately for the verdict. Never create a closet row, wishlist row, or considered status for an item the user does not own yet.',
-      'On buy, onboard the owned item with fluent_create_style_item. If the user tried it on or you have fit feedback, pass fit_assessment in the same create call so buy -> save -> fit lands in one explicit user-approved write. When adding from a product URL, pass the product page URL in source_snapshot.url; Fluent resolves the product gallery server-side, sets a clean product-photo display tile when it can, and returns the gallery for you to confirm or correct with vision. A direct image_url is only an optional hint, not the primary display decision.',
+      'On buy, onboard the owned item with fluent_create_style_item. If the user tried it on or you have fit feedback, pass fit_assessment in the same create call so buy -> save -> fit lands in one explicit user-approved write. source_snapshot.url is provenance only. Fluent does not fetch that page or resolve its gallery. Attach an image only when the host has inspected a direct image URL; pass it as image_url or set it later with fluent_set_style_item_image.',
       'Fit source discipline: an in-person try-on is first-person evidence, so use fit_assessment.source "user" (rank 5). Review sentiment such as "reviewers say it runs small" is third-party text, never user evidence.',
       'For online-review fit sentiment, use fit_assessment.source "host_fit_vision" with has_fit_image false so Fluent downgrades it to host_text, or use host_text directly on a surface that exposes that source. A real try-on outranks review sentiment; a review should only fill an empty fitVerdict.',
-      'Trust discipline follows fluent://guidance/style-enrichment: attach source_snapshot with the product or provenance URL, confirm rather than silently committing low-confidence or representative facts, and null beats invention. A clean product packshot from the product URL the user is adding from is legitimate display media, but for product URL adds Fluent resolves and sets the display tile from source_snapshot.url; use returned gallery images to confirm or correct. The never-auto-write caution is about fabricated, representative, unopened, or uncertain images.',
+      'Trust discipline follows fluent://guidance/style-enrichment: attach source_snapshot with the product or provenance URL, confirm rather than silently committing low-confidence or representative facts, and null beats invention. A clean product packshot is legitimate display media only after the host has inspected its direct image URL. source_snapshot.url never selects or writes a display image.',
     ],
     defaultFlow: [
       'For a candidate purchase, the buy/skip verdict comes from ONE fluent_get_context(domain="style", intent="purchase", candidate, amount) read (owned-category slice with images + budget over/under fact), answered in PROSE per fluent://guidance/style-purchase-analysis. Do not call fluent_get_purchase_context separately or render a card as the verdict; you may render a comparators-only closet surface (filter.item_ids) beneath the prose verdict per fluent://guidance/style-purchase-analysis.',
       'If the user skips or is still considering, write nothing to the closet and keep the candidate host-side.',
-      'If the user buys or says they own it now, call fluent_create_style_item with the supported onboarding fields, provenance, source_snapshot, client_token, and any fit_assessment. For product URL adds, put the product page URL in source_snapshot.url; Fluent resolves the gallery, chooses the display tile server-side, and returns the gallery for you to confirm or correct.',
+      'If the user buys or says they own it now, call fluent_create_style_item with the supported onboarding fields, provenance, source_snapshot, client_token, and any fit_assessment. Treat source_snapshot.url only as provenance. If the host inspected a suitable direct image URL, pass image_url or set it later with fluent_set_style_item_image.',
       'After the item exists, use fluent://guidance/style-enrichment for web-found catalog details, descriptors, and later/extra images that need separate confirmation or routing through fluent_set_style_item_image.',
       'Return the read-after-write proof and clearly separate saved facts, low-confidence facts, and anything intentionally left unwritten.',
     ],
@@ -251,44 +246,10 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
       'Do not invent a brand or spec.',
     ],
   },
-  'fluent://guidance/health-blocks': {
-    title: 'Health Block Runtime Flow',
-    summary:
-      'Use this for fitness-first goals, training blocks, today resolution, workout logging, and weekly block review.',
-    rules: [
-      'Treat Health as block-first fitness support, not a broad medical domain.',
-      'Use summary reads first: context, active block, today context, block projection, and goals.',
-      'Create or revise blocks only when the user clearly wants planning.',
-      'Use block review as the main coaching loop; logging should stay lightweight unless the user asks for detail.',
-      'Route food execution to Meals instead of duplicating it in Health.',
-    ],
-    defaultFlow: [
-      'Check readiness with fluent_get_capabilities or fluent_get_next_actions.',
-      'Read health_get_context and health_get_active_block when continuity matters.',
-      'Use health_get_today_context for today resolution.',
-      'Use health_get_block_projection for the current week.',
-      'Persist agreed goals, blocks, workout logs, body metrics, or reviews only from explicit user intent.',
-    ],
-    preferredTools: [
-      'health_get_context',
-      'health_get_active_block',
-      'health_get_today_context',
-      'health_get_block_projection',
-      'health_list_goals',
-      'health_upsert_block',
-      'health_log_workout',
-      'health_record_block_review',
-    ],
-    avoidByDefault: [
-      'Do not provide symptom triage, injury diagnosis, rehab treatment, or medical authority.',
-      'Do not rebuild a whole block when the user only asks what to do today.',
-      'Do not create tracking-heavy workflows unless the user explicitly wants them.',
-    ],
-  },
   'fluent://guidance/style-onboarding': {
     title: 'Style Closet Item Onboarding Flow',
     summary:
-      'Use this when the user wants to add a NEW garment to their Fluent closet from photos, a product URL, or a description. You (the host model) look at the photos or product-page evidence and produce one structured item; fluent_create_style_item validates, normalizes, resolves the product gallery server-side when source_snapshot.url is a product page, surfaces possible existing matches with discriminating signals for you to judge, stores provenance, and returns read-after-write proof. You still own visual confirmation/correction from returned gallery images.',
+      'Use this when the user wants to add a NEW garment to their Fluent closet from photos, a product URL, or a description. You (the host model) inspect the available evidence and produce one structured item; fluent_create_style_item validates and normalizes it, surfaces possible existing matches with discriminating signals for you to judge, stores provenance, and returns read-after-write proof. Fluent does not browse the source page or resolve its gallery; the host owns every visual claim and image choice.',
     rules: [
       'You are the vision: do not delegate the visual judgment to an external vision/LLM service. You MAY web-search the product to corroborate brand, model, material, or catalog details; record those as url_scrape or host_text, never host_vision. Fill every field you can support and leave the rest null rather than guessing.',
       'Read ALL provided photos together in one pass — product (color/pattern/silhouette/construction), fit (drape; secondary brand clue), tag/label (brand/size/material/colorway/care), detail. Do not profile each photo separately.',
@@ -299,12 +260,12 @@ export const FLUENT_GUIDANCE_DOCUMENTS: Record<FluentGuidanceUri, FluentGuidance
       'For every field you fill, supply field_evidence { value, source, confidence }. Use source host_vision only for fields you actually saw in pixels — Fluent downgrades host_vision to host_text when no image accompanied the call. Set an honest overall_confidence.',
       'Do NOT auto-commit blindly: present the draft for the user to confirm or correct, highlighting low-confidence fields. Annotate, never override the user-stated facts. With no widget, review conversationally and correct via fluent_update_style_item_patch.',
       'Pass a stable client_token so a retried create is idempotent; for multiple garments share a batch_id. If Fluent flags a possible duplicate it returns candidates with discriminating signals (brand/color/type/size/tags) — Fluent does not decide sameness, you do. Compare those signals (and, if you need pixels, the candidate photo via fluent_get_media_bundle or a fluent_render_style_closet_surface filtered to its id) against the new garment, confirm with the user, then re-call with on_duplicate "force" (genuinely different item) or "skip" (same item).',
-      'Text-only or non-vision hosts: onboard from the user description and any transcribed tag text, mark sources host_text/inferred at honest lower confidence, leave color_hex/silhouette null rather than fabricating pixels, and lean on the confirm step. A host that can web-search the product may fill catalog fields such as color, material, or silhouette from the listing at honest lower confidence with url_scrape or host_text rather than leaving them null. When adding from a product URL, pass the product page URL in source_snapshot.url; Fluent resolves the gallery server-side, chooses a clean product-photo display tile when it can, and returns the gallery for a vision-capable host to confirm or correct. Fabricated or merely representative images still require confirmation and should not be auto-written.',
+      'Text-only or non-vision hosts: onboard from the user description and any transcribed tag text, mark sources host_text/inferred at honest lower confidence, leave color_hex/silhouette null rather than fabricating pixels, and lean on the confirm step. A host that can web-search the product may fill catalog fields from listing text at honest lower confidence with url_scrape or host_text. Store the page in source_snapshot.url as provenance only; do not attach an image unless the host inspected the direct image URL. Fabricated or merely representative images must not be auto-written.',
     ],
     defaultFlow: [
       'Confirm the user wants to add the item(s) to their closet.',
       'Read all photos together and produce the structured fields, the profile, and per-field evidence.',
-      'Call fluent_create_style_item with provenance; pass a client_token (and batch_id for multiple items). For product URL adds, pass the product page URL in source_snapshot.url; Fluent resolves the gallery server-side and returns inline images so you can confirm the display tile or correct it with fluent_set_style_item_image.',
+      'Call fluent_create_style_item with provenance; pass a client_token (and batch_id for multiple items). Use source_snapshot.url only for provenance. When the host has inspected a direct image URL, pass image_url or attach it afterward with fluent_set_style_item_image.',
       'On a duplicate warning, compare the returned signals (and the candidate photo via fluent_get_media_bundle or a closet surface filtered to its id) against the garment, confirm the decision with the user, then re-call with on_duplicate "force" (different item) or "skip" (same item).',
       'Present the created draft for review; highlight low-confidence fields and apply user corrections via fluent_update_style_item_patch.',
     ],

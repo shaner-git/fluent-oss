@@ -3,7 +3,7 @@
 Fluent is open source. This repo lets you run Fluent yourself as a self-hosted MCP server for:
 
 - meal planning and grocery workflows
-- health planning and workout logging
+- manual grocery and clothing budget envelopes
 - closet-aware style decisions
 
 Use this repo when you want Fluent running on infrastructure you control. If you want managed onboarding, request Fluent early access on meetfluent.app. Early access is invite-based and currently free. Both paths share the same MCP contract.
@@ -15,7 +15,7 @@ Use this repo when you want Fluent running on infrastructure you control. If you
 - current docs bucket: [docs/oss](https://github.com/shaner-git/fluent-oss/tree/main/docs/oss)
 - release history: [Fluent open-source runtime releases](https://github.com/shaner-git/fluent-oss/releases)
 - supported direct runtime: Node.js `22.x`
-- supported minimum contract version: `2026-06-01.fluent-core-v1.85`
+- supported minimum contract version: `2026-07-09.fluent-core-v2.0`
 
 ## Who This Is For
 

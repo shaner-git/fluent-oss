@@ -31,7 +31,7 @@ try {
 
 function validatesFrozenContractArtifact() {
   const artifact = JSON.parse(
-    readRepoFile(path.join('contracts', 'fluent-contract.v1.json')),
+    readRepoFile(path.join('contracts', 'fluent-contract.v2.json')),
   ) as Record<string, unknown>;
 
   assert.deepEqual(artifact, {

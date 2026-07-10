@@ -1,162 +1,43 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  ACTIVE_CURRENT_RENDER_TOOL_HOST_GUIDE,
-  CURRENT_RENDER_TOOL_HOST_GUIDE,
-  LEGACY_CURRENT_RENDER_TOOL_HOST_GUIDE,
-  PREVIEW_RICH_TOOL_GUIDE,
-  formatCodeList,
-  normalizeNewlines,
-  readFrozenContractSnapshot,
-  renderToolSetLine,
-  splitCurrentToolGroups,
-  validateDocInputs,
-} from './render-public-doc-shared';
+import { normalizeNewlines, readFrozenContractSnapshot } from './render-public-doc-shared';
 
 const defaultOutFile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'fluent-tools-reference.md');
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+  main().catch((error) => { console.error(error); process.exit(1); });
 }
 
 export function renderToolsReferenceMarkdown(): string {
   const snapshot = readFrozenContractSnapshot();
-  validateDocInputs(snapshot);
-  const groups = splitCurrentToolGroups(snapshot);
-
+  const writes = new Set([
+    'fluent_update_shared_profile_patch', 'fluent_save_recipe', 'fluent_update_recipe_patch',
+    'fluent_record_recipe_feedback', 'fluent_save_meal_plan', 'fluent_apply_grocery_list_change',
+    'fluent_apply_grocery_shopping_result', 'fluent_set_budget_envelope', 'fluent_log_budget_spend',
+    'fluent_update_style_item_patch', 'fluent_create_style_item', 'fluent_refresh_style_item_profile',
+    'fluent_set_style_item_image', 'fluent_archive_item',
+  ]);
+  const renders = new Set(['fluent_render_surface', 'fluent_render_budgets_surface', 'fluent_render_style_closet_surface']);
+  const reads = snapshot.tools.filter((tool) => !writes.has(tool) && !renders.has(tool));
   return [
-    '# Fluent Tools Reference',
-    '',
-    'This page is generated from `contracts/fluent-contract.v1.json`.',
-    'Anything listed as a current tool is present in the frozen public contract artifact. Preview items are intentionally not current contract tools.',
-    '',
-    `Current contract version: \`${snapshot.contractVersion}\``,
-    '',
-    '## How To Read This Page',
-    '',
-    '- Canonical data tools are the durable plain-MCP tools that carry Fluent state and work across hosts.',
-    '- Active host-specific render tools are current contract tools that rely on MCP output-template or widget support and are still product-routed.',
-    '- Legacy render tools can still appear in the frozen contract for compatibility, but they are not active product surfaces.',
-    '- Preview or planned surfaces may exist in probes or design work, but they are not part of the current public contract.',
-    '',
-    '## Current Contract Tools',
-    '',
+    '# Fluent Tools Reference', '',
+    `Current contract: \`${snapshot.contractVersion}\``, '',
+    'This reference is generated from the single Fluent 2.0 public contract. There is no full, legacy, or compatibility tool lane.', '',
     '<!-- current-tools:start -->',
-    '### Core Platform Tools',
-    '',
-    ...formatCodeList(groups.core),
-    '',
-    '### Meals Canonical Data Tools',
-    '',
-    ...formatCodeList(groups.mealsCanonical),
-    '',
-    '### Meals Active Host-Specific Render Tools',
-    '',
-    ...formatCodeList(groups.mealsRender),
-    '',
-    '### Meals Legacy Compatibility Render Tools',
-    '',
-    ...formatCodeList(groups.mealsLegacyRender),
-    '',
-    'Note: legacy compatibility render tools are retained only because they remain in the full contract. They are retired as product surfaces and are not exposed in the curated ChatGPT app profile.',
-    '',
-    '### Health Canonical Data Tools',
-    '',
-    ...formatCodeList(groups.healthCanonical),
-    '',
-    '### Style Canonical Data Tools',
-    '',
-    ...formatCodeList(groups.styleCanonical),
-    '',
-    '### Style Host-Specific Render Tools',
-    '',
-    ...formatCodeList(groups.styleRender),
-    '<!-- current-tools:end -->',
-    '',
-    '## Current Render Host Classification',
-    '',
-    `- Active contract-current MCP Apps render tools: ${renderToolSetLine(
-      ACTIVE_CURRENT_RENDER_TOOL_HOST_GUIDE.map((guide) => guide.name),
-    )}.`,
-    `- Legacy compatibility render tools, not active product surfaces: ${renderToolSetLine(
-      LEGACY_CURRENT_RENDER_TOOL_HOST_GUIDE.map((guide) => guide.name),
-    )}.`,
-    `- All contract-current render tools, including legacy compatibility: ${renderToolSetLine(
-      CURRENT_RENDER_TOOL_HOST_GUIDE.map((guide) => guide.name),
-    )}.`,
-    '- Claude-specific visualizer tools are separate from Fluent MCP Apps resources. Claude visualizer-only runs should prefer canonical data plus host-native visuals; Claude MCP Apps-capable runs may use proven Fluent `ui://` render resources.',
-    '- OpenClaw-compatible current render tools: none as dedicated Fluent rich widgets. OpenClaw should use the plain-MCP fallbacks.',
-    '- Plain-MCP fallback tools stay canonical even when a render tool exists.',
-    '',
-    '## Current Render Host Matrix',
-    '',
-    '| Tool | Host class | Claude guidance | OpenClaw guidance | Plain-MCP fallback |',
-    '| --- | --- | --- | --- | --- |',
-    ...CURRENT_RENDER_TOOL_HOST_GUIDE.map(
-      (guide) =>
-        `| \`${guide.name}\` | ${guide.hostClass} | ${guide.claude} | ${guide.openclaw} | ${guide.plainMcpFallback} |`,
-    ),
-    '',
-    '## Preview Or Planned Rich Surfaces',
-    '',
-    '| Tool | Lane | Status | Note |',
-    '| --- | --- | --- | --- |',
-    ...PREVIEW_RICH_TOOL_GUIDE.map(
-      (guide) => `| \`${guide.name}\` | ${guide.lane} | ${guide.status} | ${guide.note} |`,
-    ),
-    '',
-    'These preview entries are intentionally not part of the current public contract until they are added to `contracts/fluent-contract.v1.json` and the runtime actually registers them.',
-    '',
+    '## Reads', '', ...reads.map((tool) => `- \`${tool}\``), '',
+    '## Explicit writes', '', ...snapshot.tools.filter((tool) => writes.has(tool)).map((tool) => `- \`${tool}\``), '',
+    '## Optional render adapters', '', ...snapshot.tools.filter((tool) => renders.has(tool)).map((tool) => `- \`${tool}\``),
+    '<!-- current-tools:end -->', '',
+    'Writes require explicit user intent and returned read-after-write proof. Render adapters are optional presentation layers; structured data and text remain canonical.', '',
   ].join('\n');
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const outFile = path.resolve(args.out ?? defaultOutFile);
-  const rendered = renderToolsReferenceMarkdown();
-
-  if (args.write === 'true') {
-    await mkdir(path.dirname(outFile), { recursive: true });
-    await writeFile(outFile, rendered, 'utf8');
-  }
-
-  if (args.check === 'true') {
-    const existing = await readFile(outFile, 'utf8');
-    if (normalizeNewlines(existing) !== normalizeNewlines(rendered)) {
-      throw new Error(`Tools reference doc drift detected in ${outFile}. Re-run: tsx scripts/render-tools-reference-doc.ts --write`);
-    }
-  }
-
-  console.log(
-    JSON.stringify(
-      {
-        ok: true,
-        outFile,
-        write: args.write === 'true',
-      },
-      null,
-      2,
-    ),
-  );
+  const args = parseArgs(process.argv.slice(2)); const outFile = path.resolve(args.out ?? defaultOutFile); const rendered = renderToolsReferenceMarkdown();
+  if (args.write === 'true') { await mkdir(path.dirname(outFile), { recursive: true }); await writeFile(outFile, rendered, 'utf8'); }
+  if (args.check === 'true' && normalizeNewlines(await readFile(outFile, 'utf8')) !== normalizeNewlines(rendered)) throw new Error(`Tools reference doc drift detected in ${outFile}.`);
+  console.log(JSON.stringify({ ok: true, outFile, write: args.write === 'true' }, null, 2));
 }
 
-function parseArgs(argv: string[]): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (!token.startsWith('--')) continue;
-    const key = token.slice(2);
-    const next = argv[index + 1];
-    if (next && !next.startsWith('--')) {
-      result[key] = next;
-      index += 1;
-    } else {
-      result[key] = 'true';
-    }
-  }
-  return result;
-}
+function parseArgs(argv: string[]): Record<string, string> { const result: Record<string, string> = {}; for (let i = 0; i < argv.length; i += 1) { const token = argv[i]; if (!token.startsWith('--')) continue; const next = argv[i + 1]; if (next && !next.startsWith('--')) { result[token.slice(2)] = next; i += 1; } else result[token.slice(2)] = 'true'; } return result; }

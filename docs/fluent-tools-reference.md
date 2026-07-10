@@ -1,33 +1,24 @@
 # Fluent Tools Reference
 
-This page is generated from `contracts/fluent-contract.v1.json`.
-Anything listed as a current tool is present in the frozen public contract artifact. Preview items are intentionally not current contract tools.
+Current contract: `2026-07-09.fluent-core-v2.0`
 
-Current contract version: `2026-06-01.fluent-core-v1.85`
-
-## How To Read This Page
-
-- Canonical data tools are the durable plain-MCP tools that carry Fluent state and work across hosts.
-- Active host-specific render tools are current contract tools that rely on MCP output-template or widget support and are still product-routed.
-- Legacy render tools can still appear in the frozen contract for compatibility, but they are not active product surfaces.
-- Preview or planned surfaces may exist in probes or design work, but they are not part of the current public contract.
-
-## Current Contract Tools
+This reference is generated from the single Fluent 2.0 public contract. There is no full, legacy, or compatibility tool lane.
 
 <!-- current-tools:start -->
-### Core Platform Tools
+## Reads
 
 - `fluent_get_capabilities`
 - `fluent_get_account_status`
-- `fluent_get_home`
-- `fluent_get_next_actions`
-- `fluent_get_profile`
 - `fluent_get_context`
 - `fluent_get_shared_profile`
 - `fluent_list_items`
 - `fluent_get_item`
+- `fluent_get_purchase_context`
 - `fluent_list_evidence`
 - `fluent_get_media_bundle`
+
+## Explicit writes
+
 - `fluent_update_shared_profile_patch`
 - `fluent_save_recipe`
 - `fluent_update_recipe_patch`
@@ -35,160 +26,19 @@ Current contract version: `2026-06-01.fluent-core-v1.85`
 - `fluent_save_meal_plan`
 - `fluent_apply_grocery_list_change`
 - `fluent_apply_grocery_shopping_result`
-- `fluent_get_purchase_context`
 - `fluent_set_budget_envelope`
 - `fluent_log_budget_spend`
-- `fluent_render_surface`
-- `fluent_render_budgets_surface`
-- `fluent_render_style_closet_surface`
 - `fluent_update_style_item_patch`
 - `fluent_create_style_item`
 - `fluent_refresh_style_item_profile`
 - `fluent_set_style_item_image`
-- `fluent_upsert_item`
 - `fluent_archive_item`
-- `fluent_record_event`
+
+## Optional render adapters
+
 - `fluent_render_surface`
-- `fluent_update_profile`
-- `fluent_list_domains`
-- `fluent_enable_domain`
-- `fluent_disable_domain`
-- `fluent_begin_domain_onboarding`
-- `fluent_complete_domain_onboarding`
-- `fluent_list_domain_events`
-
-### Meals Canonical Data Tools
-
-- `meals_list_tools`
-- `meals_get_plan`
-- `meals_list_plan_history`
-- `meals_get_day_plan`
-- `meals_get_today_context`
-- `meals_get_recipe`
-- `meals_create_recipe`
-- `meals_list_recipes`
-- `meals_get_onboarding_calibration`
-- `meals_record_calibration_response`
-- `meals_get_recipe_book`
-- `meals_apply_recipe_book_action`
-- `meals_get_preferences`
-- `meals_update_preferences`
-- `meals_upsert_plan`
-- `meals_generate_plan`
-- `meals_accept_plan_candidate`
-- `meals_get_inventory`
-- `meals_get_inventory_summary`
-- `meals_get_meal_memory`
-- `meals_list_feedback`
-- `meals_generate_grocery_plan`
-- `meals_get_current_grocery_list`
-- `meals_get_grocery_plan`
-- `meals_prepare_order`
-- `meals_patch_recipe`
-- `meals_log_feedback`
-- `meals_mark_meal_cooked`
-- `meals_update_inventory`
-- `meals_delete_inventory_item`
-- `meals_update_inventory_batch`
-- `meals_record_plan_review`
-- `meals_list_grocery_plan_actions`
-- `meals_upsert_grocery_plan_action`
-- `meals_delete_grocery_plan_action`
-- `meals_list_grocery_intents`
-- `meals_upsert_grocery_intent`
-- `meals_delete_grocery_intent`
-- `meals_apply_pantry_dashboard_action`
-
-### Meals Active Host-Specific Render Tools
-
-- `meals_render_recipe_card`
-- `meals_render_grocery_list_v2`
-
-### Meals Legacy Compatibility Render Tools
-
-- `meals_render_pantry_dashboard`
-
-Note: legacy compatibility render tools are retained only because they remain in the full contract. They are retired as product surfaces and are not exposed in the curated ChatGPT app profile.
-
-### Health Canonical Data Tools
-
-- `health_get_preferences`
-- `health_update_preferences`
-- `health_get_context`
-- `health_get_today_context`
-- `health_get_review_context`
-- `health_get_active_block`
-- `health_get_block`
-- `health_get_block_projection`
-- `health_list_goals`
-- `health_upsert_goal`
-- `health_upsert_block`
-- `health_record_block_review`
-- `health_list_workout_logs`
-- `health_log_workout`
-- `health_list_body_metrics`
-- `health_log_body_metric`
-
-### Style Canonical Data Tools
-
-- `style_get_profile`
-- `style_update_profile`
-- `style_get_context`
-- `style_get_onboarding_calibration`
-- `style_record_calibration_response`
-- `style_add_starter_closet_item`
-- `style_list_descriptor_backlog`
-- `style_list_evidence_gaps`
-- `style_analyze_wardrobe`
-- `style_list_items`
-- `style_get_item`
-- `style_get_item_profile`
-- `style_get_item_provenance`
-- `style_upsert_item`
-- `style_archive_item`
-- `style_upsert_item_profile`
-- `style_upsert_item_photos`
-- `style_set_item_product_image`
-- `style_extract_purchase_page_evidence`
-- `style_prepare_purchase_analysis`
-- `style_get_purchase_vision_packet`
-- `style_submit_purchase_visual_observations`
-- `style_analyze_purchase`
-- `style_render_purchase_analysis`
-- `style_apply_purchase_analysis_action`
-- `style_get_visual_bundle`
-
-### Style Host-Specific Render Tools
-
-- `style_show_setup_calibration_widget`
-- `style_show_purchase_analysis_widget`
+- `fluent_render_budgets_surface`
+- `fluent_render_style_closet_surface`
 <!-- current-tools:end -->
 
-## Current Render Host Classification
-
-- Active contract-current MCP Apps render tools: `meals_render_recipe_card`, `meals_render_grocery_list_v2`, `style_show_setup_calibration_widget`, `style_show_purchase_analysis_widget`.
-- Legacy compatibility render tools, not active product surfaces: `meals_render_pantry_dashboard`.
-- All contract-current render tools, including legacy compatibility: `meals_render_recipe_card`, `meals_render_pantry_dashboard`, `meals_render_grocery_list_v2`, `style_show_setup_calibration_widget`, `style_show_purchase_analysis_widget`.
-- Claude-specific visualizer tools are separate from Fluent MCP Apps resources. Claude visualizer-only runs should prefer canonical data plus host-native visuals; Claude MCP Apps-capable runs may use proven Fluent `ui://` render resources.
-- OpenClaw-compatible current render tools: none as dedicated Fluent rich widgets. OpenClaw should use the plain-MCP fallbacks.
-- Plain-MCP fallback tools stay canonical even when a render tool exists.
-
-## Current Render Host Matrix
-
-| Tool | Host class | Claude guidance | OpenClaw guidance | Plain-MCP fallback |
-| --- | --- | --- | --- | --- |
-| `meals_render_recipe_card` | ChatGPT/MCP Apps-style widget | In Claude MCP Apps-capable runs, use this as the native Fluent recipe-card surface for ordinary recipe-opening asks. In Claude visualizer-only runs, prefer `meals_get_recipe` and let Claude render a host-native card. | Use the plain-MCP recipe read path. | `meals_get_recipe` |
-| `meals_render_pantry_dashboard` | Legacy compatibility widget; retired product surface | Do not use for new flows. Prefer Meals setup calibration, the living grocery list, inventory reads, and host-native summaries. | Do not use for new flows. Use the plain-MCP inventory or grocery-list path. | `meals_get_inventory_summary`, `meals_get_inventory`, or `meals_get_current_grocery_list` when detail is needed |
-| `meals_render_grocery_list_v2` | ChatGPT/App-SDK-style widget | In Claude MCP Apps-capable runs, use this as the native Fluent grocery-list surface for ordinary display asks. In Claude visualizer-only runs, prefer `meals_get_current_grocery_list` and let Claude render from that living-list data. Use `meals_get_grocery_plan` only for explicit week-scoped/raw plan detail. | Use `meals_get_current_grocery_list` as the plain-MCP living-list path. | `meals_get_current_grocery_list` |
-| `style_show_setup_calibration_widget` | ChatGPT/MCP Apps-style widget | Use this only in a separate Claude MCP Apps native probe where `ui://` resources visibly mount. In visualizer-only or text-only runs, do not call the widget; read `style_get_onboarding_calibration`, ask the smallest useful confirmation question, and write explicit responses with `style_record_calibration_response`. | Do not call this widget tool. Use `style_get_onboarding_calibration`, then write explicit user confirmations or starter items with the canonical write tools. | `style_get_onboarding_calibration` plus `style_record_calibration_response` and `style_add_starter_closet_item` when the user explicitly changes state |
-| `style_show_purchase_analysis_widget` | ChatGPT/MCP Apps-style widget | In Claude MCP Apps-capable runs, use this as the native Fluent purchase-analysis surface after the staged evidence flow and real host image inspection. In Claude visualizer-only or text-only runs, use `style_prepare_purchase_analysis`, page extraction when needed, `style_get_purchase_vision_packet`, host image inspection, `style_submit_purchase_visual_observations` when exposed, then `style_render_purchase_analysis` for the final structured/text result. If the submit tool is unavailable, pass concrete `visual_evidence` with `source: "host_vision"` directly to `style_render_purchase_analysis`. | Do not call this widget tool. Use the plain-MCP purchase-analysis path and answer from `style_render_purchase_analysis` after real visual evidence is available. | `style_prepare_purchase_analysis` plus page extraction, `style_get_purchase_vision_packet`, and `style_render_purchase_analysis` with accepted or direct `host_vision` evidence |
-
-## Preview Or Planned Rich Surfaces
-
-| Tool | Lane | Status | Note |
-| --- | --- | --- | --- |
-| `meals_render_week_plan` | Meals rich week planning | Preview only | Exists in local probe HTML, but is not registered by the current runtime and is not in the frozen public contract. |
-| `health_render_training_week` | Health rich training-week surface | Preview only | Exists in local probe HTML, but is not registered by the current runtime and is not in the frozen public contract. |
-| `health_update_training_session` | Health training-week widget companion action | Preview only | Appears as a probe-only action tool for the training-week mock surface, but is not registered by the current runtime and is not in the frozen public contract. |
-
-These preview entries are intentionally not part of the current public contract until they are added to `contracts/fluent-contract.v1.json` and the runtime actually registers them.
+Writes require explicit user intent and returned read-after-write proof. Render adapters are optional presentation layers; structured data and text remain canonical.

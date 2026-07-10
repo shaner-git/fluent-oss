@@ -127,9 +127,9 @@ async function main() {
          ON CONFLICT (tenant_id, id) DO NOTHING`,
       );
       await pg.query(
-        `INSERT INTO artifacts (id, domain, artifact_type, entity_type, entity_id, r2_key, mime_type)
-         VALUES ('artifact:test', 'style', 'style_photo_original', 'style_item_photo', 'style-photo:test', $1, 'image/png')
-         ON CONFLICT (id) DO UPDATE SET r2_key = excluded.r2_key, mime_type = excluded.mime_type`,
+        `INSERT INTO artifacts (id, tenant_id, domain, artifact_type, entity_type, entity_id, r2_key, mime_type)
+         VALUES ('artifact:test', 'primary', 'style', 'style_photo_original', 'style_item_photo', 'style-photo:test', $1, 'image/png')
+         ON CONFLICT (id) DO UPDATE SET tenant_id = excluded.tenant_id, r2_key = excluded.r2_key, mime_type = excluded.mime_type`,
         [objectKey],
       );
       await pg.query(

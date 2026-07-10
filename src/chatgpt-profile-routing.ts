@@ -1,6 +1,6 @@
 import type { FluentAuthProps } from './auth';
 
-export type FluentRuntimeProfile = 'assistant_app' | 'chatgpt_app' | 'full';
+export type FluentRuntimeProfile = 'assistant_app' | 'chatgpt_app';
 
 export function resolveMcpRuntimeProfileForRequest(
   _pathname: string,

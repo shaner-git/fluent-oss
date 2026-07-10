@@ -226,38 +226,90 @@ export class StyleRepository {
       view: string | null;
     }>,
   ) {
-    await this.db
-      .prepare(`DELETE FROM style_item_photos WHERE tenant_id = ? AND item_id = ?`)
-      .bind(this.profileKey.tenantId, itemId)
-      .run();
+    const statements = [
+      this.db
+        .prepare(`DELETE FROM style_item_photos WHERE tenant_id = ? AND item_id = ?`)
+        .bind(this.profileKey.tenantId, itemId),
+      ...photos.map((photo) =>
+        this.db
+          .prepare(
+            `INSERT INTO style_item_photos (
+              tenant_id, id, item_id, legacy_photo_id, url, source_url, artifact_id, mime_type, view, kind, source, captured_at, is_primary, is_fit, bg_removed, imported_from
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            this.profileKey.tenantId,
+            photo.id,
+            itemId,
+            photo.legacyPhotoId,
+            photo.url,
+            photo.sourceUrl,
+            photo.artifactId,
+            photo.mimeType,
+            photo.view,
+            photo.kind,
+            photo.source,
+            photo.capturedAt,
+            photo.isPrimary ? 1 : 0,
+            photo.isFit ? 1 : 0,
+            photo.bgRemoved ? 1 : 0,
+            photo.importedFrom,
+          ),
+      ),
+    ];
 
-    for (const photo of photos) {
-      await this.db
-        .prepare(
-          `INSERT INTO style_item_photos (
-            tenant_id, id, item_id, legacy_photo_id, url, source_url, artifact_id, mime_type, view, kind, source, captured_at, is_primary, is_fit, bg_removed, imported_from
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          this.profileKey.tenantId,
-          photo.id,
-          itemId,
-          photo.legacyPhotoId,
-          photo.url,
-          photo.sourceUrl,
-          photo.artifactId,
-          photo.mimeType,
-          photo.view,
-          photo.kind,
-          photo.source,
-          photo.capturedAt,
-          photo.isPrimary ? 1 : 0,
-          photo.isFit ? 1 : 0,
-          photo.bgRemoved ? 1 : 0,
-          photo.importedFrom,
-        )
-        .run();
-    }
+    // D1 batch and the local SQLite adapter both make this an atomic replacement.
+    await this.db.batch(statements);
+  }
+
+  async listItemPhotoArtifacts(itemId: string) {
+    const result = await this.db
+      .prepare(
+        `SELECT DISTINCT a.id, a.r2_key
+         FROM style_item_photos p
+         INNER JOIN artifacts a ON a.id = p.artifact_id
+         WHERE p.tenant_id = ? AND p.item_id = ? AND p.artifact_id IS NOT NULL`,
+      )
+      .bind(this.profileKey.tenantId, itemId)
+      .all<{ id: string; r2_key: string }>();
+    return result.results ?? [];
+  }
+
+  async getUnreferencedArtifact(artifactId: string) {
+    return this.db
+      .prepare(
+        `SELECT id, r2_key
+         FROM artifacts a
+         WHERE a.id = ?
+           AND a.tenant_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM style_item_photos p WHERE p.artifact_id = a.id
+           )`,
+      )
+      .bind(artifactId, this.profileKey.tenantId)
+      .first<{ id: string; r2_key: string }>();
+  }
+
+  async hasOtherArtifactAtR2Key(artifactId: string, r2Key: string): Promise<boolean> {
+    const row = await this.db
+      .prepare(`SELECT id FROM artifacts WHERE r2_key = ? AND id <> ? LIMIT 1`)
+      .bind(r2Key, artifactId)
+      .first<{ id: string }>();
+    return Boolean(row);
+  }
+
+  async deleteArtifactIfUnreferenced(artifactId: string) {
+    await this.db
+      .prepare(
+        `DELETE FROM artifacts
+         WHERE id = ?
+           AND tenant_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM style_item_photos p WHERE p.artifact_id = artifacts.id
+           )`,
+      )
+      .bind(artifactId, this.profileKey.tenantId)
+      .run();
   }
 
   async upsertArtifact(input: {
@@ -271,9 +323,10 @@ export class StyleRepository {
   }) {
     await this.db
       .prepare(
-        `INSERT INTO artifacts (id, domain, artifact_type, entity_type, entity_id, r2_key, mime_type, metadata_json)
-         VALUES (?, 'style', ?, ?, ?, ?, ?, ?)
+        `INSERT INTO artifacts (id, tenant_id, domain, artifact_type, entity_type, entity_id, r2_key, mime_type, metadata_json)
+         VALUES (?, ?, 'style', ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
+           tenant_id = excluded.tenant_id,
            artifact_type = excluded.artifact_type,
            entity_type = excluded.entity_type,
            entity_id = excluded.entity_id,
@@ -283,6 +336,7 @@ export class StyleRepository {
       )
       .bind(
         input.artifactId,
+        this.profileKey.tenantId,
         input.artifactType,
         input.entityType,
         input.entityId,

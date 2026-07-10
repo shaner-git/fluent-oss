@@ -2,6 +2,24 @@
 
 All notable Fluent open-source runtime release-facing changes are documented here.
 
+## v0.2.0 - 2026-07-09
+
+Fluent 2.0 removes the pre-launch compatibility surface and makes one small, explicit contract the Cloud and OSS baseline.
+
+### Highlights
+
+- freezes the public contract at `2026-07-09.fluent-core-v2.0`
+- exposes 26 tools, 14 explicit writes, three render adapters, and three MCP Apps resources
+- removes the public full, candidate, compatibility, Home, Health, and earlier domain-tool lanes
+- keeps Meals, Style, and two manual budget envelopes aligned across Codex, Claude, and OpenClaw packages
+- requires fresh real-host product-quality proof before any current app surface is marked deployment-ready
+
+### Supported Contract Version
+
+- minimum supported contract version: `2026-07-09.fluent-core-v2.0`
+- frozen contract artifact: [contracts/fluent-contract.v2.json](./contracts/fluent-contract.v2.json)
+- machine-readable public profile: [contracts/fluent-public-profile.json](./contracts/fluent-public-profile.json)
+
 ## v0.1.0 - 2026-04-19
 
 First public Fluent open-source runtime release.
@@ -17,8 +35,8 @@ First public Fluent open-source runtime release.
 ### Supported Contract Version
 
 - minimum supported contract version: `2026-06-01.fluent-core-v1.85`
-- frozen contract artifact: [contracts/fluent-contract.v1.json](./contracts/fluent-contract.v1.json)
-- contract notes: [docs/fluent-contract-v1.md](./docs/fluent-contract-v1.md)
+- frozen contract artifact: [contracts/fluent-contract.v2.json](./contracts/fluent-contract.v2.json)
+- contract notes: [docs/fluent-contract-v2.md](./docs/fluent-contract-v2.md)
 - contract change: current product-wide vNext contract is v1.85. The public assistant/app profile uses one canonical `/mcp` surface with nine tools, zero resources, and one explicit shared/Meals write primitive. Legacy rich render, action/apply, Home, lifecycle, Style-write, Health/Wellbeing, and Finance surfaces remain outside the public vNext profile unless a future survival packet proves they improve the product.
 
 ### Supported Setup Matrix

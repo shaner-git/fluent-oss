@@ -6,8 +6,8 @@ import {
   FLUENT_MEALS_READ_SCOPE,
   FLUENT_MEALS_WRITE_SCOPE,
   FLUENT_STYLE_READ_SCOPE,
-  requireAnyScope,
   requireScope,
+  requireScopes,
 } from './auth';
 import type { BudgetsService } from './domains/budgets/service';
 import {
@@ -47,30 +47,13 @@ import {
 } from './domains/meals/recipe-card';
 import {
   buildEmptyGroceryListViewModel,
-  buildGroceryListMetadata,
+  buildPublicGroceryListMetadata,
   buildGroceryListStructuredContent,
+  getPublicGroceryListWidgetHtml,
   getGrocerySmokeWidgetHtml,
   getGroceryListWidgetHtml,
-  MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_BUCKET_ACTION_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_CHECKBOX_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_DONE_SYNC_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_FALLBACK_WRITE_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_HYDRATION_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_MCP_APPS_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PANTRY_UNDO_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PUBLIC_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_STALE_SOURCE_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI,
   MEALS_GROCERY_LIST_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_TRANSPORT_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_BRIDGE_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_LEGACY_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_MULTIFRAME_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
   MEALS_GROCERY_SMOKE_TEMPLATE_URI,
   type GroceryListActionViewModel,
   type GroceryListItemViewModel,
@@ -722,7 +705,7 @@ export function registerMealsMcpSurface(
   options?: MealsMcpSurfaceOptions,
 ) {
   const mealsReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_MEALS_READ_SCOPE] }];
-  const fluentRenderSurfaceSecuritySchemes = [
+  const budgetsRenderSurfaceSecuritySchemes = [
     { type: 'oauth2' as const, scopes: [FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE] },
   ];
   const mealsWriteSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_MEALS_WRITE_SCOPE] }];
@@ -779,124 +762,26 @@ export function registerMealsMcpSurface(
   );
   registerRecipeCardWidgetResource('fluent-meals-recipe-card-widget', MEALS_RECIPE_CARD_TEMPLATE_URI);
 
-  const registerGroceryListWidgetResource = (name: string, uri: string, title = 'Grocery List Widget') =>
-    server.registerResource(
-      name,
-      uri,
-      {
-        title,
-        description: 'Rich current shopping-list checklist with Fluent provenance and trust state.',
-        mimeType: 'text/html;profile=mcp-app',
-        icons: iconFor(origin),
-        _meta: groceryListWidgetMeta,
-      },
-      async () => ({
-        contents: [
-          {
-            uri,
-            mimeType: 'text/html;profile=mcp-app',
-            text: getGroceryListWidgetHtml(),
-            _meta: groceryListWidgetMeta,
-          },
-        ],
-      }),
-    );
-
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-legacy-v57',
-    MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI,
-    'Grocery List Widget Legacy v57',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v58',
-    MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI,
-    'Grocery List Widget Previous v58',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v59',
-    MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v59',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v60',
-    MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v60',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v61',
-    MEALS_GROCERY_LIST_HYDRATION_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v61',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v62',
-    MEALS_GROCERY_LIST_MCP_APPS_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v62',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v63',
-    MEALS_GROCERY_LIST_TRANSPORT_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v63',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v64',
-    MEALS_GROCERY_LIST_CHECKBOX_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v64',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v65',
-    MEALS_GROCERY_LIST_FALLBACK_WRITE_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v65',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v66',
-    MEALS_GROCERY_LIST_PUBLIC_ACTIONS_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v66',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v67',
-    MEALS_GROCERY_LIST_DONE_SYNC_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v67',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v68',
-    MEALS_GROCERY_LIST_PANTRY_UNDO_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v68',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v69',
-    MEALS_GROCERY_LIST_STALE_SOURCE_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v69',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-meals-grocery-list-widget-v2-previous-v70',
-    MEALS_GROCERY_LIST_BUCKET_ACTION_PREVIOUS_TEMPLATE_URI,
-    'Grocery List Widget Previous v70',
-  );
-  registerGroceryListWidgetResource('fluent-meals-grocery-list-widget-v2', MEALS_GROCERY_LIST_TEMPLATE_URI);
-  registerGroceryListWidgetResource(
-    'fluent-vnext-meals-grocery-list-widget-legacy-v1',
-    MEALS_GROCERY_LIST_VNEXT_LEGACY_TEMPLATE_URI,
-    'Fluent Grocery List Candidate Widget Previous v1',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-vnext-meals-grocery-list-widget-previous-v2',
-    MEALS_GROCERY_LIST_VNEXT_PREVIOUS_TEMPLATE_URI,
-    'Fluent Grocery List Candidate Widget Previous v2',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-vnext-meals-grocery-list-widget-v3',
-    MEALS_GROCERY_LIST_VNEXT_BRIDGE_TEMPLATE_URI,
-    'Fluent Grocery List Candidate Widget v3',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-vnext-meals-grocery-list-widget-v4',
-    MEALS_GROCERY_LIST_VNEXT_MULTIFRAME_TEMPLATE_URI,
-    'Fluent Grocery List Candidate Widget v4',
-  );
-  registerGroceryListWidgetResource(
-    'fluent-vnext-meals-grocery-list-widget-v5',
-    MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
-    'Fluent Grocery List Candidate Widget v5',
+  server.registerResource(
+    'fluent-meals-grocery-list-widget',
+    MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
+    {
+      title: 'Grocery List Widget',
+      description: 'Current Fluent shopping-list checklist with explicit, bounded list actions.',
+      mimeType: 'text/html;profile=mcp-app',
+      icons: iconFor(origin),
+      _meta: groceryListWidgetMeta,
+    },
+    async () => ({
+      contents: [
+        {
+          uri: MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
+          mimeType: 'text/html;profile=mcp-app',
+          text: getPublicGroceryListWidgetHtml(),
+          _meta: groceryListWidgetMeta,
+        },
+      ],
+    }),
   );
 
   const registerPantryDashboardWidgetResource = (name: string, uri: string, title = 'Pantry Dashboard Widget') =>
@@ -1383,7 +1268,7 @@ export function registerMealsMcpSurface(
     if (!viewModel) {
       const emptyViewModel = applyCurrentListMetadataToViewModel(buildEmptyGroceryListViewModel(currentList.weekStart), currentList);
       return {
-        _meta: buildGroceryListMetadata(emptyViewModel),
+        _meta: buildPublicGroceryListMetadata(emptyViewModel),
         content: [
           {
             type: 'text' as const,
@@ -1399,7 +1284,7 @@ export function registerMealsMcpSurface(
 
     const structuredContent = buildGroceryListStructuredContent(viewModel);
     return {
-      _meta: buildGroceryListMetadata(viewModel),
+      _meta: buildPublicGroceryListMetadata(viewModel),
       content: [
         {
           type: 'text' as const,
@@ -1442,7 +1327,7 @@ export function registerMealsMcpSurface(
   registerRenderGroceryListTool();
 
   const renderBudgetsEnvelopeSetupResult = async () => {
-    requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
+    requireScopes([FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
     if (!options?.budgets) {
       return {
         content: [
@@ -1506,7 +1391,7 @@ export function registerMealsMcpSurface(
         'openai/toolInvocation/invoking': 'Opening budget envelopes...',
         'openai/widgetAccessible': true,
       },
-    }, fluentRenderSurfaceSecuritySchemes),
+    }, budgetsRenderSurfaceSecuritySchemes),
     async () => renderBudgetsEnvelopeSetupResult(),
   );
 
@@ -1515,11 +1400,10 @@ export function registerMealsMcpSurface(
     withAppsSecurity({
       title: 'Render Fluent Grocery List',
       description:
-        'Promoted render adapter for Fluent MCP Apps surfaces. Use surface="meals_grocery_list" for the current Fluent grocery-list widget. For budget envelopes prefer fluent_render_budgets_surface (it mounts the envelope-setup widget); surface="budgets_envelope_setup" here returns the same structured envelope data for widget refresh and text fallback. If the host cannot mount the returned ui:// resource, answer from the structured fallback data in text.',
+        'Render the current Fluent grocery-list MCP Apps surface. Use surface="meals_grocery_list". If the host cannot mount the returned ui:// resource, answer from the structured grocery-list fallback data in text. Budget envelopes use the separate fluent_render_budgets_surface tool.',
       inputSchema: {
-        surface: z.enum(['meals_grocery_list', 'budgets_envelope_setup']).describe('The Fluent surface to render.'),
-        week_start: isoDateInputSchema.optional().describe('Optional plan week start date formatted exactly as YYYY-MM-DD. Prefer week_start; weekStart is a legacy alias.'),
-        weekStart: isoDateInputSchema.optional().describe('Legacy camelCase week start alias formatted exactly as YYYY-MM-DD; prefer week_start.'),
+        surface: z.enum(['meals_grocery_list']).describe('The Fluent grocery-list surface to render.'),
+        week_start: isoDateInputSchema.optional().describe('Optional plan week start date formatted exactly as YYYY-MM-DD.'),
       },
       annotations: {
         title: 'Render Fluent Grocery List',
@@ -1528,57 +1412,37 @@ export function registerMealsMcpSurface(
       },
       _meta: {
         ui: {
-          resourceUri: MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
+            resourceUri: MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
         },
-        'openai/outputTemplate': MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
+        'openai/outputTemplate': MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
         'openai/toolInvocation/invoked': 'Fluent surface ready.',
         'openai/toolInvocation/invoking': 'Opening Fluent surface...',
         'openai/widgetAccessible': true,
       },
-    }, fluentRenderSurfaceSecuritySchemes),
-    async ({ surface, week_start, weekStart }) => {
-      if (surface === 'budgets_envelope_setup') {
-        return renderBudgetsEnvelopeSetupResult();
-      }
-
-      if (surface !== 'meals_grocery_list') {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Unsupported Fluent surface: ${String(surface)}.`,
-            },
-          ],
-          isError: true,
-          structuredContent: {
-            error: 'unsupported_surface',
-            surface,
-          },
-        };
-      }
-
+    }, mealsReadSecuritySchemes),
+    async ({ week_start }) => {
       requireScope(FLUENT_MEALS_READ_SCOPE);
-      const result = await renderCurrentGroceryList({ week_start, weekStart });
+      const result = await renderCurrentGroceryList({ week_start });
       return {
         ...result,
         _meta: {
           ...result._meta,
           surface: 'meals_grocery_list',
-          templateUri: MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
+          templateUri: MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
         },
         content: [
           {
             type: 'text' as const,
             text: [
               'Showing the Fluent grocery list surface.',
-              `Template URI: ${MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI}.`,
+              `Template URI: ${MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI}.`,
               'If the host cannot mount this resource, use the structured grocery-list fallback data in text.',
             ].join(' '),
           },
         ],
         structuredContent: {
           surface: 'meals_grocery_list',
-          templateUri: MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
+          templateUri: MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
           ...result.structuredContent,
         },
       };

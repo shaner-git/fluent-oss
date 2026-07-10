@@ -1,6 +1,6 @@
 {
   "name": "fluent-openclaw-oss-helper",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": false,
   "type": "module",
   "description": "Bundled OpenClaw helper package shipped with Fluent open-source exports; not the published fluent-openclaw package.",
@@ -53,21 +53,13 @@
     "publishedPackageName": "fluent-openclaw",
     "publishedPackageRepository": "https://github.com/shaner-git/fluent-openclaw",
     "helperVersionPolicy": "Tracks Fluent open-source bundled-helper revisions and is not the published fluent-openclaw package line.",
-    "backendModesStatus": "plugin-managed-auth-beta",
-    "backendModes": [
-      "hosted",
-      "local"
-    ],
-    "legacyBackendModes": [
-      "hosted",
-      "local"
-    ],
     "deploymentTracks": [
       "cloud",
       "oss"
     ],
     "defaultDeploymentTrack": "oss",
-    "minimumContractVersion": "2026-06-01.fluent-core-v1.85",
+    "minimumContractVersion": "2026-07-09.fluent-core-v2.0",
+    "currentReferenceContractVersion": "2026-07-09.fluent-core-v2.0",
     "requiredHostedScopes": [
       "meals:read",
       "meals:write",

@@ -225,7 +225,10 @@ export function buildStyleAssetKey(params: {
   const safeTenant = sanitizeSegment(params.tenantId);
   const safeItem = sanitizeSegment(params.itemId);
   const safePhoto = sanitizeSegment(params.photoId);
-  return `style/${safeTenant}/${safeItem}/${safePhoto}/original.${params.extension}`;
+  const safeArtifact = sanitizeSegment(params.artifactId);
+  // Each upload gets an immutable object key. A photo-id-only key let a replacement overwrite
+  // the currently referenced object before its database swap had succeeded.
+  return `style/${safeTenant}/${safeItem}/${safePhoto}/${safeArtifact}/original.${params.extension}`;
 }
 
 export function inferMimeTypeFromUrl(url: string): string {

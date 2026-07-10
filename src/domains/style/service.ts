@@ -1397,8 +1397,15 @@ export class StyleService {
       throw new Error(`Unknown style item: ${input.itemId}`);
     }
 
-    const photos = await Promise.all(
-      normalizePhotoInput(input.photos).map(async (photo, index) => {
+    const previousArtifacts = await this.repository.listItemPhotoArtifacts(input.itemId);
+    if (previousArtifacts.length > 0 && !this.options.artifacts?.delete) {
+      throw new Error('Style photo replacement requires artifact deletion support for previously owned media.');
+    }
+
+    const createdArtifacts: Array<{ id: string; r2_key: string }> = [];
+    try {
+      const photos: Parameters<StyleRepository['replaceItemPhotos']>[1] = [];
+      for (const [index, photo] of normalizePhotoInput(input.photos).entries()) {
         const photoId = asNullableString(photo.id) ?? `style-photo:${input.itemId}:${index + 1}`;
         const sourceUrl = asNullableString(photo.source_url ?? photo.sourceUrl ?? photo.url);
         // Store-by-reference for host-inspected closet photos (the public fluent_set_style_item_image
@@ -1423,7 +1430,11 @@ export class StyleService {
           );
         }
 
-        return {
+        if (ownedAsset) {
+          createdArtifacts.push({ id: ownedAsset.artifactId, r2_key: ownedAsset.r2Key });
+        }
+
+        photos.push({
           artifactId: ownedAsset?.artifactId ?? null,
           bgRemoved: asBoolean(photo.bg_removed ?? photo.bgRemoved),
           capturedAt: asNullableString(photo.captured_at ?? photo.capturedAt),
@@ -1446,25 +1457,31 @@ export class StyleService {
           sourceUrl,
           url: sourceUrl ?? `artifact:${photoId}`,
           view: normalizeStylePhotoView(photo.view),
-        };
-      }),
-    );
+        });
+      }
 
-    await this.repository.replaceItemPhotos(input.itemId, photos);
-    const after = await this.getItem(input.itemId);
-    if (!after) {
-      throw new Error(`Style item ${input.itemId} disappeared after photo update.`);
+      await this.repository.replaceItemPhotos(input.itemId, photos);
+      await this.cleanupUnreferencedPhotoArtifacts(previousArtifacts);
+      const after = await this.getItem(input.itemId);
+      if (!after) {
+        throw new Error(`Style item ${input.itemId} disappeared after photo update.`);
+      }
+
+      await this.recordDomainEvent({
+        after: { itemId: input.itemId, photoCount: after.photos.length },
+        before: { itemId: input.itemId, photoCount: before.photos.length },
+        entityId: input.itemId,
+        entityType: 'style_item_photos',
+        eventType: 'style.item_photos_replaced',
+        provenance: input.provenance,
+      });
+      return after.photos;
+    } catch (error) {
+      // If ingestion or the transactional row swap fails, delete any new assets that did not
+      // become the durable replacement. Assets referenced by a successful swap are preserved.
+      await this.cleanupUnreferencedPhotoArtifacts(createdArtifacts);
+      throw error;
     }
-
-    await this.recordDomainEvent({
-      after: { itemId: input.itemId, photoCount: after.photos.length },
-      before: { itemId: input.itemId, photoCount: before.photos.length },
-      entityId: input.itemId,
-      entityType: 'style_item_photos',
-      eventType: 'style.item_photos_replaced',
-      provenance: input.provenance,
-    });
-    return after.photos;
   }
 
   async getItemProfile(itemId: string): Promise<StyleItemProfileRecord | null> {
@@ -2933,7 +2950,7 @@ export class StyleService {
     mimeType: string | null;
     photoId: string;
     sourceUrl: string | null;
-  }): Promise<{ artifactId: string; mimeType: string } | null> {
+  }): Promise<{ artifactId: string; mimeType: string; r2Key: string } | null> {
     if (!this.options.artifacts) {
       return null;
     }
@@ -2968,24 +2985,48 @@ export class StyleService {
       },
     });
 
-    await this.repository.upsertArtifact({
-      artifactId: ownedAsset.artifactId,
-      artifactType: 'style_photo_original',
-      entityId: input.photoId,
-      entityType: 'style_item_photo',
-      metadataJson: stringifyJson({
-        itemId: input.itemId,
-        photoId: input.photoId,
-        sourceUrl: ownedAsset.sourceUrl,
-      }),
-      mimeType: ownedAsset.mimeType,
-      r2Key,
-    });
+    try {
+      await this.repository.upsertArtifact({
+        artifactId: ownedAsset.artifactId,
+        artifactType: 'style_photo_original',
+        entityId: input.photoId,
+        entityType: 'style_item_photo',
+        metadataJson: stringifyJson({
+          itemId: input.itemId,
+          photoId: input.photoId,
+          sourceUrl: ownedAsset.sourceUrl,
+        }),
+        mimeType: ownedAsset.mimeType,
+        r2Key,
+      });
+    } catch (error) {
+      await this.options.artifacts.delete?.(r2Key);
+      throw error;
+    }
 
     return {
       artifactId: ownedAsset.artifactId,
       mimeType: ownedAsset.mimeType,
+      r2Key,
     };
+  }
+
+  private async cleanupUnreferencedPhotoArtifacts(artifacts: Array<{ id: string; r2_key: string }>): Promise<void> {
+    const uniqueArtifacts = [...new Map(artifacts.map((artifact) => [artifact.id, artifact])).values()];
+    for (const artifact of uniqueArtifacts) {
+      const unreferenced = await this.repository.getUnreferencedArtifact(artifact.id);
+      if (!unreferenced) {
+        continue;
+      }
+      const keyIsShared = await this.repository.hasOtherArtifactAtR2Key(unreferenced.id, unreferenced.r2_key);
+      if (!keyIsShared) {
+        if (!this.options.artifacts?.delete) {
+          throw new Error(`Cannot delete superseded Style artifact ${unreferenced.id}: blob deletion is unavailable.`);
+        }
+        await this.options.artifacts.delete(unreferenced.r2_key);
+      }
+      await this.repository.deleteArtifactIfUnreferenced(unreferenced.id);
+    }
   }
 
   private resolveBackfillSource(input: {

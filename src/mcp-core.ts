@@ -12,7 +12,6 @@ import {
   requireAnyScope,
   requireScopes,
 } from './auth';
-import type { HealthService } from './domains/health/service';
 import type { BudgetCategory, BudgetsService } from './domains/budgets/service';
 import {
   BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
@@ -21,38 +20,14 @@ import {
 } from './domains/budgets/envelope-setup';
 import { recipeDocumentSchema, recipeIngredientSchema, recipeInstructionSchema } from './domains/meals/recipe-document';
 import { summarizeDomainEvents, type MealsService } from './domains/meals/service';
-import {
-  resolveProductDisplayImage,
-  type ProductDisplayImageCandidate,
-  type ProductDisplayImageResolution,
-} from './domains/style/product-image-resolver';
 import { STYLE_ITEM_FIT_FIELDS, type StyleDuplicateCandidate, type StyleDuplicateCandidateSignals, type StyleService } from './domains/style/service';
 import {
   FLUENT_GUIDANCE_RESOURCE_URIS,
 } from './contract';
-import {
-  buildFluentHomeMetadata,
-  buildFluentHomeViewModel,
-  buildFluentHomeWidgetMeta,
-  FLUENT_HOME_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_AT_HOME_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_CACHED_TEMPLATE_URI,
-  FLUENT_HOME_CANARY_TEMPLATE_URI,
-  FLUENT_HOME_COMPAT_TEMPLATE_URI,
-  FLUENT_HOME_DIRECT_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_LEGACY_TEMPLATE_URI,
-  FLUENT_HOME_LIVE_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_MODAL_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_RECENT_TEMPLATE_URI,
-  FLUENT_HOME_REVIEW_TEMPLATE_URI,
-  FLUENT_HOME_TEMPLATE_URI,
-  getFluentHomeWidgetHtml,
-} from './fluent-home';
 import { getFluentGuidanceDocument } from './fluent-guidance';
 import { FluentCoreService, resolveHostFamily, type FluentAccountStatus } from './fluent-core';
 import { iconFor, jsonResource, provenanceInputSchema, readViewSchema, toolResult, writeResponseModeSchema } from './mcp-shared';
-import { createFetchTimeoutSignal, fetchStyleVisualBundleImage, STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES } from './mcp-style';
+import { createFetchTimeoutSignal, fetchStyleVisualBundleImage } from './mcp-style';
 import { enforcePublicWriteRateLimit, type FluentRateLimitBinding } from './rate-limits';
 import {
   getFluentVNextContext,
@@ -86,10 +61,11 @@ import {
 } from './vnext-write-layer';
 import { buildVNextModelText, toVNextModelVisibleValue } from './vnext-model-text';
 
-const STYLE_PRODUCT_DISPLAY_FORCED_PICK_MAX_INLINE_IMAGES = 8;
-
 const fluentVNextDomainSchema = z.enum(['shared', 'meals', 'style', 'wellbeing', 'finance']).describe(
   'Fluent domain to read. Use meals for food, recipes, groceries, or pantry state; style for closet or purchase evidence; shared for cross-domain profile facts. Wellbeing and finance are reserved for broader profiles.',
+);
+const fluentVNextArchiveDomainSchema = z.enum(['meals', 'style']).describe(
+  'Public Fluent domain containing the saved item to archive. Only Meals and Style items are archivable in the current contract.',
 );
 const fluentVNextSharedProfileWriteDomainSchema = z.enum(['shared', 'meals']).describe(
   'Domain for this explicit public memory write. Use shared only for timezone or display_name facts; use meals for confirmed food, grocery, routine, and meal-planning facts. Style, wellbeing, and finance writes are not exposed through this public fact patch.',
@@ -499,6 +475,10 @@ function oauth2SecuritySchemes(scopes: readonly string[]): FluentMcpSecuritySche
   return [{ type: 'oauth2', scopes: [...scopes] }];
 }
 
+function oauth2AlternativeSecuritySchemes(scopes: readonly string[]): FluentMcpSecurityScheme[] {
+  return scopes.map((scope) => ({ type: 'oauth2', scopes: [scope] }));
+}
+
 function withToolSecurity<T extends Record<string, unknown>>(
   config: T,
   securitySchemes: FluentMcpSecurityScheme[],
@@ -582,6 +562,7 @@ export function buildFluentAccountStatusToolText(status: FluentAccountStatus): s
 function vNextToolResult(
   data: unknown,
   options: {
+    compactContextSummaryText?: boolean;
     includeMediaReferences?: boolean;
     preserveRecipeIngredients?: boolean;
     preserveListItems?: boolean;
@@ -591,8 +572,23 @@ function vNextToolResult(
   const structuredContent = toVNextModelVisibleValue(data, options);
   return toolResult(data, {
     structuredContent,
-    textData: buildVNextModelText(data, options),
+    textData: options.compactContextSummaryText
+      ? buildVNextContextSummaryText(structuredContent)
+      : buildVNextModelText(data, options),
   });
+}
+
+function buildVNextContextSummaryText(value: unknown): string {
+  const record = recordOrNull(value) ?? {};
+  const facts = Array.isArray(record.compactFacts) ? record.compactFacts.length : 0;
+  const items = Array.isArray(record.relevantItems) ? record.relevantItems.length : 0;
+  const gaps = Array.isArray(record.evidenceGaps) ? record.evidenceGaps.length : 0;
+  const freshness = recordOrNull(record.freshness);
+  return [
+    `Fluent returned a compact ${String(record.domain ?? 'shared')} context summary for ${String(record.intent ?? 'unknown')}.`,
+    `Evidence: ${facts} compact fact(s), ${items} relevant item(s), ${gaps} evidence gap(s); freshness ${String(freshness?.status ?? 'unknown')}.`,
+    'Use the structured ContextPacket as evidence, not as final judgment.',
+  ].join('\n');
 }
 
 type VNextToolContentBlock =
@@ -682,53 +678,6 @@ function mergeStyleCreateImageAck(
     },
     readAfterWrite: imageAck?.readAfterWrite ?? createAck.readAfterWrite,
   };
-}
-
-function sourceSnapshotProductUrl(value: unknown): string | undefined {
-  const snapshot = value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-  return typeof snapshot?.url === 'string' && snapshot.url.length > 0 ? snapshot.url : undefined;
-}
-
-function augmentStyleCreateAckPayload(
-  ack: FluentVNextWriteAck,
-  extraPayload: Record<string, unknown>,
-  readAfterWrite?: unknown,
-): FluentVNextWriteAck {
-  const payload = ack.payload && typeof ack.payload === 'object' && !Array.isArray(ack.payload)
-    ? ack.payload as Record<string, unknown>
-    : {};
-  return {
-    ...ack,
-    payload: {
-      ...payload,
-      ...extraPayload,
-    },
-    readAfterWrite: readAfterWrite ?? ack.readAfterWrite,
-  };
-}
-
-async function buildProductDisplayImageInlineContent(
-  candidates: ProductDisplayImageCandidate[],
-  maxImages = STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES,
-): Promise<Array<{ candidate: ProductDisplayImageCandidate; image: { data: string; mimeType: string; type: 'image' } }>> {
-  const images: Array<{ candidate: ProductDisplayImageCandidate; image: { data: string; mimeType: string; type: 'image' } }> = [];
-  for (const candidate of candidates) {
-    if (images.length >= maxImages) {
-      break;
-    }
-    try {
-      const fetched = await fetchStyleVisualBundleImage(candidate.url);
-      if (!isViewableInlineImageMimeType(fetched.mimeType)) {
-        continue;
-      }
-      images.push({ candidate, image: { type: 'image', data: fetched.data, mimeType: fetched.mimeType } });
-    } catch {
-      // Inline gallery images are advisory for the host model. Keep the write result usable if a CDN blocks fetch.
-    }
-  }
-  return images;
 }
 
 export function isViewableInlineImageMimeType(mimeType: string | null | undefined): boolean {
@@ -844,45 +793,6 @@ async function appendStyleReanalyzePrimaryPhotoInlineContent(
   } catch {
     // Defensive: a media-bundle load failure must not break the get_item read.
   }
-}
-
-function buildProductDisplayImageCreateText(input: {
-  ack: FluentVNextWriteAck;
-  resolution: ProductDisplayImageResolution;
-}) {
-  const candidateLines = input.resolution.candidates
-    .slice(0, STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES)
-    .map((candidate, index) => `${index + 1}. ${candidate.role} score=${candidate.score} source=${candidate.source} ${candidate.url}`);
-  const confidenceLine = input.resolution.confidence === 'low'
-    ? 'Low confidence: inspect the inline gallery images before answering. If the current display image is not the clean product-only no-model photo, call fluent_set_style_item_image with image_type:"primary" and the correct gallery URL.'
-    : "I picked the clean product photo for your closet tile.";
-  return [
-    buildStyleItemCreateText(input.ack.payload),
-    `Display image set to: ${input.resolution.recommendedPrimaryUrl}.`,
-    input.resolution.recommendedFitUrl ? `Fit image set to: ${input.resolution.recommendedFitUrl}.` : null,
-    confidenceLine,
-    input.resolution.confidence === 'high'
-      ? "The product's other images are shown - if a different one is the clean product-only shot, tell me or call fluent_set_style_item_image."
-      : null,
-    candidateLines.length > 0 ? `Gallery candidates:\n${candidateLines.join('\n')}` : null,
-    input.resolution.warnings.length > 0 ? `Resolver warnings: ${input.resolution.warnings.join('; ')}` : null,
-  ].filter((line): line is string => Boolean(line)).join('\n');
-}
-
-function buildProductDisplayImageForcedPickText(input: {
-  ack: FluentVNextWriteAck;
-  createdItemId: string;
-  orderedCandidates: ProductDisplayImageCandidate[];
-  resolution: ProductDisplayImageResolution;
-}) {
-  const candidateLines = input.orderedCandidates.map((candidate, index) => `${index + 1}. ${candidate.url}`);
-  return [
-    buildStyleItemCreateText(input.ack.payload),
-    'The item was created, but no display tile is set yet because Fluent could not identify the clean product-only photo.',
-    `REQUIRED: Inspect the gallery images below. Pick the ONE that shows ONLY the garment (laid flat or on a plain/white background, NO person/model) and call fluent_set_style_item_image with item_id="${input.createdItemId}", image_type="primary", and image_url set to that image's URL. If every image shows a model, pick the most product-focused one. The item has no closet tile until you do this.`,
-    candidateLines.length > 0 ? `Gallery images (in order shown):\n${candidateLines.join('\n')}` : 'Gallery images (in order shown): none could be inlined.',
-    input.resolution.warnings.length > 0 ? `Resolver warnings: ${input.resolution.warnings.join('; ')}` : null,
-  ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
 function buildStyleClosetMutationProvenance(
@@ -1004,17 +914,12 @@ export function registerCoreMcpSurface(
   server: McpServer,
   fluentCore: FluentCoreService,
   meals: MealsService,
-  health: HealthService,
   style: StyleService,
   budgets: BudgetsService,
   origin: string,
   options: { publicWriteRateLimiter?: FluentRateLimitBinding } = {},
 ) {
-  const homeWidgetMeta = buildFluentHomeWidgetMeta(origin);
   const budgetsEnvelopeSetupWidgetMeta = buildBudgetsEnvelopeSetupWidgetMeta(origin);
-  const fluentHomeReadSecuritySchemes = [
-    { type: 'oauth2' as const, scopes: [FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE] },
-  ];
   const vNextReadSecuritySchemes = oauth2SecuritySchemes([
     FLUENT_MEALS_READ_SCOPE,
     FLUENT_STYLE_READ_SCOPE,
@@ -1022,57 +927,17 @@ export function registerCoreMcpSurface(
   const vNextWriteSecuritySchemes = oauth2SecuritySchemes([
     FLUENT_MEALS_WRITE_SCOPE,
   ]);
-  const vNextBudgetWriteSecuritySchemes = oauth2SecuritySchemes([
+  const vNextBudgetWriteSecuritySchemes = oauth2AlternativeSecuritySchemes([
     FLUENT_MEALS_WRITE_SCOPE,
     FLUENT_STYLE_WRITE_SCOPE,
   ]);
+  const vNextStyleWriteSecuritySchemes = oauth2SecuritySchemes([FLUENT_STYLE_WRITE_SCOPE]);
   const vNextStyleReadSecuritySchemes = oauth2SecuritySchemes([FLUENT_STYLE_READ_SCOPE]);
   const withVNextReadSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextReadSecuritySchemes);
   const withVNextWriteSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextWriteSecuritySchemes);
   const withVNextBudgetWriteSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextBudgetWriteSecuritySchemes);
-  // Style closet writes accept either write scope (advertised + gated in lockstep), so the
-  // narrowed public hosted token (meals:write, no style:write) can reach them — the
-  // fluent_archive_item precedent. Reuses the both-scopes scheme set.
-  const withVNextStyleClosetWriteSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextBudgetWriteSecuritySchemes);
+  const withVNextStyleClosetWriteSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextStyleWriteSecuritySchemes);
   const withVNextStyleReadSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextStyleReadSecuritySchemes);
-
-  for (const [name, uri] of [
-    ['fluent-home-widget', FLUENT_HOME_TEMPLATE_URI],
-    ['fluent-home-widget-v21', FLUENT_HOME_AT_HOME_PREVIOUS_TEMPLATE_URI],
-    ['fluent-home-widget-v20', FLUENT_HOME_MODAL_PREVIOUS_TEMPLATE_URI],
-    ['fluent-home-widget-v19', FLUENT_HOME_DIRECT_ACTIONS_PREVIOUS_TEMPLATE_URI],
-    ['fluent-home-widget-v18', FLUENT_HOME_ACTIONS_PREVIOUS_TEMPLATE_URI],
-    ['fluent-home-widget-v17', FLUENT_HOME_LIVE_PREVIOUS_TEMPLATE_URI],
-    ['fluent-home-widget-v16', FLUENT_HOME_CANARY_TEMPLATE_URI],
-    ['fluent-home-widget-v15', FLUENT_HOME_REVIEW_TEMPLATE_URI],
-    ['fluent-home-widget-v14', FLUENT_HOME_CACHED_TEMPLATE_URI],
-    ['fluent-home-widget-v13', FLUENT_HOME_RECENT_TEMPLATE_URI],
-    ['fluent-home-widget-v12', FLUENT_HOME_PREVIOUS_TEMPLATE_URI],
-    ['fluent-home-widget-v11', FLUENT_HOME_COMPAT_TEMPLATE_URI],
-    ['fluent-home-widget-v10', FLUENT_HOME_LEGACY_TEMPLATE_URI],
-  ] as const) {
-    server.registerResource(
-      name,
-      uri,
-      {
-        title: 'Fluent Home Widget',
-        description: 'Rich Fluent Home overview for ChatGPT/App SDK hosts.',
-        mimeType: 'text/html;profile=mcp-app',
-        icons: iconFor(origin),
-        _meta: homeWidgetMeta,
-      },
-      async () => ({
-        contents: [
-          {
-            uri,
-            mimeType: 'text/html;profile=mcp-app',
-            text: getFluentHomeWidgetHtml(),
-            _meta: homeWidgetMeta,
-          },
-        ],
-      }),
-    );
-  }
 
   server.registerResource(
     'fluent-budgets-envelope-setup-widget-v1',
@@ -1180,41 +1045,6 @@ export function registerCoreMcpSurface(
   }
 
   server.registerTool(
-    'fluent_get_home',
-    {
-      title: 'Get Fluent Home',
-      description:
-        `Open the unified Fluent Home overview only when the user asks for Fluent Home, a cross-domain check-in, readiness, or what to do next across Meals, Style, and Health. This is not the Grocery List surface, Health Today surface, Account surface, or a shortcut router. For direct user asks such as "open my grocery list", "show me my grocery list", or "what do I need to buy?", use meals_render_grocery_list_v2 in ChatGPT / MCP Apps-style hosts instead of Home. For "show today's training", "what is my workout today?", or "what training do I have today?", use health_get_today_context instead of Home. For account/access/billing/export/deletion/support asks, use fluent_get_account_status instead of Home. Home may include component actions such as Open grocery list; ChatGPT/App SDK hosts can hand those actions to their dedicated rich surfaces, and text-only hosts should summarize the action result instead. All hosts receive a text fallback and structured summary; text-only hosts should prefer the provided fallback wording instead of rephrasing counts into report-like status telemetry. Does not expose raw internal IDs or billing checkout.`,
-      annotations: { title: 'Get Fluent Home', readOnlyHint: true, idempotentHint: true },
-      securitySchemes: fluentHomeReadSecuritySchemes,
-      _meta: {
-        ui: {
-          resourceUri: FLUENT_HOME_TEMPLATE_URI,
-        },
-        'openai/outputTemplate': FLUENT_HOME_TEMPLATE_URI,
-        securitySchemes: fluentHomeReadSecuritySchemes,
-        'openai/toolInvocation/invoked': 'Fluent Home ready.',
-        'openai/toolInvocation/invoking': 'Opening Fluent Home...',
-        'openai/widgetAccessible': true,
-      },
-    } as any,
-    async () => {
-      requireScopes([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
-      const home = await buildFluentHomeViewModel({ fluentCore, health, meals, style });
-      return {
-        _meta: buildFluentHomeMetadata(home),
-        content: [
-          {
-            type: 'text' as const,
-            text: home.textFallback,
-          },
-        ],
-        structuredContent: home as unknown as Record<string, unknown>,
-      };
-    },
-  );
-
-  server.registerTool(
     'fluent_get_capabilities',
     withVNextReadSecurity({
       title: 'Get Fluent Capabilities',
@@ -1310,16 +1140,18 @@ export function registerCoreMcpSurface(
       },
       annotations: { title: 'Start Here: Fluent Context', readOnlyHint: true, idempotentHint: true },
     }),
-    async ({ amount, candidate, domain, intent }) => {
+    async ({ amount, candidate, detail, domain, intent }) => {
       requireVNextReadScope(domain);
       const context = await getFluentVNextContext(vNextReadServices, {
         amount: amount ?? null,
         candidate,
+        detail: detail ?? 'summary',
         domain,
         host: resolveHostFamily(),
         intent,
       });
       return vNextToolResult(context, {
+        compactContextSummaryText: context.detail === 'summary',
         includeMediaReferences: domain === 'style' && intent === 'purchase' && Boolean(candidate),
         preserveStylePurchaseOwnedSlice: domain === 'style' && intent === 'purchase' && Boolean(candidate),
       });
@@ -1847,7 +1679,7 @@ export function registerCoreMcpSurface(
     withVNextStyleClosetWriteSecurity({
       title: 'Create Fluent Style Item',
       description:
-        'Create one NEW saved Style closet item from a profile YOU (the host model) produced by looking at the garment. Fluent validates and normalizes the structured fields, infers the comparator key, surfaces possible existing matches with discriminating signals (brand/color/type/size/tags) for YOU to judge — Fluent flags candidates but does NOT decide sameness — stores provenance + confidence, and returns read-after-write proof. Fluent does not inspect images or infer taste; you own the visual judgment. For explicit user-approved closet onboarding only.',
+        'Create one NEW saved Style closet item from a profile YOU (the host model) produced by looking at the garment. Fluent validates and normalizes the structured fields, infers the comparator key, surfaces possible existing matches with discriminating signals (brand/color/type/size/tags) for YOU to judge — Fluent flags candidates but does NOT decide sameness — stores provenance + confidence, and returns read-after-write proof. Fluent does not inspect images, browse or scrape product pages, resolve product galleries, or infer taste; you own the visual judgment. For explicit user-approved closet onboarding only.',
       inputSchema: {
         approval: fluentVNextRecipeWriteApprovalSchema,
         category: z.enum(['TOP', 'BOTTOM', 'OUTERWEAR', 'SHOE', 'ACCESSORY']).describe('Canonical category (closed set).'),
@@ -1866,7 +1698,7 @@ export function registerCoreMcpSurface(
         field_evidence: z.record(z.string(), z.unknown()).optional().describe('Per-field { value, source, confidence } evidence.'),
         overall_confidence: z.number().min(0).max(1).nullable().optional(),
         host_model: z.string().nullable().optional().describe('Identifier of the host model that produced this profile.'),
-        image_url: z.string().url().nullable().optional().describe('Optional direct image URL hint for the item. When adding from a product page, pass the product page URL in source_snapshot.url - Fluent resolves the product gallery server-side, sets the clean product photo as the display tile, and returns the gallery for you to confirm. A direct image_url is only an optional fallback hint; Fluent decides the display image.'),
+        image_url: z.string().url().nullable().optional().describe('Optional direct image URL that the host already inspected and explicitly chose to store for this item. Fluent stores this URL with the requested image_type; it does not fetch a product page or resolve a gallery.'),
         image_type: fluentStyleImageTypeSchema,
         on_duplicate: z.enum(['warn', 'force', 'skip']).optional().describe('warn (default) writes nothing and returns candidate matches with discriminating signals for YOU to compare against the garment (Fluent does not decide sameness); skip returns the existing match; force creates anyway.'),
         client_token: z.string().min(1).max(200).optional().describe('Idempotency token; a retry with the same token returns the same item.'),
@@ -1914,149 +1746,6 @@ export function registerCoreMcpSurface(
         sourceSnapshot: args.source_snapshot,
       });
       const createdItemId = styleCreateAckCreatedItemId(ack);
-      const productUrl = sourceSnapshotProductUrl(args.source_snapshot);
-      if (productUrl && createdItemId) {
-        try {
-          const resolution = await resolveProductDisplayImage({
-            productUrl,
-            hostImageUrl: args.image_url ?? null,
-          });
-          if (resolution.confidence === 'high' && resolution.recommendedPrimaryUrl) {
-            const primaryAck = await setFluentStyleItemImage(vNextWriteServices, {
-              imageType: 'primary',
-              imageUrl: resolution.recommendedPrimaryUrl,
-              itemId: createdItemId,
-              provenance: buildStyleClosetMutationProvenance(authProps, args),
-              sourceSnapshot: args.source_snapshot,
-            });
-            let fitAck: FluentVNextWriteAck | null = null;
-            let fitError: unknown = null;
-            if (resolution.recommendedFitUrl && resolution.recommendedFitUrl !== resolution.recommendedPrimaryUrl) {
-              try {
-                fitAck = await setFluentStyleItemImage(vNextWriteServices, {
-                  imageType: 'fit',
-                  imageUrl: resolution.recommendedFitUrl,
-                  itemId: createdItemId,
-                  provenance: buildStyleClosetMutationProvenance(authProps, args),
-                  sourceSnapshot: args.source_snapshot,
-                });
-              } catch (error) {
-                fitError = error;
-              }
-            }
-            const combinedAck = augmentStyleCreateAckPayload(
-              mergeStyleCreateImageAck(ack, primaryAck, null),
-              {
-                fitImageAttachment: resolution.recommendedFitUrl
-                  ? {
-                      attempted: true,
-                      error: fitError instanceof Error ? fitError.message : fitError ? String(fitError) : null,
-                      payload: fitAck?.payload ?? null,
-                      status: fitAck ? 'attached' : fitError ? 'failed' : 'skipped',
-                    }
-                  : { attempted: false, error: null, payload: null, status: 'skipped' },
-                productDisplayImageResolution: resolution,
-              },
-              // Top-level read-after-write reflects the PRIMARY (the tile). The fit write's own
-              // read-after-write is preserved under fitImageAttachment.payload.
-              primaryAck.readAfterWrite,
-            );
-            const imageBlocks = await buildProductDisplayImageInlineContent(resolution.candidates);
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: buildProductDisplayImageCreateText({ ack: combinedAck, resolution }),
-                },
-                ...imageBlocks.map((entry) => entry.image),
-              ],
-              structuredContent: combinedAck as unknown as Record<string, unknown>,
-            };
-          }
-          if (resolution.confidence === 'low' && resolution.candidates.length > 0) {
-            const imageBlocks = await buildProductDisplayImageInlineContent(
-              resolution.candidates,
-              STYLE_PRODUCT_DISPLAY_FORCED_PICK_MAX_INLINE_IMAGES,
-            );
-            if (imageBlocks.length === 0) {
-              const combinedAck = augmentStyleCreateAckPayload(ack, { productDisplayImageResolution: resolution });
-              return toolResult(combinedAck, {
-                structuredContent: combinedAck,
-                textData: `${buildStyleItemCreateText(ack.payload)} Fluent found product gallery candidates but could not inline a viewable gallery image, so no display image was attached. The host-passed image_url was kept as a hint and was not made primary.`,
-              });
-            }
-            const orderedCandidates = imageBlocks.map((entry) => entry.candidate);
-            const pendingSelection = {
-              displayImageStatus: 'pending_model_selection',
-              createdItemId,
-              orderedCandidates: orderedCandidates.map((candidate) => ({
-                role: candidate.role,
-                url: candidate.url,
-              })),
-              productDisplayImageResolution: resolution,
-            };
-            const combinedAck = augmentStyleCreateAckPayload(ack, pendingSelection);
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: buildProductDisplayImageForcedPickText({
-                    ack: combinedAck,
-                    createdItemId,
-                    orderedCandidates,
-                    resolution,
-                  }),
-                },
-                ...imageBlocks.map((entry) => entry.image),
-              ],
-              structuredContent: {
-                ...(combinedAck as unknown as Record<string, unknown>),
-                ...pendingSelection,
-              },
-            };
-          }
-          if (args.image_url && args.image_type && args.image_type !== 'primary') {
-            const imageAck = await setFluentStyleItemImage(vNextWriteServices, {
-              imageType: args.image_type,
-              imageUrl: args.image_url,
-              itemId: createdItemId,
-              provenance: buildStyleClosetMutationProvenance(authProps, args),
-              sourceSnapshot: args.source_snapshot,
-            });
-            const combinedAck = augmentStyleCreateAckPayload(
-              mergeStyleCreateImageAck(ack, imageAck, null),
-              { productDisplayImageResolution: resolution },
-              imageAck.readAfterWrite,
-            );
-            return toolResult(combinedAck, {
-              structuredContent: combinedAck,
-              textData: `${buildStyleItemCreateText(ack.payload)} Fluent could not confirm a clean product photo from the product page, so it attached the fallback ${args.image_type} image ${args.image_url}.`,
-            });
-          }
-          const combinedAck = augmentStyleCreateAckPayload(ack, { productDisplayImageResolution: resolution });
-          return toolResult(combinedAck, {
-            structuredContent: combinedAck,
-            textData: `${buildStyleItemCreateText(ack.payload)} Fluent could not confirm a clean product photo from the product page, so no display image was attached. The host-passed image_url was kept as a hint and was not made primary.`,
-          });
-        } catch (error) {
-          if (!args.image_url || !args.image_type || args.image_type === 'primary') {
-            const combinedAck = augmentStyleCreateAckPayload(ack, {
-              productDisplayImageResolution: {
-                candidates: [],
-                confidence: 'low',
-                recommendedFitUrl: null,
-                recommendedPrimaryUrl: null,
-                warnings: [error instanceof Error ? error.message : String(error)],
-              },
-            });
-            return toolResult(combinedAck, {
-              structuredContent: combinedAck,
-              textData: `${buildStyleItemCreateText(ack.payload)} Fluent could not resolve the product gallery, so no display image was attached. The host-passed image_url was kept as a hint and was not made primary.`,
-            });
-          }
-          // Resolver failures with an explicit non-primary image role degrade to the legacy direct-image behavior below.
-        }
-      }
       if (args.image_url && createdItemId) {
         try {
           const imageAck = await setFluentStyleItemImage(vNextWriteServices, {
@@ -2241,7 +1930,7 @@ export function registerCoreMcpSurface(
         'Archive a typed domain item through the canonical domain service with an explicit reason, disposition, provenance, and read-after-write proof. Use for returned, sold, donated, gifted, worn-out, never-purchased, duplicate, or otherwise gone items. This removes an item from active memory without deleting audit history.',
       inputSchema: {
         approval: fluentVNextRecipeWriteApprovalSchema,
-        domain: fluentVNextDomainSchema,
+        domain: fluentVNextArchiveDomainSchema,
         disposition: z.enum(['returned', 'sold', 'donated', 'gifted', 'worn_out', 'never_purchased', 'duplicate', 'other']).optional().describe(
           'Optional user-confirmed archive disposition recorded in the archive evidence trail.',
         ),
@@ -2319,7 +2008,7 @@ export function registerCoreMcpSurface(
     withVNextReadSecurity({
       title: 'Get Fluent Account Status',
       description:
-        'Fetch the ChatGPT-safe Fluent account/status surface when the user asks about account status, access status, paid-access boundary, export, deletion, reactivation, support, or whether Fluent is ready for their account. Prefer this over fluent_get_home for account/access asks. Returns access state, enabled domains, public entitlement state, account/support links, export and deletion links or instructions, and support email. When summarizing the result, include the support line as plain text instead of a blank heading, for example: "Support: email hello@meetfluent.app." Does not start, sell, upgrade, cancel, or manage paid access inside ChatGPT, and does not expose billing internals or internal IDs.',
+        'Fetch the ChatGPT-safe Fluent account/status surface when the user asks about account status, access status, paid-access boundary, export, deletion, reactivation, support, or whether Fluent is ready for their account. Returns access state, enabled domains, public entitlement state, account/support links, export and deletion links or instructions, and support email. When summarizing the result, include the support line as plain text instead of a blank heading, for example: "Support: email hello@meetfluent.app." Does not start, sell, upgrade, cancel, or manage paid access inside ChatGPT, and does not expose billing internals or internal IDs.',
       annotations: { title: 'Get Fluent Account Status', readOnlyHint: true, idempotentHint: true },
     }),
     async () => {
@@ -2637,24 +2326,22 @@ function requireVNextWriteScope(domain: string) {
 }
 
 function requireBudgetWriteScope(category: BudgetCategory) {
-  // Budget envelopes are cross-domain user declarations, not domain data: accept either
-  // write scope so the narrowed public hosted token (meals:write, no style:write) can set
-  // a style-clothing envelope. Mirrors the log_purchase precedent in mcp-style.ts.
-  void category;
-  return requireAnyScope([FLUENT_STYLE_WRITE_SCOPE, FLUENT_MEALS_WRITE_SCOPE]);
+  if (category === 'style-clothing') {
+    return requireScopes([FLUENT_STYLE_WRITE_SCOPE]);
+  }
+  return requireScopes([FLUENT_MEALS_WRITE_SCOPE]);
 }
 
 function requireArchiveItemWriteScope(domain: string) {
-  // Archive is the public, non-destructive item removal path. Accept either write
-  // scope so the narrowed public hosted token can clear returned/sold/donated
-  // style items while still recording provenance and read-after-write proof.
-  void domain;
-  return requireAnyScope([FLUENT_STYLE_WRITE_SCOPE, FLUENT_MEALS_WRITE_SCOPE]);
+  if (domain === 'style') {
+    return requireScopes([FLUENT_STYLE_WRITE_SCOPE]);
+  }
+  if (domain === 'meals') {
+    return requireScopes([FLUENT_MEALS_WRITE_SCOPE]);
+  }
+  throw new Error('fluent_archive_item supports only meals and style domains.');
 }
 
 function requireStyleClosetWriteScope() {
-  // Style closet edit/photo writes accept either write scope so the narrowed public
-  // hosted token (meals:write, no style:write) can reach them — the archive/budget
-  // precedent. Advertised scheme (withVNextStyleClosetWriteSecurity) stays in lockstep.
-  return requireAnyScope([FLUENT_STYLE_WRITE_SCOPE, FLUENT_MEALS_WRITE_SCOPE]);
+  return requireScopes([FLUENT_STYLE_WRITE_SCOPE]);
 }

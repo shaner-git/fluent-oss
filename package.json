@@ -1,7 +1,7 @@
 {
   "name": "fluent-oss",
   "version": "0.1.0",
-  "description": "Fluent open-source runtime and shared MCP contract for meals, style, and health.",
+  "description": "Fluent open-source runtime and shared MCP contract for Meals, Style, and narrow manual budgets.",
   "license": "Apache-2.0",
   "private": false,
   "engines": {
@@ -23,7 +23,6 @@
     "test:contract-doc": "tsx tests/contract-doc.node-test.ts",
     "test:contract-surface": "tsx tests/contract-surface.node-test.ts",
     "test:experimental:postgres-s3": "tsx tests/postgres-s3-experimental.node-test.ts",
-    "test:health": "tsx tests/health-phase1.node-test.ts",
     "test:grocery-actions": "tsx tests/meals-grocery-actions.node-test.ts",
     "test:grocery-canonical": "tsx tests/meals-grocery-canonical.node-test.ts",
     "test:inventory-batch": "tsx tests/meals-inventory-batch.node-test.ts",
@@ -40,17 +39,17 @@
     "verify:local-parity": "tsx scripts/verify-local-parity.ts",
     "verify:oss-parity": "tsx scripts/verify-local-parity.ts",
     "check": "npm run typecheck && npm run test",
-    "test": "npm run test:contract-doc && npm run test:contract-surface && npm run test:local-auth && npm run test:local-import && npm run test:oss-snapshot && npm run test:scaffold-mcp && npm run test:oss-bind && npm run test:oss-container && npm run test:style-import && npm run test:style && npm run test:health && npm run test:planner-brain && npm run test:grocery-canonical && npm run test:grocery-actions && npm run test:order-preflight && npm run test:inventory-batch",
+    "test": "npm run test:contract-doc && npm run test:contract-surface && npm run test:local-auth && npm run test:local-import && npm run test:oss-snapshot && npm run test:scaffold-mcp && npm run test:oss-bind && npm run test:oss-container && npm run test:style-import && npm run test:style && npm run test:planner-brain && npm run test:grocery-canonical && npm run test:grocery-actions && npm run test:order-preflight && npm run test:inventory-batch",
     "test:scaffold-mcp": "tsx tests/scaffold-mcp.node-test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.917.0",
-    "@better-auth/infra": "^0.2.3",
-    "@better-auth/oauth-provider": "^1.6.5",
+    "@better-auth/infra": "^0.2.14",
+    "@better-auth/oauth-provider": "^1.6.23",
     "@cloudflare/workers-oauth-provider": "^0.3.0",
     "@modelcontextprotocol/sdk": "1.26.0",
     "agents": "^0.7.5",
-    "better-auth": "^1.6.5",
+    "better-auth": "^1.6.23",
     "pg": "^8.16.3",
     "zod": "^4.3.6"
   },

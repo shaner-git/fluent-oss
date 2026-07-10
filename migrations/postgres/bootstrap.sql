@@ -279,6 +279,7 @@ CREATE TABLE IF NOT EXISTS meal_grocery_runs (
 
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES fluent_tenants(id) ON DELETE CASCADE,
   domain TEXT NOT NULL,
   artifact_type TEXT NOT NULL,
   entity_type TEXT,

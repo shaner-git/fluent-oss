@@ -5,25 +5,26 @@ import type { CoreRuntimeBindings } from './config';
 import {
   FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES,
   FLUENT_CONTRACT_VERSION,
+  FLUENT_TOOL_NAMES,
   fluentAssistantAppProfile,
   fluentChatGptAppProfile,
 } from './contract';
 import { FluentCoreService } from './fluent-core';
 import { registerCoreMcpSurface } from './mcp-core';
-import { registerHealthMcpSurface } from './mcp-health';
 import { registerMealsMcpSurface } from './mcp-meals';
 import { registerStyleMcpSurface } from './mcp-style';
 import { getFluentAuthProps } from './auth';
 import { assertCurrentUserToolAllowedForSubscriptionLifecycle } from './subscription-lifecycle';
-import { HealthService } from './domains/health/service';
 import { BudgetsService } from './domains/budgets/service';
 import { iconFor } from './mcp-shared';
 import { MealsService } from './domains/meals/service';
 import { StyleService } from './domains/style/service';
 
-export type FluentMcpRuntimeProfile = 'assistant_app' | 'chatgpt_app' | 'full';
+export type FluentMcpRuntimeProfile = 'assistant_app' | 'chatgpt_app';
 
 const MCP_TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
+let fluentKnownToolNamesCache: Set<string> | null = null;
+const PUBLIC_CAPABILITY_DOMAIN_IDS = new Set(['meals', 'style']);
 // Move 4 landed: core_rules Tier-1 dietary dual-write is removed; person_facts is sole source.
 // Keep this disabled and the reader null as a read-time safety belt for the legacy server-side planner overlay.
 export const ENABLE_MEALS_PERSON_FACTS_PLANNING = false;
@@ -34,7 +35,6 @@ export function createFluentMcpServer(
   options: { profile?: FluentMcpRuntimeProfile } = {},
 ): McpServer {
   const fluentCore = new FluentCoreService(bindings.db, bindings);
-  const health = new HealthService(bindings.db);
   const meals = new MealsService(
     bindings.db,
     ENABLE_MEALS_PERSON_FACTS_PLANNING ? (input) => fluentCore.listPersonFacts(input) : null,
@@ -56,10 +56,11 @@ export function createFluentMcpServer(
           : 'fluent-mcp',
     version: FLUENT_CONTRACT_VERSION,
   });
-  applyMcpToolOutputSchemaDefaults(server, options.profile ?? 'full');
+  const runtimeProfile = options.profile ?? 'assistant_app';
+  applyMcpToolOutputSchemaDefaults(server, runtimeProfile);
   if (options.profile === 'chatgpt_app') {
     applyCuratedMcpProfileFilter(server, fluentChatGptAppProfile());
-  } else if (options.profile === 'assistant_app') {
+  } else {
     applyCuratedMcpProfileFilter(server, fluentAssistantAppProfile());
   }
   if (bindings.deploymentTrack === 'cloud') {
@@ -92,13 +93,11 @@ export function createFluentMcpServer(
     }) as typeof server.registerTool;
   }
 
-  registerCoreMcpSurface(server, fluentCore, meals, health, style, budgets, origin, {
+  registerCoreMcpSurface(server, fluentCore, meals, style, budgets, origin, {
     publicWriteRateLimiter: bindings.publicWriteRateLimiter,
   });
-  registerHealthMcpSurface(server, health, origin);
   registerMealsMcpSurface(server, meals, fluentCore, origin, { budgets });
   registerStyleMcpSurface(server, style, origin, {
-    allowPurchasePageExtraction: options.profile === 'full',
     imageDeliverySecret: bindings.imageDeliverySecret ?? null,
   });
 
@@ -119,7 +118,7 @@ function applyMcpToolOutputSchemaDefaults(server: McpServer, profile: FluentMcpR
   }) as typeof server.registerTool;
 }
 
-const FLUENT_FULL_MCP_WRITE_TOOL_NAMES = new Set([
+const FLUENT_WRITE_TOOL_NAMES = new Set([
   'fluent_update_profile',
   'fluent_update_shared_profile_patch',
   'fluent_set_budget_envelope',
@@ -185,15 +184,10 @@ function normalizeMcpToolOutputSchemaConfig(name: string, config: unknown, profi
     original.annotations && typeof original.annotations === 'object' && !Array.isArray(original.annotations)
       ? (original.annotations as Record<string, unknown>)
       : {};
-  const isWrite = FLUENT_FULL_MCP_WRITE_TOOL_NAMES.has(name);
+  const isWrite = FLUENT_WRITE_TOOL_NAMES.has(name);
   const readOnlyHint = typeof annotations.readOnlyHint === 'boolean' ? annotations.readOnlyHint : !isWrite;
   const idempotentHint = typeof annotations.idempotentHint === 'boolean' ? annotations.idempotentHint : !isWrite;
-  const destructiveHint =
-    profile === 'full' && isDestructiveFullMcpToolName(name)
-      ? true
-      : typeof annotations.destructiveHint === 'boolean'
-        ? annotations.destructiveHint
-        : false;
+  const destructiveHint = typeof annotations.destructiveHint === 'boolean' ? annotations.destructiveHint : false;
   const openWorldHint = typeof annotations.openWorldHint === 'boolean' ? annotations.openWorldHint : false;
 
   return {
@@ -207,10 +201,6 @@ function normalizeMcpToolOutputSchemaConfig(name: string, config: unknown, profi
     },
     outputSchema: original.outputSchema ?? MCP_TOOL_OUTPUT_SCHEMA,
   };
-}
-
-function isDestructiveFullMcpToolName(name: string): boolean {
-  return name.includes('_delete_') || name.includes('_archive_') || name === 'style_set_item_product_image';
 }
 
 function normalizeMcpToolResult(value: unknown): unknown {
@@ -333,14 +323,18 @@ export function sanitizeChatGptAppResult(surface: string, value: unknown): unkno
 export function sanitizeCuratedMcpResult(
   surface: string,
   value: unknown,
-  profile: { tools: readonly string[] },
+  profile: {
+    resources?: readonly string[];
+    tools: readonly string[];
+    writeTools?: readonly string[];
+  },
 ): unknown {
-  const allowedToolNames =
-    surface === 'meals_list_tools' || surface === 'fluent_get_capabilities'
-      ? new Set<string>(profile.tools)
-      : undefined;
-  return sanitizeChatGptAppValue(value, {
-    allowedToolNames,
+  const projectedValue =
+    surface === 'fluent_get_capabilities'
+      ? projectCuratedCapabilitiesResult(value, profile)
+      : value;
+  return sanitizeChatGptAppValue(projectedValue, {
+    allowedToolNames: new Set<string>(profile.tools),
     omitRootProfileId: surface === 'fluent_get_profile' || surface === 'fluent://core/profile',
     path: [],
   });
@@ -355,7 +349,9 @@ function sanitizeChatGptAppValue(
   },
 ): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeChatGptAppValue(entry, { ...options, path: [...options.path, '[]'] }));
+    return value
+      .map((entry) => sanitizeChatGptAppValue(entry, { ...options, path: [...options.path, '[]'] }))
+      .filter((entry) => entry !== undefined);
   }
   if (value && typeof value === 'object') {
     const result: Record<string, unknown> = {};
@@ -363,11 +359,20 @@ function sanitizeChatGptAppValue(
       if (shouldOmitChatGptAppKey(key, entry, options)) {
         continue;
       }
-      if (options.allowedToolNames && isToolNameListKey(key) && Array.isArray(entry)) {
-        result[key] = entry.filter((toolName) => typeof toolName === 'string' && options.allowedToolNames?.has(toolName));
+      if (
+        options.allowedToolNames
+        && isToolNameListKey(key)
+        && Array.isArray(entry)
+        && entry.every((toolName) => typeof toolName === 'string')
+      ) {
+        result[key] = entry
+          .filter((toolName) => typeof toolName === 'string' && options.allowedToolNames?.has(toolName));
         continue;
       }
-      result[key] = sanitizeChatGptAppValue(entry, { ...options, path: [...options.path, key] });
+      const sanitizedEntry = sanitizeChatGptAppValue(entry, { ...options, path: [...options.path, key] });
+      if (sanitizedEntry !== undefined) {
+        result[key] = sanitizedEntry;
+      }
     }
     return result;
   }
@@ -375,6 +380,9 @@ function sanitizeChatGptAppValue(
     const parsed = parseJsonString(value);
     if (parsed != null) {
       return JSON.stringify(sanitizeChatGptAppValue(parsed, options));
+    }
+    if (options.allowedToolNames) {
+      return sanitizeCuratedToolReferenceString(value, options.allowedToolNames, options.path.at(-1));
     }
   }
   return value;
@@ -402,7 +410,12 @@ function shouldOmitChatGptAppKey(
 }
 
 function isToolNameListKey(key: string): boolean {
-  return key === 'toolNames' || key === 'starterReadTools' || key === 'detailReadTools' || key === 'starterWriteTools';
+  return key === 'toolNames'
+    || key === 'starterReadTools'
+    || key === 'detailReadTools'
+    || key === 'starterWriteTools'
+    || key === 'tools'
+    || key === 'writeTools';
 }
 
 function isRootProfileObjectPath(pathParts: string[]) {
@@ -422,4 +435,173 @@ function parseJsonString(value: string): unknown | null {
   } catch {
     return null;
   }
+}
+
+function projectCuratedCapabilitiesResult(
+  value: unknown,
+  profile: {
+    resources?: readonly string[];
+    tools: readonly string[];
+    writeTools?: readonly string[];
+  },
+): unknown {
+  const result = objectRecord(value);
+  if (!result || !objectRecord(result.structuredContent)) {
+    return projectCuratedCapabilitiesPayload(value, profile);
+  }
+
+  const capabilities = projectCuratedCapabilitiesPayload(result.structuredContent, profile);
+  const enabledDomains = stringArrayField(capabilities, 'enabledDomains');
+  const readyDomains = stringArrayField(capabilities, 'readyDomains');
+  const contractVersion = stringField(capabilities, 'contractVersion') ?? 'unknown';
+  return {
+    ...result,
+    content: [
+      {
+        type: 'text',
+        text: [
+          `Fluent public capabilities (${contractVersion}).`,
+          `Enabled domains: ${enabledDomains.length ? enabledDomains.join(', ') : 'none'}.`,
+          `Ready domains: ${readyDomains.length ? readyDomains.join(', ') : 'none'}.`,
+          'Use MCP tools/list as the authoritative tool directory and start domain work with fluent_get_context.',
+        ].join('\n'),
+      },
+    ],
+    structuredContent: capabilities,
+  };
+}
+
+function projectCuratedCapabilitiesPayload(
+  value: unknown,
+  profile: {
+    resources?: readonly string[];
+    tools: readonly string[];
+    writeTools?: readonly string[];
+  },
+): Record<string, unknown> {
+  const capabilities = objectRecord(value) ?? {};
+  const availableDomains = Array.isArray(capabilities.availableDomains)
+    ? capabilities.availableDomains
+        .map((domain) => objectRecord(domain) ?? {})
+        .filter((domain) => PUBLIC_CAPABILITY_DOMAIN_IDS.has(stringField(domain, 'domainId') ?? ''))
+        .map((domain) => pickDefined(domain, ['domainId', 'displayName', 'lifecycleState', 'onboardingState', 'onboardingVersion']))
+    : [];
+  const onboarding = objectRecord(capabilities.onboarding);
+  const onboardingCore = objectRecord(onboarding?.core);
+  const onboardingDomains = Array.isArray(onboarding?.domains)
+    ? onboarding.domains
+        .map((domain) => objectRecord(domain) ?? {})
+        .filter((domain) => PUBLIC_CAPABILITY_DOMAIN_IDS.has(stringField(domain, 'domainId') ?? ''))
+        .map((domain) => pickDefined(domain, ['domainId', 'state', 'version']))
+    : [];
+  const publicTools = [...profile.tools];
+  const publicWriteTools = (profile.writeTools ?? []).filter((toolName) => publicTools.includes(toolName));
+  const publicEnabledDomains = stringArrayField(capabilities, 'enabledDomains')
+    .filter((domainId) => PUBLIC_CAPABILITY_DOMAIN_IDS.has(domainId));
+  const publicReadyDomains = stringArrayField(capabilities, 'readyDomains')
+    .filter((domainId) => PUBLIC_CAPABILITY_DOMAIN_IDS.has(domainId));
+
+  return {
+    object: 'FluentCapabilities',
+    ...pickDefined(capabilities, ['backendMode', 'contractVersion', 'deploymentTrack', 'storageBackend']),
+    availableDomains,
+    enabledDomains: publicEnabledDomains,
+    readyDomains: publicReadyDomains,
+    reservedDomains: ['health', 'wellbeing'],
+    onboarding: {
+      core: onboardingCore ? pickDefined(onboardingCore, ['state', 'version']) : null,
+      domains: onboardingDomains,
+    },
+    profile: pickDefined(objectRecord(capabilities.profile) ?? {}, ['displayName', 'timezone']),
+    publicProfile: {
+      canonicalRegistry: 'mcp_tools_list',
+      tools: publicTools,
+      writeTools: publicWriteTools,
+    },
+    routing: {
+      accountStatusTool: publicTools.includes('fluent_get_account_status') ? 'fluent_get_account_status' : null,
+      startDomainWorkWith: publicTools.includes('fluent_get_context') ? 'fluent_get_context' : null,
+      note: 'MCP tools/list is authoritative for the connected public Fluent profile.',
+    },
+  };
+}
+
+function sanitizeCuratedToolReferenceString(
+  value: string,
+  allowedToolNames: Set<string>,
+  key: string | undefined,
+): string | undefined {
+  const references = fluentToolReferences(value, key);
+  const disallowedReferences = references.filter((toolName) => !allowedToolNames.has(toolName));
+  const trimmed = value.trim();
+
+  if (
+    key
+    && isToolReferenceFieldKey(key)
+    && looksLikeToolIdentifier(trimmed)
+    && !allowedToolNames.has(trimmed)
+  ) {
+    return undefined;
+  }
+  if (disallowedReferences.length === 0) {
+    return value;
+  }
+  if (isOnlyToolReference(trimmed, disallowedReferences)) {
+    return undefined;
+  }
+  const disallowed = new Set(disallowedReferences);
+  return value.replace(/\b(?:fluent|meals|style|health)_[a-z][a-z0-9_]*\b/g, (toolName) =>
+    disallowed.has(toolName) ? '[non-public tool omitted]' : toolName,
+  );
+}
+
+function fluentToolReferences(value: string, key: string | undefined): string[] {
+  const knownToolNames = fluentKnownToolNamesCache ??= new Set<string>(FLUENT_TOOL_NAMES);
+  const explicitToolProse = /\b(?:call|invoke|route|run|tool|use)\b/i.test(value);
+  return [...value.matchAll(/\b(?:fluent|meals|style|health)_[a-z0-9]+_[a-z0-9_]+\b/g)]
+    .map((match) => match[0])
+    .filter((toolName) => knownToolNames.has(toolName) || Boolean(key && isToolReferenceFieldKey(key)) || explicitToolProse);
+}
+
+function isOnlyToolReference(value: string, disallowedReferences: string[]): boolean {
+  return disallowedReferences.some((toolName) => {
+    const escaped = toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^${escaped}(?:\\([^)]*\\))?$`).test(value);
+  });
+}
+
+function isToolReferenceFieldKey(key: string): boolean {
+  return /tool/i.test(key) || key === 'primaryAction' || key === 'recommendedAction';
+}
+
+function looksLikeToolIdentifier(value: string): boolean {
+  return /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(value);
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringField(value: unknown, key: string): string | null {
+  const record = objectRecord(value);
+  const candidate = record?.[key];
+  return typeof candidate === 'string' && candidate.trim() ? candidate : null;
+}
+
+function stringArrayField(value: unknown, key: string): string[] {
+  const record = objectRecord(value);
+  const candidate = record?.[key];
+  return Array.isArray(candidate) ? candidate.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function pickDefined(record: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      result[key] = record[key];
+    }
+  }
+  return result;
 }

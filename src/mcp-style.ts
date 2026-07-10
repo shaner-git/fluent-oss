@@ -10,6 +10,7 @@ import {
   FLUENT_STYLE_READ_SCOPE,
   FLUENT_STYLE_WRITE_SCOPE,
   requireAnyScope,
+  requireScope,
 } from './auth';
 import {
   asNullableString,
@@ -26,13 +27,7 @@ import {
   buildStyleClosetStructuredContent,
   buildStyleClosetWidgetMeta,
   getStyleClosetWidgetHtml,
-  STYLE_CLOSET_PREVIOUS_TEMPLATE_URI,
   STYLE_CLOSET_TEMPLATE_URI,
-  STYLE_CLOSET_V2_TEMPLATE_URI,
-  STYLE_CLOSET_V3_TEMPLATE_URI,
-  STYLE_CLOSET_V4_TEMPLATE_URI,
-  STYLE_CLOSET_V5_TEMPLATE_URI,
-  STYLE_CLOSET_V6_TEMPLATE_URI,
   type StyleClosetFilter,
 } from './domains/style/closet-manager';
 import type {
@@ -393,7 +388,7 @@ const stylePurchaseCandidateObjectInputSchema = z.preprocess(
     useCases: z.array(z.string()).optional(),
     visualWeight: z.string().optional(),
   }).strict().describe('Object form for a purchase candidate. All fields are optional; provide only known product details such as name, brand, category, sourceUrl, and direct image URLs.'),
-).describe('Structured Style purchase candidate supplied by the user, product page extraction, or an uploaded/direct image flow.');
+).describe('Structured Style purchase candidate supplied by the user with an uploaded or direct image when visual judgment is required.');
 const stylePurchaseCandidateInputSchema = z.union([
   z.string().trim().min(1).describe('Plain-text candidate name or product description when no structured product object is available.'),
   stylePurchaseCandidateObjectInputSchema,
@@ -452,23 +447,6 @@ const styleSubmitPurchaseVisualObservationsInputSchema = z.object({
   stylist_judgment: stylePurchaseStylistJudgmentSchema.optional(),
   vision_packet_id: z.string().optional(),
 });
-const stylePurchasePageEvidenceInputSchema = {
-  max_images: z.number().min(1).max(12).optional(),
-  product_url: z.string().min(1),
-};
-
-export type StylePurchasePageImageEvidence = {
-  alt: string | null;
-  source: string;
-  url: string;
-};
-
-type StylePurchasePageEvidenceStatus =
-  | 'blocked_url'
-  | 'fetch_failed'
-  | 'image_references_extracted'
-  | 'no_images_found';
-
 type StyleHostVisionTaskStatus = 'complete' | 'needs_candidate_image' | 'ready_for_host_vision';
 
 type StyleVisualBundleInlineImageContent = {
@@ -576,12 +554,10 @@ function buildWidgetMeta(description: string, origin: string) {
 }
 
 function buildStylePurchasePreparation(input: {
-  allowPurchasePageExtraction?: boolean;
   analysis: Awaited<ReturnType<StyleService['analyzePurchase']>>;
   candidateInput: unknown;
 }) {
   const { analysis, candidateInput } = input;
-  const allowPurchasePageExtraction = input.allowPurchasePageExtraction ?? true;
   const candidate = analysis.candidate;
   const sourceUrl = extractPurchaseCandidateSourceUrl(candidateInput);
   const visuallyGrounded = analysis.evidenceQuality.candidateVisualGrounding === 'host_visual_inspection';
@@ -625,13 +601,10 @@ function buildStylePurchasePreparation(input: {
     : candidateHasImageReference
       ? `${evidenceStatusPrefix} and image references; I am checking the actual visuals before making the call.`
       : sourceUrl
-        ? allowPurchasePageExtraction
-          ? `${evidenceStatusPrefix}; I am pulling product-page evidence before making the call.`
-          : `${evidenceStatusPrefix}; I need item details plus a direct product image or uploaded photo before making the call.`
+        ? `${evidenceStatusPrefix}; I need item details plus a direct product image or uploaded photo before making the call.`
         : `${evidenceStatusPrefix}; I need a product image before making the call.`;
-  const userFacingNarrationInstruction = allowPurchasePageExtraction
-    ? 'When narrating this step to the user, do not say a tool call was blocked. Say the analysis is waiting on product-page evidence, image inspection, or the final widget step.'
-    : 'When narrating this step to the user, do not say a tool call was blocked. Say the analysis is waiting on item details, an uploaded/direct image, image inspection, or the final widget step.';
+  const userFacingNarrationInstruction =
+    'When narrating this step to the user, do not say a tool call was blocked. Say the analysis is waiting on item details, an uploaded/direct image, image inspection, or the final widget step.';
   const calibrationInstruction =
     calibrationContext.readinessLevel === 'ready'
       ? `Calibration: ${calibrationContext.readinessLabel}`
@@ -644,13 +617,10 @@ function buildStylePurchasePreparation(input: {
     : candidateHasImageReference
       ? `Do not give a final buy/wait/skip recommendation yet. ${calibrationInstruction} ${runtimeStateAuthorityInstruction} Call style_get_purchase_vision_packet next, inspect the returned candidate and comparator images, then call style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose style_submit_purchase_visual_observations, call style_render_purchase_analysis after inspection with concrete visual_evidence and source: "host_vision".`
       : sourceUrl
-        ? allowPurchasePageExtraction
-          ? `Do not give a final buy/wait/skip recommendation yet. ${calibrationInstruction} ${runtimeStateAuthorityInstruction} Call style_extract_purchase_page_evidence next with the product URL, re-run style_prepare_purchase_analysis with the enriched candidate it returns, then call style_get_purchase_vision_packet and style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose the submit tool, use style_render_purchase_analysis with concrete host_vision visual_evidence after image inspection. If extraction returns no usable image, ask the user for a direct product image.`
-          : `Do not give a final buy/wait/skip recommendation yet. ${calibrationInstruction} ${runtimeStateAuthorityInstruction} Ask the user for item details plus a direct candidate image or uploaded photo, then call style_get_purchase_vision_packet and style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose the submit tool, use style_render_purchase_analysis with concrete host_vision visual_evidence after image inspection.`
+        ? `Do not give a final buy/wait/skip recommendation yet. ${calibrationInstruction} ${runtimeStateAuthorityInstruction} Ask the user for item details plus a direct candidate image or uploaded photo, then call style_get_purchase_vision_packet and style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose the submit tool, use style_render_purchase_analysis with concrete host_vision visual_evidence after image inspection.`
         : `Do not give a final buy/wait/skip recommendation yet. ${calibrationInstruction} ${runtimeStateAuthorityInstruction} Ask the user for a direct candidate image, then call style_get_purchase_vision_packet and style_submit_purchase_visual_observations before rendering the widget. If this text-first host does not expose the submit tool, use style_render_purchase_analysis with concrete host_vision visual_evidence after image inspection.`;
   const hostVisionTask = buildStylePurchaseHostVisionTask({
     adjacentReferenceItemIds,
-    allowPurchasePageExtraction,
     analysis,
     candidate,
     comparatorItemIds,
@@ -742,40 +712,11 @@ function buildStylePurchasePreparation(input: {
           },
         ]
       : [
-        ...(sourceUrl && analysis.evidenceQuality.candidateImageCount === 0 && allowPurchasePageExtraction
-          ? [
-              {
-                tool: 'style_extract_purchase_page_evidence',
-                reason:
-                  'Extract product-page title and direct candidate image references before asking the host to inspect pixels.',
-                input: { product_url: sourceUrl, max_images: 6 },
-              },
-              {
-                tool: 'style_prepare_purchase_analysis',
-                reason:
-                  'Re-run purchase preparation with the enriched candidate returned by style_extract_purchase_page_evidence so the hostVisionTask includes candidate image references before requesting the purchase vision packet.',
-                input: { candidate: 'use candidate from style_extract_purchase_page_evidence' },
-              },
-              {
-                tool: 'user_request_candidate_image',
-                reason:
-                  'If extraction returns no usable product image, ask the user for a direct image or uploaded photo instead of giving the final buy/wait/skip verdict.',
-                input: {
-                  message:
-                    calibrationContext.readinessLevel === 'not_ready'
-                      ? 'I can judge the item itself, but I need a direct product image before I can make a real visual shopping call.'
-                      : 'I found the right closet comparison set, but I need a direct product image before I can make a real visual shopping call.',
-                },
-              },
-            ]
-          : []),
         {
           tool: 'host_vision',
           reason:
             sourceUrl
-              ? allowPurchasePageExtraction
-                ? 'After extracting image references and re-running preparation, inspect the candidate and closest closet comparator images before any render/widget step.'
-                : 'After the user provides item details plus a direct image or uploaded photo, inspect the candidate and closest closet comparator images before any render/widget step.'
+              ? 'After the user provides item details plus a direct image or uploaded photo, inspect the candidate and closest closet comparator images before any render/widget step.'
               : 'Ask for or otherwise obtain a direct candidate image before making visual claims or rendering a widget.',
           input: hostVisionTask,
         },
@@ -822,12 +763,8 @@ function buildStylePurchasePreparation(input: {
       requiredEvidence: visuallyGrounded
         ? []
         : [
-            allowPurchasePageExtraction
-              ? 'Fetch or open the product page and locate direct product image(s).'
-              : 'Ask the user for item details plus a direct product image or uploaded photo; do not fetch arbitrary product pages in this profile.',
-            allowPurchasePageExtraction
-              ? 'If no usable direct image can be extracted, ask the user for a direct product image or uploaded photo instead of giving the final buy/wait/skip answer.'
-              : 'If the user cannot provide a usable direct image, stop before the final buy/wait/skip answer.',
+            'Ask the user for item details plus a direct product image or uploaded photo; do not fetch arbitrary product pages.',
+            'If the user cannot provide a usable direct image, stop before the final buy/wait/skip answer.',
             'Call style_get_purchase_vision_packet, inspect the returned inline images with a vision-capable model, and call style_submit_purchase_visual_observations before rendering the widget or giving the final buy/wait/skip answer.',
             'Inspect the candidate image with a vision-capable model before making color, material, texture, or visual-overlap claims.',
             'Inspect the closest closet comparator images returned by the purchase vision packet when available.',
@@ -838,7 +775,6 @@ function buildStylePurchasePreparation(input: {
 
 function buildStylePurchaseHostVisionTask(input: {
   adjacentReferenceItemIds: string[];
-  allowPurchasePageExtraction: boolean;
   analysis: Awaited<ReturnType<StyleService['analyzePurchase']>>;
   candidate: unknown;
   comparatorItemIds: string[];
@@ -865,9 +801,7 @@ function buildStylePurchaseHostVisionTask(input: {
     status,
     hostAction:
       candidateImageUrls.length === 0
-        ? input.allowPurchasePageExtraction
-          ? 'First obtain a direct candidate product image. Do not render a widget or give the final buy/wait/skip recommendation until candidate image pixels have been inspected.'
-          : 'Ask the user for item details plus a direct candidate product image or uploaded photo. Do not render a widget or give the final buy/wait/skip recommendation until candidate image pixels have been inspected.'
+        ? 'Ask the user for item details plus a direct candidate product image or uploaded photo. Do not render a widget or give the final buy/wait/skip recommendation until candidate image pixels have been inspected.'
         : 'Call style_get_purchase_vision_packet, inspect the actual candidate image and the closest closet comparator images, then call style_submit_purchase_visual_observations before rendering or giving the final shopping recommendation. In Claude.ai MCP Apps-capable runs, finish with style_show_purchase_analysis_widget after accepted observations. In Claude visualizer-only or other text-first hosts where the submit tool is not exposed and ui:// mounting is unavailable, call style_render_purchase_analysis with concrete visual_evidence and source: "host_vision" after inspection.',
     candidate: {
       imageUrls: candidateImageUrls,
@@ -906,9 +840,7 @@ function buildStylePurchaseHostVisionTask(input: {
     inspectionQuestions: [
       ...(candidateImageUrls.length === 0
         ? [
-            input.allowPurchasePageExtraction
-              ? 'Candidate imageUrls is empty: ask for or extract a direct product image before making candidate-side visual claims or a final buy/wait/skip recommendation.'
-              : 'Candidate imageUrls is empty: ask the user for item details plus a direct product image or uploaded photo before making candidate-side visual claims or a final buy/wait/skip recommendation.',
+            'Candidate imageUrls is empty: ask the user for item details plus a direct product image or uploaded photo before making candidate-side visual claims or a final buy/wait/skip recommendation.',
           ]
         : [
             'Describe the candidate from the image: silhouette, shape, sole profile, material, texture, color temperature, accents, branding, and any visible fit or proportion cues.',
@@ -924,11 +856,7 @@ function buildStylePurchaseHostVisionTask(input: {
         : [
             ...(candidateImageUrls.length > 0
               ? []
-              : [
-                  input.allowPurchasePageExtraction
-                    ? 'A direct candidate product image is located from the product page or supplied by the user.'
-                    : 'A direct candidate product image is supplied by the user or uploaded into the host.',
-                ]),
+              : ['A direct candidate product image is supplied by the user or uploaded into the host.']),
             'The host model inspects the candidate image pixels and records concrete observations.',
             'The host model inspects available direct comparator images from style_get_purchase_vision_packet.',
             'Concrete image observations are submitted through style_submit_purchase_visual_observations, or in a text-first host without that tool, passed directly to style_render_purchase_analysis as host_vision visual_evidence.',
@@ -1022,267 +950,6 @@ function extractPurchaseCandidateSourceUrl(value: unknown): string | null {
     .find((entry) => entry != null && /^https?:\/\//i.test(entry)) ?? null;
 }
 
-export async function extractStylePurchasePageEvidence(input: {
-  browserUserAgent?: boolean;
-  fetchImpl?: typeof fetch;
-  includeRawHtml?: boolean;
-  maxImages?: number | null;
-  productUrl: string;
-}): Promise<{
-  candidate: Record<string, unknown>;
-  extraction: {
-    attempted: boolean;
-    finalUrl: string | null;
-    imageCandidates: StylePurchasePageImageEvidence[];
-    pageTitle: string | null;
-    rawHtml?: string;
-  };
-  productUrl: string;
-  recommendedNextSteps: Array<{
-    input: Record<string, unknown> | null;
-    reason: string;
-    tool: string;
-  }>;
-  renderReady: boolean;
-  status: StylePurchasePageEvidenceStatus;
-  hostResponseInstruction: string;
-  hostResponseMode: 'prepare_with_extracted_images' | 'request_candidate_image';
-  nextRequiredTool: string;
-  userFacingNarrationInstruction: string;
-  userFacingStatus: string;
-  visualGrounding: {
-    candidateImageCount: number;
-    candidateVisualGrounding: 'image_reference_only' | 'none';
-    requiredEvidence: string[];
-  };
-  warnings: string[];
-}> {
-  const maxImages = clampPageEvidenceMaxImages(input.maxImages);
-  const url = normalizePublicProductUrl(input.productUrl);
-  if (!url) {
-    return buildPageEvidenceResult({
-      candidate: {},
-      finalUrl: null,
-      imageCandidates: [],
-      pageTitle: null,
-      productUrl: input.productUrl,
-      status: 'blocked_url',
-      warnings: ['Product URL must be public http(s) and must not target localhost or private network hosts.'],
-    });
-  }
-
-  let currentUrl = url;
-  let response: Response | null = null;
-  try {
-    for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
-      response = await (input.fetchImpl ?? fetch)(currentUrl.toString(), {
-        headers: input.browserUserAgent
-          ? {
-              // Opt-in browser UA: many retailers (e.g. Gap) serve DEGRADED bot markup to a bot UA — the
-              // real product gallery (incl the clean packshot) is omitted, leaving only stripped/on-model
-              // images. A browser UA + accept gets the same full gallery a user's browser sees. Used by the
-              // closet-add display-image resolver; the purchase path keeps the honest bot UA below.
-              accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-              'accept-language': 'en-US,en;q=0.9',
-              'user-agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            }
-          : {
-              accept: 'text/html,application/xhtml+xml',
-              'user-agent': 'FluentStyleEvidenceBot/1.0 (+https://meetfluent.app)',
-            },
-        redirect: 'manual',
-        signal: createFetchTimeoutSignal(15_000),
-      });
-      if (response.status < 300 || response.status >= 400) {
-        break;
-      }
-      const location = response.headers.get('location');
-      const nextUrl = location ? normalizePublicProductUrl(new URL(location, currentUrl).toString()) : null;
-      if (!nextUrl) {
-        return buildPageEvidenceResult({
-          candidate: { productUrl: url.toString(), url: url.toString() },
-          finalUrl: currentUrl.toString(),
-          imageCandidates: [],
-          pageTitle: null,
-          productUrl: url.toString(),
-          status: 'blocked_url',
-          warnings: ['Product page redirected to a non-public or unsupported URL.'],
-        });
-      }
-      currentUrl = nextUrl;
-    }
-  } catch (error) {
-    return buildPageEvidenceResult({
-      candidate: { productUrl: url.toString(), url: url.toString() },
-      finalUrl: null,
-      imageCandidates: [],
-      pageTitle: null,
-      productUrl: url.toString(),
-      status: 'fetch_failed',
-      warnings: [`Could not fetch product page: ${error instanceof Error ? error.message : String(error)}`],
-    });
-  }
-
-  if (!response) {
-    return buildPageEvidenceResult({
-      candidate: { productUrl: url.toString(), url: url.toString() },
-      finalUrl: currentUrl.toString(),
-      imageCandidates: [],
-      pageTitle: null,
-      productUrl: url.toString(),
-      status: 'fetch_failed',
-      warnings: ['Product page fetch did not return a response.'],
-    });
-  }
-
-  if (!response.ok) {
-    return buildPageEvidenceResult({
-      candidate: { productUrl: url.toString(), url: url.toString() },
-      finalUrl: response.url || currentUrl.toString(),
-      imageCandidates: [],
-      pageTitle: null,
-      productUrl: url.toString(),
-      status: 'fetch_failed',
-      warnings: [`Product page fetch returned HTTP ${response.status}.`],
-    });
-  }
-
-  const contentType = response.headers.get('content-type') ?? '';
-  if (contentType && !/html|text\/plain|application\/xhtml/i.test(contentType)) {
-    return buildPageEvidenceResult({
-      candidate: { productUrl: url.toString(), url: url.toString() },
-      finalUrl: response.url || currentUrl.toString(),
-      imageCandidates: [],
-      pageTitle: null,
-      productUrl: url.toString(),
-      status: 'fetch_failed',
-      warnings: [`Product page returned unsupported content type: ${contentType}.`],
-    });
-  }
-
-  const html = (await response.text()).slice(0, 1_500_000);
-  const finalUrl = response.url || currentUrl.toString();
-  const pageTitle = extractHtmlTitle(html);
-  const imageExtraction = extractProductImageCandidates(html, finalUrl, maxImages, pageTitle);
-  const imageCandidates = imageExtraction.accepted;
-  const candidate = {
-    imageUrls: imageCandidates.map((entry) => entry.url),
-    name: pageTitle,
-    productUrl: finalUrl,
-    sourceUrl: finalUrl,
-    url: finalUrl,
-  };
-
-  return buildPageEvidenceResult({
-    candidate,
-    finalUrl,
-    imageCandidates,
-    pageTitle,
-    productUrl: url.toString(),
-    rawHtml: input.includeRawHtml ? html : undefined,
-    status: imageCandidates.length > 0 ? 'image_references_extracted' : 'no_images_found',
-    warnings: imageCandidates.length > 0
-      ? imageExtraction.warnings
-      : [
-          imageExtraction.rejectedCount > 0
-            ? `Found ${imageExtraction.rejectedCount} image reference(s), but they looked like logos, navigation, or marketing assets rather than product images.`
-            : 'No direct product image references were found in the product page HTML.',
-          ...imageExtraction.warnings,
-        ],
-  });
-}
-
-function buildPageEvidenceResult(input: {
-  candidate: Record<string, unknown>;
-  finalUrl: string | null;
-  imageCandidates: StylePurchasePageImageEvidence[];
-  pageTitle: string | null;
-  productUrl: string;
-  rawHtml?: string;
-  status: StylePurchasePageEvidenceStatus;
-  warnings: string[];
-}) {
-  const candidate = {
-    ...input.candidate,
-    imageUrls: input.imageCandidates.map((entry) => entry.url),
-  };
-  return {
-    candidate,
-    extraction: {
-      attempted: input.status !== 'blocked_url',
-      finalUrl: input.finalUrl,
-      imageCandidates: input.imageCandidates,
-      pageTitle: input.pageTitle,
-      ...(input.rawHtml != null ? { rawHtml: input.rawHtml } : {}),
-    },
-    productUrl: input.productUrl,
-    recommendedNextSteps: [
-      {
-        tool: 'style_prepare_purchase_analysis',
-        reason:
-          input.imageCandidates.length > 0
-            ? 'Use the enriched candidate with direct image references to recompute closet context.'
-            : 'Use the original product URL candidate, but keep the result text-first until image evidence exists.',
-        input: {
-          candidate: input.imageCandidates.length > 0 ? candidate : { productUrl: input.productUrl, url: input.productUrl },
-        },
-      },
-      ...(input.imageCandidates.length > 0
-        ? [
-            {
-              tool: 'style_get_purchase_vision_packet',
-              reason:
-                'After style_prepare_purchase_analysis returns comparatorItemIds for this enriched candidate, request the host-visible candidate and closet comparator images before making a buy/wait/skip call.',
-              input: {
-                candidate,
-                comparator_item_ids: 'use comparatorItemIds from style_prepare_purchase_analysis',
-                max_inline_images: STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES,
-              } as Record<string, unknown>,
-            },
-          ]
-        : []),
-      {
-        tool: 'host_vision',
-        reason:
-          input.imageCandidates.length > 0
-            ? 'Inspect the returned image URL(s) with a vision-capable host before making color, material, texture, condition, or visual-overlap claims.'
-            : 'Open the retailer page manually or ask the user for a product image before making visual claims.',
-        input: input.imageCandidates.length > 0 ? { image_urls: input.imageCandidates.map((entry) => entry.url) } : null,
-      },
-    ],
-    renderReady: false,
-    status: input.status,
-    hostResponseInstruction:
-      input.imageCandidates.length > 0
-        ? 'Do not give the final buy/wait/skip recommendation yet. Re-run style_prepare_purchase_analysis with this enriched candidate, then call style_get_purchase_vision_packet and inspect the returned inline images before deciding. If narrating this intermediate step to the user, say you found product-page evidence and are checking the visuals; do not say the tool was blocked.'
-        : 'Do not give the final buy/wait/skip recommendation yet. Ask the user for a direct product image or uploaded photo before deciding. If narrating this intermediate step to the user, say the analysis needs a product image; do not say the tool was blocked.',
-    hostResponseMode: input.imageCandidates.length > 0 ? 'prepare_with_extracted_images' as const : 'request_candidate_image' as const,
-    nextRequiredTool: input.imageCandidates.length > 0 ? 'style_prepare_purchase_analysis' : 'user_request_candidate_image',
-    userFacingNarrationInstruction:
-      'When narrating this step to the user, do not say a tool call was blocked. Say the analysis is waiting on product-page evidence, image inspection, or a product image.',
-    userFacingStatus:
-      input.imageCandidates.length > 0
-        ? 'I found product-page evidence and am checking the actual visuals before making the call.'
-        : 'I need a direct product image before making the visual shopping call.',
-    visualGrounding: {
-      candidateImageCount: input.imageCandidates.length,
-      candidateVisualGrounding: input.imageCandidates.length > 0 ? 'image_reference_only' as const : 'none' as const,
-      requiredEvidence:
-        input.imageCandidates.length > 0
-          ? ['Inspect returned image URLs with a vision-capable model before rendering the widget.']
-          : ['Locate or request a candidate product image before rendering the widget.'],
-    },
-    warnings: input.warnings,
-  };
-}
-
-function clampPageEvidenceMaxImages(value: number | null | undefined): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return 6;
-  }
-  return Math.min(12, Math.max(1, Math.trunc(value)));
-}
 
 function inferImportedFromSource(sourceUrl: string | null): string | null {
   if (!sourceUrl) {
@@ -1425,75 +1092,6 @@ function buildStyleTextFirstRenderFallbackFromVisualBundle(input: {
   };
 }
 
-async function enrichStyleVisualBundleCandidateFromProductPage(input: {
-  candidate: unknown;
-  maxImages?: number | null;
-}): Promise<unknown> {
-  if (input.candidate == null) {
-    return input.candidate;
-  }
-  try {
-    const normalizedCandidate = normalizeStylePurchaseCandidate(input.candidate);
-    if (normalizedCandidate.imageUrls.some((url) => isLikelyDirectCandidateImageUrl(url))) {
-      return input.candidate;
-    }
-  } catch {
-    return input.candidate;
-  }
-
-  const record = asRecord(parseJsonLike<Record<string, unknown>>(input.candidate)) ?? {};
-  const rawStringValue = asNullableString(input.candidate);
-  const productUrl =
-    asNullableString(record.productUrl) ??
-    asNullableString(record.product_url) ??
-    asNullableString(record.url) ??
-    asNullableString(record.sourceUrl) ??
-    asNullableString(record.source_url) ??
-    asNullableString(record.pageUrl) ??
-    asNullableString(record.page_url) ??
-    rawStringValue;
-  if (!productUrl) {
-    return input.candidate;
-  }
-
-  try {
-    const evidence = await extractStylePurchasePageEvidence({
-      maxImages: Math.min(6, Math.max(1, input.maxImages ?? 4)),
-      productUrl,
-    });
-    const imageUrls = Array.isArray(evidence.candidate.imageUrls)
-      ? evidence.candidate.imageUrls.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
-      : [];
-    if (imageUrls.length === 0) {
-      return input.candidate;
-    }
-    return {
-      ...record,
-      ...evidence.candidate,
-      imageUrl: imageUrls[0],
-      imageUrls,
-    };
-  } catch {
-    return input.candidate;
-  }
-}
-
-function isLikelyDirectCandidateImageUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.toLowerCase();
-    const pathname = url.pathname.toLowerCase();
-    return (
-      /\.(?:avif|gif|jpe?g|png|webp)$/.test(pathname) ||
-      hostname === 'images.footlocker.com' ||
-      hostname.endsWith('.scene7.com') ||
-      hostname === 'cdn.shopify.com' ||
-      pathname.includes('/cdn/shop/files/')
-    );
-  } catch {
-    return false;
-  }
-}
 
 function buildStylePurchaseVisionPacketId(input: {
   bundle: StyleVisualBundleRecord;
@@ -2086,67 +1684,6 @@ export function normalizePublicProductUrl(value: string): URL | null {
   }
 }
 
-function extractProductImageCandidates(
-  html: string,
-  baseUrl: string,
-  maxImages: number,
-  pageTitle: string | null,
-): {
-  accepted: StylePurchasePageImageEvidence[];
-  rejectedCount: number;
-  warnings: string[];
-} {
-  const candidates: StylePurchasePageImageEvidence[] = [];
-  const push = (urlValue: string | null, source: string, alt: string | null = null) => {
-    const normalized = normalizeCandidateImageUrl(urlValue, baseUrl);
-    if (!normalized) {
-      return;
-    }
-    candidates.push({ alt, source, url: normalized });
-  };
-
-  for (const tag of html.matchAll(/<meta\b[^>]*>/gi)) {
-    const attrs = parseHtmlAttributes(tag[0]);
-    const key = (attrs.property ?? attrs.name ?? '').toLowerCase();
-    if (['og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src'].includes(key)) {
-      push(attrs.content ?? null, key);
-    }
-  }
-
-  for (const tag of html.matchAll(/<link\b[^>]*>/gi)) {
-    const attrs = parseHtmlAttributes(tag[0]);
-    if ((attrs.rel ?? '').toLowerCase().split(/\s+/).includes('image_src')) {
-      push(attrs.href ?? null, 'link:image_src');
-    }
-  }
-
-  for (const tag of html.matchAll(/<img\b[^>]*>/gi)) {
-    const attrs = parseHtmlAttributes(tag[0]);
-    push(attrs.src ?? attrs['data-src'] ?? attrs['data-original'] ?? null, 'img', attrs.alt ?? null);
-    for (const srcsetUrl of splitSrcset(attrs.srcset ?? attrs['data-srcset'] ?? '')) {
-      push(srcsetUrl, 'img:srcset', attrs.alt ?? null);
-    }
-  }
-
-  for (const match of html.matchAll(/https?:\\?\/\\?\/[^"'\s<>]+?\.(?:avif|gif|jpe?g|png|webp)(?:\?[^"'\s<>]*)?/gi)) {
-    push(match[0], 'html-url');
-  }
-
-  const deduped = dedupeProductImageEvidence(candidates, pageTitle, baseUrl);
-  const accepted = deduped
-    .filter((entry) => !isLikelyNonProductImage(entry, pageTitle, baseUrl))
-    .sort((left, right) => scoreProductImageEvidence(right, pageTitle, baseUrl) - scoreProductImageEvidence(left, pageTitle, baseUrl))
-    .slice(0, maxImages);
-  const rejectedCount = deduped.length - accepted.length;
-  return {
-    accepted,
-    rejectedCount,
-    warnings:
-      rejectedCount > 0
-        ? [`Filtered ${rejectedCount} non-product image reference(s) from the product page.`]
-        : [],
-  };
-}
 
 function sanitizeStyleVisualBundleAssetForHost(asset: StyleVisualBundleAssetRecord): Record<string, unknown> {
   const publicSourceUrl = selectStyleVisualBundlePublicUrl(asset);
@@ -2254,295 +1791,6 @@ function selectStyleVisualBundlePublicUrl(asset: StyleVisualBundleAssetRecord): 
   return null;
 }
 
-function dedupeProductImageEvidence(
-  candidates: StylePurchasePageImageEvidence[],
-  pageTitle: string | null,
-  pageUrl: string,
-): StylePurchasePageImageEvidence[] {
-  const byIdentity = new Map<string, StylePurchasePageImageEvidence>();
-  for (const candidate of candidates) {
-    const identity = productImageIdentityKey(candidate.url);
-    const existing = byIdentity.get(identity);
-    if (!existing || compareProductImageEvidence(candidate, existing, pageTitle, pageUrl) > 0) {
-      byIdentity.set(identity, candidate);
-    }
-  }
-  return Array.from(byIdentity.values());
-}
-
-function compareProductImageEvidence(
-  left: StylePurchasePageImageEvidence,
-  right: StylePurchasePageImageEvidence,
-  pageTitle: string | null,
-  pageUrl: string,
-): number {
-  const scoreDelta = scoreProductImageEvidence(left, pageTitle, pageUrl) - scoreProductImageEvidence(right, pageTitle, pageUrl);
-  if (scoreDelta !== 0) {
-    return scoreDelta;
-  }
-  const protocolDelta = imageUrlProtocolScore(left.url) - imageUrlProtocolScore(right.url);
-  if (protocolDelta !== 0) {
-    return protocolDelta;
-  }
-  const widthDelta = imageUrlWidthScore(left.url) - imageUrlWidthScore(right.url);
-  if (widthDelta !== 0) {
-    return widthDelta;
-  }
-  return right.url.length - left.url.length;
-}
-
-function productImageIdentityKey(value: string): string {
-  try {
-    const url = new URL(value);
-    const params = new URLSearchParams(url.search);
-    for (const key of ['height', 'h', 'quality', 'q', 'width', 'w']) {
-      params.delete(key);
-    }
-    const normalizedSearch = params.toString();
-    return `${url.hostname.replace(/^www\./i, '').toLowerCase()}${url.pathname.toLowerCase()}${normalizedSearch ? `?${normalizedSearch}` : ''}`;
-  } catch {
-    return value.toLowerCase();
-  }
-}
-
-function imageUrlProtocolScore(value: string): number {
-  try {
-    return new URL(value).protocol === 'https:' ? 1 : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function imageUrlWidthScore(value: string): number {
-  try {
-    const url = new URL(value);
-    const width = Number(url.searchParams.get('width') ?? url.searchParams.get('w') ?? 0);
-    return Number.isFinite(width) ? width : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function extractHtmlTitle(html: string): string | null {
-  for (const key of ['og:title', 'twitter:title']) {
-    const value = extractMetaContent(html, key);
-    if (value) {
-      return value;
-    }
-  }
-  const title = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? null;
-  return normalizeHtmlText(title);
-}
-
-function extractMetaContent(html: string, key: string): string | null {
-  for (const tag of html.matchAll(/<meta\b[^>]*>/gi)) {
-    const attrs = parseHtmlAttributes(tag[0]);
-    const attrKey = (attrs.property ?? attrs.name ?? '').toLowerCase();
-    if (attrKey === key) {
-      return normalizeHtmlText(attrs.content ?? null);
-    }
-  }
-  return null;
-}
-
-function parseHtmlAttributes(tag: string): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  for (const match of tag.matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g)) {
-    attrs[match[1]!.toLowerCase()] = decodeHtmlEntities(match[2] ?? match[3] ?? match[4] ?? '');
-  }
-  return attrs;
-}
-
-function normalizeCandidateImageUrl(value: string | null, baseUrl: string): string | null {
-  const cleaned = normalizeHtmlText(value)
-    ?.replace(/\\u0026/gi, '&')
-    .replace(/\\u002F/gi, '/')
-    .replace(/\\\//g, '/');
-  if (!cleaned) {
-    return null;
-  }
-  try {
-    const url = new URL(cleaned, baseUrl);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:' && !url.protocol.startsWith('data:')) {
-      return null;
-    }
-    if (url.protocol === 'http:') {
-      url.protocol = 'https:';
-    }
-    const signature = `${url.hostname}${url.pathname}${url.search}`.toLowerCase();
-    if (url.pathname.toLowerCase().endsWith('.svg')) {
-      return null;
-    }
-    if (!/\.(avif|gif|jpe?g|png|webp)(?:$|\?)/.test(url.pathname.toLowerCase()) && !/(image|img|photo|media|cdn)/.test(signature)) {
-      return null;
-    }
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
-
-function normalizeHtmlText(value: string | null): string | null {
-  const normalized = decodeHtmlEntities(value ?? '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return normalized || null;
-}
-
-function decodeHtmlEntities(value: string): string {
-  return value
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
-}
-
-function splitSrcset(value: string): string[] {
-  return value
-    .split(',')
-    .map((entry) => entry.trim().split(/\s+/)[0])
-    .filter((entry): entry is string => Boolean(entry));
-}
-
-function scoreImageEvidenceSource(source: string): number {
-  if (source.startsWith('og:image')) return 5;
-  if (source.startsWith('twitter:image')) return 4;
-  if (source === 'link:image_src') return 3;
-  if (source.startsWith('img')) return 2;
-  return 1;
-}
-
-export function scoreProductImageEvidence(entry: StylePurchasePageImageEvidence, pageTitle: string | null, pageUrl: string): number {
-  let score = scoreImageEvidenceSource(entry.source) * 10;
-  const signature = imageEvidenceSignature(entry);
-  if (/\b(product|pdp|catalog|sku|style|shot|main|primary|zoom|large|detail)\b/.test(signature)) score += 8;
-  if (/\b(model|front|side|lateral|medial|pair|shoe|sneaker|boot|loafer|shirt|jacket|pant|dress)\b/.test(signature)) score += 5;
-  const productTerms = productImageTitleTerms(pageTitle);
-  for (const term of productTerms) {
-    if (signature.includes(term)) score += 3;
-  }
-  if (hasProductPageId(entry, pageUrl)) score += 18;
-  return score;
-}
-
-export function isLikelyNonProductImage(entry: StylePurchasePageImageEvidence, pageTitle: string | null, pageUrl: string): boolean {
-  const signature = imageEvidenceSignature(entry);
-  const searchText = imageEvidenceSearchText(entry);
-  if (/\b(logo|brand logo|brand logos|icon|sprite|favicon|payment|badge|loader|placeholder)\b/.test(searchText)) {
-    return true;
-  }
-  if (/\b(homepage|home page|top nav|nav image|navigation|header|footer|banner|hero|promo|campaign|editorial)\b/.test(searchText)) {
-    return true;
-  }
-  if (/\b(evergreen brands|brands brand|brand 6up|brand grid|category|basketball|running|spring|men s|womens?|kids)\b/.test(searchText) && !hasProductTitleTerm(entry, pageTitle)) {
-    return true;
-  }
-  if (hasConflictingCommerceImageId(entry, pageUrl)) {
-    return true;
-  }
-  if (entry.source.startsWith('img') && !hasProductTitleTerm(entry, pageTitle) && !hasProductPageId(entry, pageUrl) && !/\b(product|pdp|sku|catalog|main|primary|zoom|shot)\b/.test(signature)) {
-    return true;
-  }
-  return false;
-}
-
-function hasProductTitleTerm(entry: StylePurchasePageImageEvidence, pageTitle: string | null): boolean {
-  const signature = imageEvidenceSignature(entry);
-  return productImageTitleTerms(pageTitle).some((term) => signature.includes(term));
-}
-
-function imageEvidenceSignature(entry: StylePurchasePageImageEvidence): string {
-  return `${entry.url} ${entry.alt ?? ''} ${entry.source}`.toLowerCase();
-}
-
-function imageEvidenceSearchText(entry: StylePurchasePageImageEvidence): string {
-  return imageEvidenceSignature(entry)
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function productImageTitleTerms(pageTitle: string | null): string[] {
-  const stopWords = new Set([
-    'the',
-    'and',
-    'for',
-    'with',
-    'mens',
-    'men',
-    'women',
-    'womens',
-    'kids',
-    'shoe',
-    'shoes',
-    'canada',
-    'foot',
-    'locker',
-    'footlocker',
-  ]);
-  return (pageTitle ?? '')
-    .toLowerCase()
-    .replace(/&#x27;|&#39;|&apos;/g, "'")
-    .replace(/[^a-z0-9]+/g, ' ')
-    .split(/\s+/)
-    .filter((term) => term.length >= 3 && !stopWords.has(term))
-    .slice(0, 12);
-}
-
-function hasProductPageId(entry: StylePurchasePageImageEvidence, pageUrl: string): boolean {
-  const pageIds = productImagePageIds(pageUrl);
-  if (pageIds.length === 0) {
-    return false;
-  }
-  const signature = imageEvidenceSignature(entry);
-  return pageIds.some((id) => signature.includes(id));
-}
-
-function hasConflictingCommerceImageId(entry: StylePurchasePageImageEvidence, pageUrl: string): boolean {
-  const pageIds = productImagePageIds(pageUrl);
-  if (pageIds.length === 0) {
-    return false;
-  }
-  const imageIds = productImageUrlIds(entry.url);
-  if (imageIds.length === 0) {
-    return false;
-  }
-  return !imageIds.some((id) => pageIds.includes(id));
-}
-
-function productImagePageIds(pageUrl: string): string[] {
-  try {
-    const url = new URL(pageUrl);
-    return Array.from(new Set(extractCommerceImageIds(url.pathname)));
-  } catch {
-    return [];
-  }
-}
-
-function productImageUrlIds(imageUrl: string): string[] {
-  try {
-    const url = new URL(imageUrl);
-    return Array.from(new Set(extractCommerceImageIds(url.pathname)));
-  } catch {
-    return [];
-  }
-}
-
-function extractCommerceImageIds(value: string): string[] {
-  const ids: string[] = [];
-  const normalized = value.toLowerCase();
-  for (const match of normalized.matchAll(/[a-z]{2,}[a-z0-9]*\d{3,}[a-z0-9]*(?:-\d{2,})?/g)) {
-    ids.push(match[0]);
-  }
-  for (const token of normalized.split(/[^a-z0-9-]+/i)) {
-    if (/^\d{5,}$/.test(token) || /^[a-z]{2,}\d{4,}(?:-\d{2,})?$/.test(token)) {
-      ids.push(token);
-    }
-  }
-  return ids;
-}
 
 function coercePurchaseVisualObservationStrings(value: unknown): string[] {
   const entries = Array.isArray(value) ? value : [value];
@@ -2718,13 +1966,10 @@ export function registerStyleMcpSurface(
   server: McpServer,
   style: StyleService,
   origin: string,
-  options: { allowPurchasePageExtraction?: boolean; imageDeliverySecret?: string | null } = {},
+  options: { imageDeliverySecret?: string | null } = {},
 ) {
-  const allowPurchasePageExtraction = options.allowPurchasePageExtraction ?? true;
   const styleReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_READ_SCOPE] }];
-  // Closet render adapter accepts either read scope (gate = requireAnyScope([style:read, meals:read]));
-  // advertise both so the narrowed public token (meals:read) is in lockstep with the gate.
-  const styleClosetReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE] }];
+  const styleClosetReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_READ_SCOPE] }];
   const styleWriteSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_WRITE_SCOPE] }];
   const purchaseAnalysisWidgetMeta = buildWidgetMeta(
     'Rich Fluent purchase analysis for Style buy/skip decisions in ChatGPT-style widget hosts.',
@@ -2888,36 +2133,6 @@ export function registerStyleMcpSurface(
     );
   };
 
-  registerStyleClosetWidgetResource(
-    'fluent-style-closet-widget-previous-v1',
-    STYLE_CLOSET_PREVIOUS_TEMPLATE_URI,
-    'Style Closet Widget Previous v1',
-  );
-  registerStyleClosetWidgetResource(
-    'fluent-style-closet-widget-previous-v2',
-    STYLE_CLOSET_V2_TEMPLATE_URI,
-    'Style Closet Widget Previous v2',
-  );
-  registerStyleClosetWidgetResource(
-    'fluent-style-closet-widget-previous-v3',
-    STYLE_CLOSET_V3_TEMPLATE_URI,
-    'Style Closet Widget Previous v3',
-  );
-  registerStyleClosetWidgetResource(
-    'fluent-style-closet-widget-previous-v4',
-    STYLE_CLOSET_V4_TEMPLATE_URI,
-    'Style Closet Widget Previous v4',
-  );
-  registerStyleClosetWidgetResource(
-    'fluent-style-closet-widget-previous-v5',
-    STYLE_CLOSET_V5_TEMPLATE_URI,
-    'Style Closet Widget Previous v5',
-  );
-  registerStyleClosetWidgetResource(
-    'fluent-style-closet-widget-previous-v6',
-    STYLE_CLOSET_V6_TEMPLATE_URI,
-    'Style Closet Widget Previous v6',
-  );
   registerStyleClosetWidgetResource(
     'fluent-style-closet-widget-v7',
     STYLE_CLOSET_TEMPLATE_URI,
@@ -3706,48 +2921,13 @@ export function registerStyleMcpSurface(
     },
   );
 
-  server.registerTool(
-    'style_extract_purchase_page_evidence',
-    {
-      title: 'Extract Style Purchase Page Evidence',
-      description:
-        'Fetch a public product page URL and extract page title plus direct product image references for Style purchase analysis. This returns image references only; the host must still inspect pixels with vision before calling style_show_purchase_analysis_widget or making color, material, texture, condition, or visual-overlap claims.',
-      inputSchema: stylePurchasePageEvidenceInputSchema,
-      annotations: { title: 'Extract Style Purchase Page Evidence', readOnlyHint: true, idempotentHint: true, openWorldHint: true },
-    },
-    async ({ product_url, max_images }) => {
-      requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
-      const evidence = await extractStylePurchasePageEvidence({
-        maxImages: max_images,
-        productUrl: product_url,
-      });
-      return toolResult(evidence, {
-        textData: {
-          candidateImageCount: evidence.visualGrounding.candidateImageCount,
-          candidateVisualGrounding: evidence.visualGrounding.candidateVisualGrounding,
-          finalUrl: evidence.extraction.finalUrl,
-          hostResponseInstruction: evidence.hostResponseInstruction,
-          hostResponseMode: evidence.hostResponseMode,
-          nextRequiredTool: evidence.nextRequiredTool,
-          pageTitle: evidence.extraction.pageTitle,
-          renderReady: evidence.renderReady,
-          status: evidence.status,
-          userFacingNarrationInstruction: evidence.userFacingNarrationInstruction,
-          userFacingStatus: evidence.userFacingStatus,
-          warningCount: evidence.warnings.length,
-        },
-        structuredContent: evidence,
-      });
-    },
-  );
 
   server.registerTool(
     'style_prepare_purchase_analysis',
     {
       title: 'Prepare Style Purchase Analysis',
-      description: allowPurchasePageExtraction
-        ? 'Use for Style purchase-analysis requests, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what product-page or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. If only a product URL was provided and no candidate image references exist yet, use style_extract_purchase_page_evidence next. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.'
-        : 'Use for Style purchase-analysis requests, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what item details or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. In ChatGPT, product links should be supported by user-provided item details plus a direct product image or uploaded photo before the final buy/wait/skip call. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.',
+      description:
+        'Use for Style purchase-analysis requests, including text-only candidate names, product URLs, direct image URLs, and "should I buy this?" prompts. Normalizes the candidate, returns closet comparator context, and tells the host what item details or image evidence must be inspected before any final verdict or rich purchase-analysis widget. Do not start purchase analysis with style_get_context or style_analyze_purchase. Product links must be supported by user-provided item details plus a direct product image or uploaded photo before the final buy/wait/skip call. Use before style_render_purchase_analysis for "should I buy this?", "analyze this purchase", and product-link prompts.',
       inputSchema: {
         candidate: stylePurchaseCandidateInputSchema.describe('Required purchase candidate as a short string or structured object with known product details.'),
         evidence: stylePurchaseVisualEvidenceInputSchema.optional().describe('Accepted concrete visual evidence from a prior host inspection; omit until the image has actually been inspected.'),
@@ -3776,7 +2956,6 @@ export function registerStyleMcpSurface(
         visualEvidence: acceptedVisualEvidence,
       });
       const preparation = buildStylePurchasePreparation({
-        allowPurchasePageExtraction,
         analysis,
         candidateInput: candidate,
       });
@@ -3823,17 +3002,10 @@ export function registerStyleMcpSurface(
     },
     async ({ candidate, comparator_item_ids, max_inline_images }) => {
       requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
-      const enrichedCandidate = allowPurchasePageExtraction
-        ? await enrichStyleVisualBundleCandidateFromProductPage({
-            candidate,
-            maxImages: 8,
-          })
-        : candidate;
-      const analysis = await style.analyzePurchase({ candidate: enrichedCandidate });
+      const analysis = await style.analyzePurchase({ candidate });
       const preparation = buildStylePurchasePreparation({
-        allowPurchasePageExtraction,
         analysis,
-        candidateInput: enrichedCandidate,
+        candidateInput: candidate,
       });
       const bundle =
         preparation.hostVisionTask.status === 'ready_for_host_vision'
@@ -3882,7 +3054,6 @@ export function registerStyleMcpSurface(
       const parsed = styleSubmitPurchaseVisualObservationsInputSchema.parse(args);
       const stylistJudgment = extractStylePurchaseStylistJudgmentArgument(parsed);
       const preparationBeforeVisualEvidence = buildStylePurchasePreparation({
-        allowPurchasePageExtraction,
         analysis: await style.analyzePurchase({
           candidate: parsed.candidate,
         }),
@@ -3894,7 +3065,6 @@ export function registerStyleMcpSurface(
         visualEvidence,
       });
       const preparation = buildStylePurchasePreparation({
-        allowPurchasePageExtraction,
         analysis,
         candidateInput: parsed.candidate,
       });
@@ -4051,7 +3221,6 @@ export function registerStyleMcpSurface(
       });
       if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
         const preparation = buildStylePurchasePreparation({
-          allowPurchasePageExtraction,
           analysis,
           candidateInput: candidate,
         });
@@ -4125,7 +3294,6 @@ export function registerStyleMcpSurface(
       });
       if (analysis.evidenceQuality.candidateVisualGrounding !== 'host_visual_inspection') {
         const preparation = buildStylePurchasePreparation({
-          allowPurchasePageExtraction,
           analysis,
           candidateInput: candidate,
         });
@@ -4288,7 +3456,7 @@ export function registerStyleMcpSurface(
       },
     }, styleClosetReadSecuritySchemes),
     async (args) => {
-      requireAnyScope([FLUENT_STYLE_READ_SCOPE, FLUENT_MEALS_READ_SCOPE]);
+      requireScope(FLUENT_STYLE_READ_SCOPE);
       const structuredContent = await buildStyleClosetStructuredContent(style, {
         cursor: args.cursor,
         filter: args.filter as StyleClosetFilter | undefined,
@@ -4472,20 +3640,15 @@ export function registerStyleMcpSurface(
     },
   );
 
-  const visualBundleInputSchema: Record<string, z.ZodTypeAny> = allowPurchasePageExtraction
-    ? {
-        candidate: z.any().optional(),
-        delivery_mode: styleVisualBundleDeliveryModeSchema,
-        include_inline_images: z.boolean().optional(),
-        include_comparators: z.boolean().optional(),
-        item_ids: z.array(z.string()).optional(),
-        max_inline_images: z.number().int().positive().max(STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES).optional(),
-        max_images: z.number().int().positive().max(12).optional(),
-      }
-    : {
-        include_inline_images: z.boolean().optional(),
-        include_comparators: z.boolean().optional(),
-      };
+  const visualBundleInputSchema: Record<string, z.ZodTypeAny> = {
+    candidate: z.any().optional(),
+    delivery_mode: styleVisualBundleDeliveryModeSchema,
+    include_inline_images: z.boolean().optional(),
+    include_comparators: z.boolean().optional(),
+    item_ids: z.array(z.string()).optional(),
+    max_inline_images: z.number().int().positive().max(STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES).optional(),
+    max_images: z.number().int().positive().max(12).optional(),
+  };
   type StyleVisualBundleToolArgs = {
     candidate?: unknown;
     delivery_mode?: z.infer<typeof styleVisualBundleDeliveryModeSchema>;
@@ -4500,9 +3663,8 @@ export function registerStyleMcpSurface(
     'style_get_visual_bundle',
     {
       title: 'Get Style Visual Bundle',
-      description: allowPurchasePageExtraction
-        ? 'Return a curated visual packet for broad stylist tasks outside the canonical staged purchase flow, including authenticated image routes, optional short-lived signed fallbacks, opt-in inline MCP image content, and compact closet comparator context. This tool does not extract arbitrary product pages; for product-link purchase decisions, use style_extract_purchase_page_evidence where exposed, then style_get_purchase_vision_packet followed by style_submit_purchase_visual_observations.'
-        : 'Return a curated visual packet for broad stylist tasks outside the canonical staged purchase flow, including authenticated image routes, optional short-lived signed fallbacks, opt-in inline MCP image content, and compact closet comparator context. This full-MCP helper is not part of the curated ChatGPT submitted profile. It does not extract arbitrary product pages; purchase decisions should use style_prepare_purchase_analysis, direct product images or uploaded photos, style_get_purchase_vision_packet, and style_submit_purchase_visual_observations.',
+      description:
+        'Return a curated visual packet for broad stylist tasks outside the canonical staged purchase flow, including authenticated image routes, optional short-lived signed fallbacks, opt-in inline MCP image content, and compact closet comparator context. It does not extract arbitrary product pages and does not fetch them. Purchase decisions must use style_prepare_purchase_analysis with a direct product image or uploaded photo, then style_get_purchase_vision_packet and style_submit_purchase_visual_observations.',
       inputSchema: visualBundleInputSchema,
       annotations: { title: 'Get Style Visual Bundle', readOnlyHint: true, idempotentHint: true },
     },

@@ -1,28 +1,15 @@
 ---
 name: fluent-health
-description: Use when the user asks about Fluent Health or Wellbeing boundaries.
+description: Use when the user asks whether Fluent currently supports Health or Wellbeing.
 ---
 
-# Fluent Health
+# Fluent Health and Wellbeing
 
-## Public vNext Boundary
+Health and Wellbeing are reserved in Fluent 2.0. The public contract has no Health tools or resources.
 
-Health/Wellbeing is not a public vNext product surface yet.
-
-Use Fluent only to check public capability/context availability. If the canonical `/mcp` profile returns `not_implemented`, missing context, or no useful Wellbeing packet, say plainly that Fluent does not have a public Health/Wellbeing memory surface available for this request.
-
-## Core Rules
-
-- Do not name old Health tools as active public guidance.
-- Do not write goals, workouts, body metrics, block reviews, or preferences through public vNext.
-- Do not provide medical diagnosis, injury triage, rehab treatment, dermatology guidance, or clinical advice.
-- Casual fitness conversation can proceed without Fluent tools when saved Fluent state is not needed.
-- If Meals context is relevant to an explicit food-planning request, use the Meals path, not Health.
-- If OpenClaw cannot access canonical Fluent tools in the current session, do not answer from prior memory as if it came from Fluent.
-
-## Expected Answer Shape
-
-- State whether Fluent public context is available.
-- If unavailable, continue from user-provided context only.
-- Keep advice conservative and non-clinical.
-- Ask for professional care when symptoms, pain, injury, or medical risk are involved.
+- Do not call, name, or wait for earlier `health_*` tools.
+- Do not write goals, workouts, body metrics, block reviews, symptoms, or medical preferences through Fluent.
+- Say plainly that saved Fluent Health/Wellbeing context is not currently available.
+- Continue from information the user provides when ordinary conversation is safe.
+- Route explicit food planning through Fluent Meals when appropriate.
+- Never present Fluent as a medical, diagnosis, treatment, or rehabilitation system.

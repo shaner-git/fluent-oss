@@ -10,8 +10,6 @@ import { cliString, parseCliArgs, resolveCliRoot } from './cli';
 import { maybeHandleStyleImageRequest } from '../style-image-handler';
 import { isProfiledMcpPath, resolveMcpRuntimeProfileForRequest } from '../chatgpt-profile-routing';
 
-const LOCAL_CANDIDATE_FULL_MCP_PATH = '/mcp/candidate-full';
-
 const args = parseCliArgs(process.argv.slice(2));
 const host = cliString(args, 'host') ?? LOCAL_DEFAULT_HOST;
 const port = Number(cliString(args, 'port') ?? LOCAL_DEFAULT_PORT);
@@ -45,9 +43,8 @@ const server = createServer(async (req, res) => {
   }
 
   const normalizedPath = url.pathname.replace(/\/$/, '') || '/';
-  const isCandidateFullMcpPath = normalizedPath === LOCAL_CANDIDATE_FULL_MCP_PATH;
 
-  if (url.pathname === '/mcp' || isProfiledMcpPath(url.pathname) || isCandidateFullMcpPath) {
+  if (url.pathname === '/mcp' || isProfiledMcpPath(url.pathname)) {
     const tokenState = authorizeLocalBearer(runtime.paths.rootDir, req.headers.authorization);
     if (!tokenState) {
       res.statusCode = 401;
@@ -79,13 +76,9 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const route = isCandidateFullMcpPath
-      ? LOCAL_CANDIDATE_FULL_MCP_PATH
-      : isProfiledMcpPath(url.pathname)
-        ? normalizedPath
-        : '/mcp';
+    const route = isProfiledMcpPath(url.pathname) ? normalizedPath : '/mcp';
     const mcpServer = createFluentMcpServer(runtime.env, origin, {
-      profile: isCandidateFullMcpPath ? 'full' : resolveMcpRuntimeProfileForRequest(route),
+      profile: resolveMcpRuntimeProfileForRequest(route),
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     await mcpServer.connect(transport);
@@ -116,7 +109,7 @@ const server = createServer(async (req, res) => {
     return writeHtml(
       res,
       200,
-      `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Fluent</title></head><body><h1>Fluent</h1><p>Open-source runtime for running Fluent yourself.</p><p>MCP endpoint: <code>${origin}/mcp</code></p><p>Candidate full-runtime proof endpoint: <code>${origin}${LOCAL_CANDIDATE_FULL_MCP_PATH}</code></p><p>Probe: <code>${origin}/codex-probe</code></p><p>Health: <code>${origin}/health</code></p></body></html>`,
+      `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Fluent</title></head><body><h1>Fluent</h1><p>Open-source runtime for running Fluent yourself.</p><p>MCP endpoint: <code>${origin}/mcp</code></p><p>Probe: <code>${origin}/codex-probe</code></p><p>Health: <code>${origin}/health</code></p></body></html>`,
     );
   }
 

@@ -1,4 +1,4 @@
-import type { FluentVNextDomain } from './vnext-contract';
+import { fluentVNextGeneratedHostProfile, type FluentVNextDomain } from './vnext-contract';
 import { toDerivedSeam, type BudgetCategory, type PurchaseContext } from './domains/budgets/service';
 import {
   isStyleDisplayPhoto,
@@ -102,6 +102,7 @@ export interface FluentVNextContextPacket {
   object: 'ContextPacket';
   domain: FluentVNextDomain;
   intent: FluentVNextReadIntent;
+  detail?: 'summary';
   compactFacts: unknown[];
   responseGuidance?: unknown;
   relevantItems: FluentVNextDomainItem[];
@@ -153,6 +154,12 @@ const MEALS_SOFT_PREFERENCES_USAGE =
 
 const MEALS_DIETARY_PATTERNS_USAGE =
   'MealsDietaryPatterns are confirmed light-touch identity defaults: treat the listed classes as standing default exclusions when planning, after MealsHardConstraints and before MealsSoftPreferences. Recipe tags use saved recipe names plus structured ingredient names for obvious conflicts, but the host still owns the final plan and must exclude a recipe whose full ingredients contain an excluded class even when untagged, including hidden animal products such as gelatin, rennet, fish sauce, or stock. If the user asks for an off-pattern dish this turn, plan it and optionally offer to note the exception - do NOT double-confirm. Annotate only: Fluent never vetoes a recipe; the host decides.';
+
+const CURATED_CONTEXT_TOOL_NAMES = new Set(fluentVNextGeneratedHostProfile('assistant_product').tools);
+const CONTEXT_SUMMARY_MAX_ARRAY_ITEMS = 5;
+const CONTEXT_SUMMARY_MAX_DEPTH = 5;
+const CONTEXT_SUMMARY_MAX_OBJECT_KEYS = 16;
+const CONTEXT_SUMMARY_MAX_STRING_LENGTH = 240;
 
 type MealsHardConstraintExclusion = {
   factId: string;
@@ -265,6 +272,7 @@ export async function getFluentVNextContext(
   input: {
     amount?: number | null;
     candidate?: FluentVNextPurchaseCandidate | null;
+    detail?: 'summary';
     domain: FluentVNextDomain;
     host?: PcHost | null;
     intent?: FluentVNextReadIntent;
@@ -274,12 +282,12 @@ export async function getFluentVNextContext(
   const host = normalizeHost(input.host);
   if (input.domain === 'shared') {
     const sharedProfile = await getFluentVNextSharedProfile(services, { host });
-    return contextPacket({
+    return projectContextPacket(contextPacket({
       compactFacts: sharedProfile.facts,
       domain: 'shared',
       intent,
       sourceReads: ['core.getProfile', 'core.getCapabilities', 'core.listPersonFacts'],
-    });
+    }), input.detail);
   }
 
   if (input.domain === 'meals') {
@@ -326,7 +334,7 @@ export async function getFluentVNextContext(
     const inventorySummary = planningIntent ? mealsInventorySummary(inventory) : null;
     const sharedPersonFacts = buildPersonFactsCompactFact(personFacts, 'meals');
     const budgetsSeam = budgetPurchaseContext ? buildDerivedSeamCompactFact(toDerivedSeam(budgetPurchaseContext)) : null;
-    return contextPacket({
+    return projectContextPacket(contextPacket({
       compactFacts: [
         mealsHardConstraints,
         mealsDietaryPatterns,
@@ -360,18 +368,19 @@ export async function getFluentVNextContext(
       ],
       responseGuidance: mealsResponseGuidance(intent),
       suggestedWritebacks: buildMealsSuggestedWritebacks(calibration, grocery, intent, personFacts),
-    });
+    }), input.detail);
   }
 
   if (input.domain === 'style') {
     requireService(services.style, 'style');
     if (intent === 'purchase' && input.candidate) {
-      return getStylePurchaseContextPacket(services, {
+      const packet = await getStylePurchaseContextPacket(services, {
         amount: input.amount ?? null,
         candidate: input.candidate,
         host,
         intent,
       });
+      return projectContextPacket(packet, input.detail);
     }
     const [calibration, context, gaps, personFacts] = await Promise.all([
       services.style.getOnboardingCalibration?.() ?? null,
@@ -380,7 +389,7 @@ export async function getFluentVNextContext(
       services.core.listPersonFacts ? services.core.listPersonFacts({ consumerDomain: 'style', host }) : [],
     ]);
     const sharedPersonFacts = buildPersonFactsCompactFact(personFacts, 'style');
-    return contextPacket({
+    return projectContextPacket(contextPacket({
       compactFacts: [calibration, context, sharedPersonFacts].filter(Boolean),
       domain: 'style',
       evidenceGaps: [
@@ -396,16 +405,16 @@ export async function getFluentVNextContext(
         'core.listPersonFacts',
       ],
       responseGuidance: styleResponseGuidance(intent, context),
-    });
+    }), input.detail);
   }
 
-  return contextPacket({
+  return projectContextPacket(contextPacket({
     domain: input.domain,
     intent,
     freshnessStatus: 'not_implemented',
     responseGuidance: reservedDomainResponseGuidance(input.domain, intent),
     sourceReads: [],
-  });
+  }), input.detail);
 }
 
 async function getStylePurchaseContextPacket(
@@ -1473,6 +1482,313 @@ function contextPacket(input: {
     },
     suggestedWritebacks: input.suggestedWritebacks ?? [],
     sourceReads: input.sourceReads,
+  };
+}
+
+function projectContextPacket(
+  packet: FluentVNextContextPacket,
+  detail: 'summary' | undefined,
+): FluentVNextContextPacket {
+  if (detail !== 'summary') {
+    return packet;
+  }
+
+  const preserveCompleteStylePurchaseSlice = packet.domain === 'style' && packet.intent === 'purchase';
+  return {
+    ...packet,
+    detail: 'summary',
+    compactFacts: packet.compactFacts
+      .slice(0, 12)
+      .map((fact) => preserveCompleteStylePurchaseSlice
+        ? compactStylePurchaseSummaryFact(fact)
+        : compactContextSummaryValue(fact)),
+    ...(packet.responseGuidance
+      ? { responseGuidance: compactContextResponseGuidance(packet, packet.responseGuidance) }
+      : {}),
+    relevantItems: packet.relevantItems.slice(0, 4).map(compactContextDomainItem),
+    evidenceGaps: packet.evidenceGaps.slice(0, 5).map((gap) => compactContextSummaryValue(gap)),
+    suggestedWritebacks: packet.suggestedWritebacks
+      .slice(0, 3)
+      .map((writeback) => compactContextSummaryValue(writeback)),
+    sourceReads: packet.sourceReads.slice(0, 16),
+  };
+}
+
+function compactContextDomainItem(item: FluentVNextDomainItem): FluentVNextDomainItem {
+  return {
+    ...item,
+    payload:
+      item.domain === 'meals' && item.type === 'grocery_list'
+        ? compactCurrentGroceryListPayload(item.payload)
+        : compactContextSummaryValue(item.payload),
+    provenance: compactContextSummaryValue(item.provenance),
+    ...(item.responseGuidance
+      ? { responseGuidance: compactContextSummaryValue(item.responseGuidance) }
+      : {}),
+  };
+}
+
+function compactCurrentGroceryListPayload(value: unknown): unknown {
+  const record = objectRecord(value);
+  if (!record) {
+    return compactContextSummaryValue(value);
+  }
+  const preparedOrder = objectRecord(record.preparedOrder);
+  const summary: Record<string, unknown> = {};
+  for (const key of [
+    'objectRole',
+    'listId',
+    'id',
+    'version',
+    'status',
+    'title',
+    'subtitle',
+    'weekStart',
+    'weekRelation',
+    'selectionReason',
+    'trustState',
+    'trustLabel',
+    'stale',
+    'freshness',
+    'counts',
+  ]) {
+    if (record[key] !== undefined) {
+      summary[key] = compactContextSummaryValue(record[key]);
+    }
+  }
+  if (Array.isArray(record.staleReasons)) {
+    summary.staleReasons = record.staleReasons.slice(0, 4).map((entry) => compactContextSummaryValue(entry));
+  }
+  if (preparedOrder) {
+    summary.toBuyPreview = compactGroceryItemPreview(preparedOrder.remainingToBuy, 4);
+    summary.checkAtHomePreview = compactGroceryItemPreview(preparedOrder.unresolvedItems, 4);
+    summary.coveredPreview = compactGroceryItemPreview(preparedOrder.alreadyCoveredByInventory, 2);
+  }
+  if (Array.isArray(record.intents)) {
+    summary.manualItemPreview = compactGroceryItemPreview(record.intents, 4);
+  }
+  return summary;
+}
+
+function compactGroceryItemPreview(value: unknown, limit = 4): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.slice(0, limit).map((entry) => {
+    const record = objectRecord(entry);
+    if (!record) {
+      return compactContextSummaryValue(entry);
+    }
+    const preview: Record<string, unknown> = {};
+    for (const key of ['id', 'itemKey', 'displayName', 'name', 'quantity', 'unit', 'status', 'reason']) {
+      if (record[key] !== undefined) {
+        preview[key] = compactContextSummaryValue(record[key]);
+      }
+    }
+    return preview;
+  });
+}
+
+function compactContextResponseGuidance(
+  packet: Pick<FluentVNextContextPacket, 'domain' | 'intent'>,
+  original: unknown,
+): unknown {
+  if (packet.domain === 'meals') {
+    return {
+      object: 'ResponseGuidanceSummary',
+      domain: 'meals',
+      intent: packet.intent,
+      evidenceBoundary:
+        'Attribute only returned Fluent facts. Keep chat memory, browser context, other domains, and model assumptions separate.',
+      planningOrder: [
+        'Honor confirmed allergies and hard avoids.',
+        'Apply confirmed dietary patterns.',
+        'Use saved recipes and recent outcomes.',
+        'Use soft preferences only to rank otherwise safe options.',
+        'State grocery currentness before relying on the living list.',
+      ],
+      currentnessBoundary:
+        'If grocery state is stale, missing, or incomplete, give only a tentative framework and ask one confirmation before a grocery-dependent plan.',
+      publicDetailReads: curatedContextTools([
+        'fluent_list_items',
+        'fluent_get_item',
+        'fluent_list_evidence',
+      ]),
+      publicWrites: curatedContextTools([
+        'fluent_update_shared_profile_patch',
+        'fluent_save_recipe',
+        'fluent_update_recipe_patch',
+        'fluent_record_recipe_feedback',
+        'fluent_save_meal_plan',
+        'fluent_apply_grocery_list_change',
+        'fluent_apply_grocery_shopping_result',
+      ]),
+      writeBoundary:
+        'Offer a write only when it advances the request, require explicit user approval, and claim success only from applied read-after-write evidence.',
+    };
+  }
+  if (packet.domain === 'style') {
+    return {
+      object: 'ResponseGuidanceSummary',
+      domain: 'style',
+      intent: packet.intent,
+      evidenceBoundary:
+        'Attribute only returned Fluent facts. Inspect available images before visual claims and state when evidence is incomplete.',
+      verdictBoundary:
+        'The host owns the final closet or purchase judgment; Fluent supplies owned-item, media, provenance, and budget evidence.',
+      publicReads: curatedContextTools([
+        'fluent_get_context',
+        'fluent_list_items',
+        'fluent_get_item',
+        'fluent_list_evidence',
+        'fluent_get_media_bundle',
+        'fluent_get_purchase_context',
+      ]),
+      publicWrites: curatedContextTools([
+        'fluent_update_style_item_patch',
+        'fluent_create_style_item',
+        'fluent_refresh_style_item_profile',
+        'fluent_set_style_item_image',
+        'fluent_archive_item',
+      ]),
+      writeBoundary:
+        'Require explicit user approval and claim success only from applied read-after-write evidence.',
+    };
+  }
+  return compactContextSummaryValue(original);
+}
+
+function curatedContextTools(candidates: string[]): string[] {
+  return candidates.filter((toolName) => CURATED_CONTEXT_TOOL_NAMES.has(toolName));
+}
+
+function compactStylePurchaseSummaryFact(value: unknown): unknown {
+  const record = objectRecord(value);
+  if (!record) {
+    return compactContextSummaryValue(value);
+  }
+  if (record.object === 'StylePurchaseOwnedSlice') {
+    return {
+      object: 'StylePurchaseOwnedSlice',
+      source: record.source ?? 'style.listItems+style.getVisualBundle',
+      resolvedCategory: record.resolvedCategory ?? null,
+      items: Array.isArray(record.items) ? record.items.map(compactStylePurchaseSummaryItem) : [],
+      completeness: compactStylePurchaseCompleteness(record.completeness),
+      guidance:
+        'Use every serialized owned item for the verdict. Cite true comparators by name; render only those comparator ids after the prose verdict.',
+    };
+  }
+  if (record.object === 'StylePurchaseCompleteness') {
+    return compactStylePurchaseCompleteness(record);
+  }
+  return compactContextSummaryValue(record);
+}
+
+function compactStylePurchaseSummaryItem(value: unknown): Record<string, unknown> {
+  const record = objectRecord(value) ?? {};
+  const attrs = objectRecord(record.attrs);
+  const color = objectRecord(record.color);
+  return {
+    ...pickContextFields(record, ['id', 'name', 'category', 'subcategory']),
+    ...pickContextFields(attrs ?? {}, ['brand', 'size', 'itemType', 'styleRole']),
+    color: color ? pickContextFields(color, ['family', 'name']) : null,
+    ...pickContextFields(record, ['imageUrl', 'fitImageUrl']),
+  };
+}
+
+function compactStylePurchaseCompleteness(value: unknown): Record<string, unknown> {
+  const record = objectRecord(value) ?? {};
+  return {
+    object: 'StylePurchaseCompleteness',
+    ...pickContextFields(record, [
+      'scope',
+      'complete',
+      'totalMatched',
+      'serializedCount',
+      'itemIds',
+      'resolvedCategory',
+    ]),
+  };
+}
+
+function pickContextFields(record: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const selected: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      selected[key] = record[key];
+    }
+  }
+  return selected;
+}
+
+function compactContextSummaryValue(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (value == null || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return value.length > CONTEXT_SUMMARY_MAX_STRING_LENGTH
+      ? `${value.slice(0, CONTEXT_SUMMARY_MAX_STRING_LENGTH)}...`
+      : value;
+  }
+  if (typeof value !== 'object') {
+    return String(value);
+  }
+  if (seen.has(value as object)) {
+    return '[circular]';
+  }
+  if (depth >= CONTEXT_SUMMARY_MAX_DEPTH) {
+    return Array.isArray(value) ? `[${value.length} item(s) omitted from summary]` : '[detail omitted from summary]';
+  }
+
+  seen.add(value as object);
+  try {
+    if (Array.isArray(value)) {
+      const compacted = value
+        .slice(0, CONTEXT_SUMMARY_MAX_ARRAY_ITEMS)
+        .map((entry) => compactContextSummaryValue(entry, depth + 1, seen));
+      if (value.length > CONTEXT_SUMMARY_MAX_ARRAY_ITEMS) {
+        compacted.push(`... ${value.length - CONTEXT_SUMMARY_MAX_ARRAY_ITEMS} more item(s)`);
+      }
+      return compacted;
+    }
+
+    const record = value as Record<string, unknown>;
+    if (record.object === 'MealsHardConstraints') {
+      return compactMealsHardConstraints(record, depth, seen);
+    }
+
+    const entries = Object.entries(record).filter(([, entry]) => entry !== undefined);
+    const compacted: Record<string, unknown> = {};
+    for (const [key, entry] of entries.slice(0, CONTEXT_SUMMARY_MAX_OBJECT_KEYS)) {
+      compacted[key] = compactContextSummaryValue(entry, depth + 1, seen);
+    }
+    if (entries.length > CONTEXT_SUMMARY_MAX_OBJECT_KEYS) {
+      compacted.summaryOmittedFieldCount = entries.length - CONTEXT_SUMMARY_MAX_OBJECT_KEYS;
+    }
+    return compacted;
+  } finally {
+    seen.delete(value as object);
+  }
+}
+
+function compactMealsHardConstraints(
+  record: Record<string, unknown>,
+  depth: number,
+  seen: WeakSet<object>,
+): Record<string, unknown> {
+  return {
+    object: 'MealsHardConstraints',
+    domain: record.domain ?? 'meals',
+    source: record.source ?? 'fluent_read_layer',
+    confirmedExclusions: Array.isArray(record.confirmedExclusions)
+      ? record.confirmedExclusions.map((entry) => compactContextSummaryValue(entry, depth + 1, seen))
+      : [],
+    usage:
+      'Confirmed allergies and hard avoids are authoritative. Exclude conflicts unless the user explicitly overrides and confirms the change.',
   };
 }
 
@@ -3074,14 +3390,15 @@ function buildMealsSuggestedWritebacks(
   const suggestions: unknown[] = [];
   const calibrationRecord = objectRecord(calibration);
   const suggestedNextAction = objectRecord(calibrationRecord?.suggestedNextAction);
-  if (suggestedNextAction) {
+  const suggestedToolName = stringField(suggestedNextAction, 'toolName');
+  if (suggestedNextAction && suggestedToolName && CURATED_CONTEXT_TOOL_NAMES.has(suggestedToolName)) {
     suggestions.push({
       object: 'SuggestedWriteback',
       domain: 'meals',
       type: 'calibration_next_action',
       label: suggestedNextAction.label ?? null,
       rationale: suggestedNextAction.rationale ?? null,
-      proposedToolName: suggestedNextAction.toolName ?? null,
+      proposedToolName: suggestedToolName,
       requiresExplicitUserApproval: true,
       source: 'meals.getOnboardingCalibration',
     });

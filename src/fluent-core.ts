@@ -160,9 +160,9 @@ export interface FluentToolDiscoveryGroup {
   domainId: 'health' | 'meals' | 'style' | null;
   guidanceResourceUris: string[];
   toolPrefixes: string[];
-  starterReadTools: string[];
-  detailReadTools?: string[];
-  starterWriteTools: string[];
+  starterReadTools: FluentPublicToolName[];
+  detailReadTools?: FluentPublicToolName[];
+  starterWriteTools: FluentPublicToolName[];
   whenToUse: string;
   domainReady: boolean;
 }
@@ -217,10 +217,12 @@ export interface FluentNextActions {
 }
 
 export interface FluentRecommendedAction {
-  tool: string;
+  tool: FluentPublicToolName;
   reason: string;
   kind: 'read' | 'write' | 'render' | 'onboard' | 'host_action';
 }
+
+type FluentPublicToolName = (typeof FLUENT_TOOL_NAMES)[number];
 
 export class FluentCoreService {
   constructor(private readonly db: FluentDatabase, private readonly runtime: CoreRuntimeBindings) {}
@@ -235,22 +237,23 @@ export class FluentCoreService {
 
   async getCapabilities(): Promise<FluentCapabilities> {
     const [tenant, profile, domains] = await Promise.all([this.getTenant(), this.getProfile(), this.listDomains()]);
-    const readyDomains = domains.filter((domain) => isDomainReady(domain)).map((domain) => domain.domainId);
+    const publicDomains = domains.filter((domain) => isPublicProductDomain(domain.domainId));
+    const readyDomains = publicDomains.filter((domain) => isDomainReady(domain)).map((domain) => domain.domainId);
 
     return {
-      availableDomains: domains,
+      availableDomains: publicDomains,
       backendMode: tenant.backendMode,
       contractVersion: FLUENT_CONTRACT_VERSION,
       deploymentTrack: tenant.deploymentTrack,
       storageBackend: this.runtime.storageBackend,
-      enabledDomains: domains.filter((domain) => domain.lifecycleState === 'enabled').map((domain) => domain.domainId),
+      enabledDomains: publicDomains.filter((domain) => domain.lifecycleState === 'enabled').map((domain) => domain.domainId),
       readyDomains,
       onboarding: {
         core: {
           state: tenant.onboardingState,
           version: tenant.onboardingVersion,
         },
-        domains: domains.map((domain) => ({
+        domains: publicDomains.map((domain) => ({
           domainId: domain.domainId,
           state: domain.onboardingState,
           version: domain.onboardingVersion,
@@ -286,7 +289,9 @@ export class FluentCoreService {
 
   async getAccountStatus(): Promise<FluentAccountStatus> {
     const [tenant, domains] = await Promise.all([this.getTenant(), this.listDomains()]);
-    const enabledDomains = domains.filter((domain) => domain.lifecycleState === 'enabled').map((domain) => domain.domainId);
+    const enabledDomains = domains
+      .filter((domain) => isPublicProductDomain(domain.domainId) && domain.lifecycleState === 'enabled')
+      .map((domain) => domain.domainId);
     const accountBaseUrl = meetFluentAccountBaseUrl(this.runtime.publicBaseUrl);
     const accountRecord =
       this.runtime.deploymentTrack === 'cloud'
@@ -1292,121 +1297,118 @@ function canonicalDomainSkill(domainId: string, metadata: Record<string, unknown
 }
 
 function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDiscovery'] {
-  const isReady = (domainId: 'health' | 'meals' | 'style') => readyDomains.includes(domainId);
+  const isReady = (domainId: 'meals' | 'style') => readyDomains.includes(domainId);
 
   return {
     canonicalRegistry: 'mcp_tools_list',
     guidanceResources: [...FLUENT_GUIDANCE_RESOURCE_URIS],
     note:
-      'Guidance only. MCP tools/list is authoritative for the connected runtime profile. Hosted public /mcp exposes the curated product-safe vNext assistant profile, not the legacy full contract or a developer escape hatch.',
+      'MCP tools/list is authoritative. This directory describes the same curated 2.0 product profile and never advertises tools outside the connected public contract.',
     groups: [
       {
         id: 'core',
-        label: 'Core Routing',
+        label: 'Core and Shared Context',
         domainId: null,
-        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities'],
+        guidanceResourceUris: [],
         toolPrefixes: ['fluent_'],
-        starterReadTools: ['fluent_get_home', 'fluent_get_capabilities', 'fluent_get_account_status', 'fluent_list_domains'],
-        starterWriteTools: ['fluent_enable_domain', 'fluent_begin_domain_onboarding'],
-        whenToUse: 'First call in a Fluent session or when domain readiness is unclear.',
+        starterReadTools: ['fluent_get_capabilities', 'fluent_get_account_status', 'fluent_get_context', 'fluent_get_shared_profile'],
+        detailReadTools: ['fluent_list_items', 'fluent_get_item', 'fluent_list_evidence', 'fluent_get_media_bundle'],
+        starterWriteTools: ['fluent_update_shared_profile_patch'],
+        whenToUse: 'Account status, shared profile context, capability checks, or cross-domain routing.',
         domainReady: true,
       },
       {
         id: 'health_fitness',
-        label: 'Health Fitness',
+        label: 'Wellbeing (Reserved)',
         domainId: 'health',
-        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/health-blocks'],
-        toolPrefixes: ['health_'],
-        starterReadTools: ['health_get_context', 'health_get_active_block', 'health_get_today_context'],
-        starterWriteTools: ['health_upsert_block', 'health_record_block_review', 'health_log_workout'],
-        whenToUse: 'Training block creation, today resolution, lightweight workout logging, and block reviews.',
-        domainReady: isReady('health'),
+        guidanceResourceUris: [],
+        toolPrefixes: ['fluent_'],
+        starterReadTools: ['fluent_get_capabilities'],
+        starterWriteTools: [],
+        whenToUse: 'Wellbeing is reserved in the 2.0 public contract. Check capabilities, then continue from user-provided context without claiming Fluent has Health tools or state.',
+        domainReady: false,
       },
       {
         id: 'meals_planning',
         label: 'Meals Planning',
         domainId: 'meals',
-        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/meals-planning'],
-        toolPrefixes: ['fluent_', 'meals_'],
-        starterReadTools: ['fluent_get_context'],
-        detailReadTools: [
-          'meals_get_onboarding_calibration',
-          'meals_get_plan',
-          'meals_list_plan_history',
-          'meals_get_preferences',
-          'meals_get_inventory_summary',
-          'meals_list_recipes',
-        ],
+        guidanceResourceUris: [],
+        toolPrefixes: ['fluent_'],
+        starterReadTools: ['fluent_get_context', 'fluent_list_items', 'fluent_get_item'],
+        detailReadTools: ['fluent_get_shared_profile', 'fluent_list_evidence'],
         starterWriteTools: [
-          'meals_record_calibration_response',
-          'meals_generate_plan',
-          'meals_accept_plan_candidate',
-          'meals_generate_grocery_plan',
+          'fluent_save_recipe',
+          'fluent_update_recipe_patch',
+          'fluent_record_recipe_feedback',
+          'fluent_save_meal_plan',
+          'fluent_archive_item',
         ],
         whenToUse:
-          'Weekly planning, plan revision, setup/calibration, inferred food preference confirmation, or grocery-plan generation from an approved week. Start broad planning/currentness/"what Fluent knows" turns from fluent_get_context(domain="meals", intent="planning"); use meals_get_onboarding_calibration only for explicit setup/calibration detail or when vNext context is unavailable.',
+          'Meals planning, saved recipes, meal-plan reads, and explicit approved saves. Start broad planning and currentness from fluent_get_context(domain="meals", intent="planning").',
         domainReady: isReady('meals'),
       },
       {
         id: 'meals_shopping',
         label: 'Meals Shopping',
         domainId: 'meals',
-        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/meals-shopping'],
-        toolPrefixes: ['meals_'],
+        guidanceResourceUris: [],
+        toolPrefixes: ['fluent_'],
         starterReadTools: [
-          'meals_render_grocery_list_v2',
-          'meals_get_current_grocery_list',
-          'meals_get_grocery_plan',
-          'meals_prepare_order',
-          'meals_get_inventory_summary',
-          'meals_list_grocery_intents',
+          'fluent_get_context',
+          'fluent_list_items',
+          'fluent_get_item',
+          'fluent_render_surface',
+          'fluent_get_purchase_context',
+          'fluent_render_budgets_surface',
         ],
-        starterWriteTools: ['meals_upsert_grocery_plan_action', 'meals_update_inventory_batch', 'meals_upsert_grocery_intent'],
+        starterWriteTools: [
+          'fluent_apply_grocery_list_change',
+          'fluent_apply_grocery_shopping_result',
+          'fluent_set_budget_envelope',
+          'fluent_log_budget_spend',
+        ],
         whenToUse:
-          'Shopping, at-home checks, substitutions, receipt reconciliation, or the primary living grocery-list view. In ChatGPT / MCP Apps-style hosts and Claude MCP Apps-capable runs, start from meals_render_grocery_list_v2 for the richer Fluent surface; in Claude visualizer-only hosts, start from meals_get_current_grocery_list before host-native visuals; in Codex, OpenClaw, and generic plain MCP clients, default to canonical grocery data plus text. Pantry Dashboard is retired and should not be used for new flows.',
+          'The living grocery list, explicit list changes, shopping-result reconciliation, or the narrow meals-groceries budget envelope. Use fluent_render_surface only when the host can mount MCP Apps; otherwise answer from current structured data.',
         domainReady: isReady('meals'),
       },
       {
         id: 'meals_cooking',
         label: 'Meals Cooking',
         domainId: 'meals',
-        guidanceResourceUris: ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/meals-planning'],
-        toolPrefixes: ['meals_'],
-        starterReadTools: ['meals_get_today_context', 'meals_get_day_plan'],
-        starterWriteTools: ['meals_mark_meal_cooked', 'meals_log_feedback'],
-        whenToUse: 'Cooking today’s meals or recording meal outcomes.',
+        guidanceResourceUris: [],
+        toolPrefixes: ['fluent_'],
+        starterReadTools: ['fluent_list_items', 'fluent_get_item'],
+        detailReadTools: ['fluent_get_shared_profile'],
+        starterWriteTools: ['fluent_record_recipe_feedback'],
+        whenToUse: 'Reading a saved recipe for cooking or recording explicit recipe feedback.',
         domainReady: isReady('meals'),
       },
       {
         id: 'style',
         label: 'Style',
         domainId: 'style',
-        guidanceResourceUris: [
-          'fluent://guidance/routing',
-          'fluent://guidance/host-capabilities',
-          'fluent://guidance/style-purchase-analysis',
-          'fluent://guidance/style-shopping',
-          'fluent://guidance/style-enrichment',
-        ],
-        toolPrefixes: ['style_'],
+        guidanceResourceUris: [],
+        toolPrefixes: ['fluent_'],
         starterReadTools: [
-          'style_get_onboarding_calibration',
-          'style_get_context',
-          'style_list_descriptor_backlog',
-          'style_analyze_wardrobe',
-          'style_get_profile',
+          'fluent_get_context',
+          'fluent_list_items',
+          'fluent_get_item',
+          'fluent_get_media_bundle',
+          'fluent_list_evidence',
+          'fluent_get_purchase_context',
+          'fluent_render_style_closet_surface',
+          'fluent_render_budgets_surface',
         ],
         starterWriteTools: [
-          'style_record_calibration_response',
-          'style_add_starter_closet_item',
-          'style_update_profile',
-          'style_upsert_item_profile',
-          'style_upsert_item',
-          'style_archive_item',
-          'style_upsert_item_photos',
-          'style_set_item_product_image',
+          'fluent_update_style_item_patch',
+          'fluent_create_style_item',
+          'fluent_refresh_style_item_profile',
+          'fluent_set_style_item_image',
+          'fluent_archive_item',
+          'fluent_set_budget_envelope',
+          'fluent_log_budget_spend',
         ],
-        whenToUse: 'Closet reads, wardrobe analysis, purchase analysis, or style calibration.',
+        whenToUse: 'Owned closet reads and edits, host-grounded Style context, inspectable media, or the narrow style-clothing budget envelope. The closet renderer manages saved items; it does not make purchase verdicts.',
         domainReady: isReady('style'),
       },
     ],
@@ -1437,31 +1439,43 @@ function buildNextActions(input: {
   const intent = normalizeIntentKind(input.input.intent);
   const goal = normalizeNullableText(input.input.userGoal);
   const domainRecord = domain === 'unknown' || domain === 'core' ? null : input.domains.find((entry) => entry.domainId === domain);
-  const domainReady = domain === 'core' ? true : domain === 'unknown' ? null : Boolean(domainRecord && isDomainReady(domainRecord));
+  const domainReady = domain === 'core'
+    ? true
+    : domain === 'unknown'
+      ? null
+      : domain === 'health'
+        ? false
+        : Boolean(domainRecord && isDomainReady(domainRecord));
   const baseWarnings = buildHostWarnings(hostFamily);
   const writePolicy = 'Use write tools only from explicit user intent, including direct user requests, approved plans, or user-initiated widget actions.';
 
-  if (domainRecord && !domainReady) {
-    const actions: FluentRecommendedAction[] = [];
-    if (domainRecord.lifecycleState === 'available') {
-      actions.push({
-        kind: 'onboard',
-        reason: `${domain} is available but not enabled. Use only when the user wants to start ${domain}.`,
-        tool: 'fluent_enable_domain',
-      });
-    }
-    if (domainRecord.lifecycleState === 'enabled') {
-      actions.push({
-        kind: 'onboard',
-        reason: `${domain} is enabled but onboarding is not complete. Continue the domain-specific first-use flow.`,
-        tool: 'fluent_begin_domain_onboarding',
-      });
-    }
-    actions.push({
+  if (domain === 'health') {
+    const actions: FluentRecommendedAction[] = [{
       kind: 'read',
-      reason: 'Read domain lifecycle and onboarding state before deciding whether to continue setup.',
-      tool: 'fluent_list_domains',
-    });
+      reason: 'Health and Wellbeing are reserved in the public contract. Check current capabilities, then continue only from context the user provides.',
+      tool: 'fluent_get_capabilities',
+    }];
+
+    return {
+      domain,
+      domainReady: false,
+      guidanceResources: [],
+      hostProfile,
+      hostFamily,
+      primaryAction: actions[0]!,
+      recommendedActions: actions,
+      routingNotes: ['Do not claim Fluent has Health or Wellbeing tools, state, or medical authority.'],
+      warnings: [...baseWarnings, 'Health and Wellbeing are reserved and expose no domain tools in the public product.'],
+      writePolicy,
+    };
+  }
+
+  if ((domain === 'meals' || domain === 'style') && !domainReady) {
+    const actions: FluentRecommendedAction[] = [{
+      kind: 'read',
+      reason: `${domain} is not currently ready. Re-read the public capability state before attempting a domain workflow.`,
+      tool: 'fluent_get_capabilities',
+    }];
 
     return {
       domain,
@@ -1473,14 +1487,9 @@ function buildNextActions(input: {
       recommendedActions: actions,
       routingNotes: [
         `readyDomains currently contains: ${input.readyDomains.length ? input.readyDomains.join(', ') : 'none'}.`,
-        'Do not infer readiness from previous chat state; use Fluent capability state.',
+        'Do not infer readiness from prior chat state or recommend retired onboarding tools.',
       ],
-      warnings: [
-        ...baseWarnings,
-        ...(domainRecord.lifecycleState === 'disabled'
-          ? [`${domain} is disabled. Do not re-enable it unless the user explicitly asks.`]
-          : []),
-      ],
+      warnings: baseWarnings,
       writePolicy,
     };
   }
@@ -1503,9 +1512,7 @@ function buildNextActions(input: {
     routingNotes: [
       'Prefer summary reads before full reads.',
       'Use fluent_get_capabilities when readiness, host routing, or available domains are unclear.',
-      ...(hostFamily === 'chatgpt_app'
-        ? ['ChatGPT has no packaged Fluent skill, so prefer this next-action output and the guidance resources as the in-band operating manual.']
-        : ['Packaged skills may add host-specific orchestration, but MCP capability and resource state remain canonical.']),
+      'Only tools in the connected curated product profile may be recommended.',
     ],
     warnings: baseWarnings,
     writePolicy,
@@ -1521,12 +1528,40 @@ function readyDomainActions(input: {
   const goal = input.goal ?? '';
   const chatgpt = input.hostFamily === 'chatgpt_app';
 
+  if (isBudgetGoal(goal)) {
+    return [
+      {
+        kind: 'read',
+        reason: 'Read the matching meals-groceries or style-clothing envelope before presenting budget pressure or recording a change.',
+        tool: 'fluent_get_purchase_context',
+      },
+      ...(chatgpt
+        ? [{
+            kind: 'render' as const,
+            reason: 'Open the promoted budget-envelope surface when the host can mount MCP Apps.',
+            tool: 'fluent_render_budgets_surface' as const,
+          }]
+        : []),
+      ...(input.intent === 'write'
+        ? [{
+            kind: 'write' as const,
+            reason: /log|spent|purchase|bought/i.test(goal)
+              ? 'Record an explicit user-confirmed grocery or clothing spend only.'
+              : 'Set an explicit user-confirmed grocery or clothing envelope only.',
+            tool: (/log|spent|purchase|bought/i.test(goal)
+              ? 'fluent_log_budget_spend'
+              : 'fluent_set_budget_envelope') as FluentPublicToolName,
+          }]
+        : []),
+    ];
+  }
+
   if (input.domain === 'core' && isAccountStatusGoal(goal)) {
     return [
       {
         kind: 'read',
         reason:
-          'Use the account-status surface for account, access, billing-boundary, subscription, export, deletion, reactivation, support, or account-ready asks. Do not answer this with Home.',
+          'Use the account-status surface for account, access, billing-boundary, subscription, export, deletion, reactivation, support, or account-ready asks.',
         tool: 'fluent_get_account_status',
       },
       {
@@ -1542,22 +1577,21 @@ function readyDomainActions(input: {
       return [
         {
           kind: 'read',
-          reason:
-            'Start Meals setup/calibration from the compact read model so evidence, inferred signals, confirmed preferences, and decision readiness stay separate.',
-          tool: 'meals_get_onboarding_calibration',
+          reason: 'Read compact Meals setup context and currentness before asking for corrections or durable preferences.',
+          tool: 'fluent_get_context',
         },
         {
           kind: 'read',
-          reason:
-            'Use recipe-book learning for lightweight recipe discovery without turning one recipe reaction into a permanent household rule.',
-          tool: 'meals_get_recipe_book',
+          reason: 'Read confirmed shared facts separately from inferred or session-only setup details.',
+          tool: 'fluent_get_shared_profile',
         },
-        {
-          kind: 'write',
-          reason:
-            'Record only explicit household, safety, planning, grocery, or recipe-learning responses after the user confirms them.',
-          tool: 'meals_record_calibration_response',
-        },
+        ...(input.intent === 'write'
+          ? [{
+              kind: 'write' as const,
+              reason: 'Save only an explicit user-approved durable shared or Meals fact, then rely on read-after-write proof.',
+              tool: 'fluent_update_shared_profile_patch' as const,
+            }]
+          : []),
       ];
     }
     if (/grocery|shopping|shop|buy|pantry|cart|order|receipt|ingredient/i.test(goal)) {
@@ -1565,66 +1599,79 @@ function readyDomainActions(input: {
         chatgpt
           ? {
               kind: 'render',
-              reason: 'For ChatGPT/App SDK grocery-list-first prompts, open the rich grocery-list surface when available.',
-              tool: 'meals_render_grocery_list_v2',
+              reason: 'Open the promoted living grocery-list surface when the host can mount MCP Apps.',
+              tool: 'fluent_render_surface',
             }
           : {
               kind: 'read',
-              reason:
-                input.hostFamily === 'claude'
-                  ? 'For Claude grocery-list-first prompts, fetch the canonical current living list first, then render with visualize:show_widget when available; otherwise answer from that fresh data in text.'
-                  : 'For non-ChatGPT hosts, fetch the canonical current living grocery list and answer from that fresh data in text.',
-              tool: 'meals_get_current_grocery_list',
+              reason: 'Read the current living grocery-list item and answer from structured data in text.',
+              tool: 'fluent_list_items',
             },
         {
           kind: 'read',
-          reason: 'Use before any retailer execution or when the user asks what still needs to be bought right now.',
-          tool: 'meals_prepare_order',
+          reason: 'Read compact Meals context when planning state, freshness, or grocery provenance matters.',
+          tool: 'fluent_get_context',
         },
-        {
-          kind: 'read',
-          reason: 'Check current at-home grocery state before resolving uncertain grocery lines.',
-          tool: 'meals_get_inventory_summary',
-        },
+        ...(input.intent === 'write'
+          ? [{
+              kind: 'write' as const,
+              reason: /receipt|bought|purchased|shopped/i.test(goal)
+                ? 'Apply an explicit user-confirmed shopping result to the living list.'
+                : 'Apply an explicit user-approved grocery-list change.',
+              tool: (/receipt|bought|purchased|shopped/i.test(goal)
+                ? 'fluent_apply_grocery_shopping_result'
+                : 'fluent_apply_grocery_list_change') as FluentPublicToolName,
+            }]
+          : []),
       ];
     }
     if (/recipe|cook|make|ingredients|steps|card/i.test(goal)) {
       return [
         {
           kind: 'read',
-          reason: 'Read the saved Fluent recipe before answering from general cooking knowledge.',
-          tool: 'meals_get_recipe',
+          reason: 'Find the saved recipe by title or stable ID before relying on it.',
+          tool: 'fluent_list_items',
         },
-        chatgpt
-          ? {
-              kind: 'render',
-              reason: 'In ChatGPT/MCP Apps-style hosts, render the recipe card when the user is asking for the recipe itself.',
-              tool: 'meals_render_recipe_card',
-            }
-          : {
-              kind: 'read',
-              reason: 'Use text from the canonical recipe read in non-widget hosts.',
-              tool: 'meals_get_recipe',
-            },
+        {
+          kind: 'read',
+          reason: 'Read the exact saved recipe before deriving steps, ingredients, or grocery changes.',
+          tool: 'fluent_get_item',
+        },
+        ...(input.intent === 'write'
+          ? [{
+              kind: 'write' as const,
+              reason: /feedback|rating|liked|disliked|cooked/i.test(goal)
+                ? 'Record explicit recipe feedback without inventing a household preference.'
+                : /update|edit|change/i.test(goal)
+                  ? 'Patch an existing saved recipe after explicit approval.'
+                  : 'Save the recipe after explicit approval.',
+              tool: (/feedback|rating|liked|disliked|cooked/i.test(goal)
+                ? 'fluent_record_recipe_feedback'
+                : /update|edit|change/i.test(goal)
+                  ? 'fluent_update_recipe_patch'
+                  : 'fluent_save_recipe') as FluentPublicToolName,
+            }]
+          : []),
       ];
     }
     return [
       {
         kind: 'read',
-        reason:
-          'Start broad Meals planning from the vNext context packet so confirmed facts, inferred signals, stale/missing currentness, evidence gaps, and write boundaries stay together.',
+        reason: 'Start broad Meals planning from the compact context packet so facts, freshness, evidence gaps, and write boundaries stay together.',
         tool: 'fluent_get_context',
       },
       {
         kind: 'read',
-        reason: 'Use only if the user asks for current or target-week plan detail beyond the vNext context packet.',
-        tool: 'meals_get_plan',
+        reason: 'List the current saved meal-plan item when the user asks for plan detail.',
+        tool: 'fluent_list_items',
       },
-      {
-        kind: input.intent === 'plan' || /plan|week|schedule|dinner/i.test(goal) ? 'write' : 'read',
-        reason: 'Generate a candidate only when the user is clearly planning or revising a week.',
-        tool: 'meals_generate_plan',
-      },
+      ...(input.intent === 'write' || input.intent === 'plan'
+        ? [{
+            kind: 'write' as const,
+            reason: 'Save a meal plan only after the user explicitly approves the plan to persist.',
+            tool: 'fluent_save_meal_plan' as const,
+          }]
+        : []),
     ];
   }
 
@@ -1633,121 +1680,82 @@ function readyDomainActions(input: {
       return [
         {
           kind: 'read',
-          reason:
-            'Start Style setup/calibration from the compact read model before using broad closet context or wardrobe analysis.',
-          tool: 'style_get_onboarding_calibration',
+          reason: 'Read current Style closet/setup context before proposing any durable item changes.',
+          tool: 'fluent_get_context',
         },
-        chatgpt
-          ? {
-              kind: 'render',
-              reason:
-                'In ChatGPT/MCP Apps-style hosts, render the Style setup surface only after the calibration read model has run.',
-              tool: 'style_show_setup_calibration_widget',
-            }
-          : {
-              kind: 'read',
-              reason:
-                'For non-widget or text-first hosts, answer from the calibration read model instead of calling the setup widget.',
-              tool: 'style_get_onboarding_calibration',
-            },
         {
-          kind: 'write',
-          reason:
-            'Record explicit setup corrections or starter closet evidence only after the user provides clear confirmation.',
-          tool: 'style_record_calibration_response',
+          kind: 'read',
+          reason: 'List owned Style items to ground setup in the actual saved closet.',
+          tool: 'fluent_list_items',
         },
+        ...(chatgpt
+          ? [{
+              kind: 'render' as const,
+              reason: 'Open the promoted Style Closet Manager when the host can mount MCP Apps.',
+              tool: 'fluent_render_style_closet_surface' as const,
+            }]
+          : []),
+        ...(input.intent === 'write'
+          ? [{
+              kind: 'write' as const,
+              reason: 'Create a starter closet item only after explicit user approval of the host-produced profile.',
+              tool: 'fluent_create_style_item' as const,
+            }]
+          : []),
       ];
     }
-    if (/buy|purchase|link|product|return|keep|closet|wardrobe|style|shoe|shirt|pants|jacket|sweater/i.test(goal)) {
-      const productPageEvidenceActions: FluentRecommendedAction[] = chatgpt
-        ? []
-        : [
-            {
-              kind: 'read',
-              reason:
-                'For product URLs without usable candidate images yet, extract direct public product-page image references before requesting the vision packet.',
-              tool: 'style_extract_purchase_page_evidence',
-            },
-          ];
+    if (/buy|purchase|should i|return|keep|candidate|product|afford|price|cost/i.test(goal)) {
       return [
         {
           kind: 'read',
-          reason: 'First hop for purchase questions and product URLs; returns evidence requirements before any widget render.',
-          tool: 'style_prepare_purchase_analysis',
+          reason: 'Read compact Style purchase context first; the host owns visual judgment and the final verdict.',
+          tool: 'fluent_get_context',
         },
-        ...productPageEvidenceActions,
         {
           kind: 'read',
-          reason: 'Retrieve model-visible candidate and closet-comparator images for host visual inspection after purchase preparation.',
-          tool: 'style_get_purchase_vision_packet',
+          reason: 'Fetch a host-provided direct candidate image, upload, or saved closet media when visual evidence is needed. Never pass a product-page URL for extraction; ask for a direct image when pixels are unavailable.',
+          tool: 'fluent_get_media_bundle',
         },
-        {
-          kind: 'write',
-          reason: 'Submit concrete host visual observations from inspected images and receive the render-ready evidence receipt.',
-          tool: 'style_submit_purchase_visual_observations',
-        },
-        chatgpt
-          ? {
-              kind: 'render',
-              reason: 'Use as the final ChatGPT/App SDK widget presentation step only after visual observations are accepted.',
-              tool: 'style_show_purchase_analysis_widget',
-            }
-          : {
-              kind: 'read',
-              reason: 'Use structured non-widget presentation data after evidence is ready and answer in text for non-widget hosts.',
-              tool: 'style_render_purchase_analysis',
-            },
       ];
     }
     return [
       {
         kind: 'read',
-        reason: 'Start broad Style asks from closet-derived context.',
-        tool: 'style_get_context',
+        reason: 'Start broad Style asks from compact closet context.',
+        tool: 'fluent_get_context',
       },
       {
         kind: 'read',
-        reason: 'Use wardrobe-level derived strengths, gaps, replacements, and buy-next guidance.',
-        tool: 'style_analyze_wardrobe',
+        reason: 'List the saved closet items relevant to the user request.',
+        tool: 'fluent_list_items',
       },
+      ...(chatgpt
+        ? [{
+            kind: 'render' as const,
+            reason: 'Open Style Closet Manager for saved-item browsing or management, never for a purchase verdict.',
+            tool: 'fluent_render_style_closet_surface' as const,
+          }]
+        : [{
+            kind: 'read' as const,
+            reason: 'Use inspectable saved-item media when the answer depends on owned closet images.',
+            tool: 'fluent_get_media_bundle' as const,
+          }]),
+      ...(input.intent === 'write'
+        ? [{
+            kind: 'write' as const,
+            reason: 'Use the narrow Style mutation matching the explicit user-approved change.',
+            tool: styleWriteToolForGoal(goal),
+          }]
+        : []),
     ];
   }
 
   if (input.domain === 'health') {
-    if (/today|now|workout/i.test(goal)) {
-      return [
-        {
-          kind: 'read',
-          reason: 'Resolve today from the active block rather than regenerating a week.',
-          tool: 'health_get_today_context',
-        },
-        {
-          kind: 'read',
-          reason: 'Use the active block for continuity when today needs context.',
-          tool: 'health_get_active_block',
-        },
-        {
-          kind: 'write',
-          reason: 'Log completion only when the user explicitly says they completed, skipped, or partially completed a workout.',
-          tool: 'health_log_workout',
-        },
-      ];
-    }
     return [
       {
         kind: 'read',
-        reason: 'Start Health from current goals, block state, and recent activity.',
-        tool: 'health_get_context',
-      },
-      {
-        kind: 'read',
-        reason: 'Project the current week from the active block.',
-        tool: 'health_get_block_projection',
-      },
-      {
-        kind: input.intent === 'plan' ? 'write' : 'read',
-        reason: 'Create or revise a block only when the user clearly wants training planning.',
-        tool: 'health_upsert_block',
+        reason: 'Health and Wellbeing are reserved. Check current capabilities and continue only from user-provided context.',
+        tool: 'fluent_get_capabilities',
       },
     ];
   }
@@ -1755,44 +1763,39 @@ function readyDomainActions(input: {
   return [
     {
       kind: 'read',
-      reason: 'Start with Fluent Home when the user asks generally what Fluent knows or what to do next.',
-      tool: 'fluent_get_home',
+      reason: 'Start with the current public capability profile when the request is broad or routing is unclear.',
+      tool: 'fluent_get_capabilities',
     },
     {
       kind: 'read',
-      reason: 'Fetch domain readiness, contract version, and discovery groups.',
-      tool: 'fluent_get_capabilities',
+      reason: 'Read confirmed shared profile context when the user asks broadly what Fluent knows.',
+      tool: 'fluent_get_shared_profile',
     },
   ];
+}
+
+function isBudgetGoal(goal: string): boolean {
+  return /\b(budget|envelope|spend|spending)\b/i.test(goal);
+}
+
+function styleWriteToolForGoal(goal: string): FluentPublicToolName {
+  if (/\b(add|create|save|new)\b/i.test(goal)) return 'fluent_create_style_item';
+  if (/\b(archive|remove|sold|donat(?:e|ed)|return(?:ed)?|no longer)\b/i.test(goal)) return 'fluent_archive_item';
+  if (/\b(photo|image|picture)\b/i.test(goal)) return 'fluent_set_style_item_image';
+  if (/\b(refresh|re-?analy[sz]e)\b/i.test(goal)) return 'fluent_refresh_style_item_profile';
+  return 'fluent_update_style_item_patch';
 }
 
 function isChatGptAppDomain(value: string): value is 'health' | 'meals' | 'style' {
   return value === 'health' || value === 'meals' || value === 'style';
 }
 
-function guidanceForDomain(domain: FluentNextActionDomain): string[] {
-  switch (domain) {
-    case 'health':
-      return ['fluent://guidance/routing', 'fluent://guidance/host-capabilities', 'fluent://guidance/health-blocks'];
-    case 'meals':
-      return [
-        'fluent://guidance/routing',
-        'fluent://guidance/host-capabilities',
-        'fluent://guidance/meals-planning',
-        'fluent://guidance/meals-shopping',
-      ];
-    case 'style':
-      return [
-        'fluent://guidance/routing',
-        'fluent://guidance/host-capabilities',
-        'fluent://guidance/style-purchase-analysis',
-        'fluent://guidance/style-shopping',
-        'fluent://guidance/style-enrichment',
-      ];
-    case 'core':
-    case 'unknown':
-      return ['fluent://guidance/routing', 'fluent://guidance/host-capabilities'];
-  }
+function isPublicProductDomain(value: string): value is 'meals' | 'style' {
+  return value === 'meals' || value === 'style';
+}
+
+function guidanceForDomain(_domain: FluentNextActionDomain): string[] {
+  return [];
 }
 
 function inferDomainFromGoal(goal: string | null | undefined): FluentNextActionDomain {
@@ -1861,12 +1864,12 @@ function normalizeIntentKind(value: FluentIntentKind | null | undefined): Fluent
 function buildHostWarnings(hostFamily: FluentHostFamily): string[] {
   if (hostFamily === 'chatgpt_app') {
     return [
-      'ChatGPT does not receive packaged Fluent skills, so prefer fluent_get_next_actions, toolDiscovery, and guidance resources when routing is unclear.',
+      'ChatGPT does not receive packaged Fluent skills; use only the curated tools exposed by the current connection.',
     ];
   }
   if (hostFamily === 'claude') {
     return [
-      'Claude visualizer-only runs should prefer canonical Fluent data plus Claude-native rendering; Claude MCP Apps-capable runs may use proven Fluent ui:// resources such as meals_render_grocery_list_v2 for Grocery.',
+      'Claude should prefer current Fluent data plus native presentation; use a promoted Fluent render adapter only when the host visibly supports MCP Apps.',
     ];
   }
   if (hostFamily === 'openclaw' || hostFamily === 'codex' || hostFamily === 'generic_mcp') {

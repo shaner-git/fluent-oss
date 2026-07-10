@@ -63,10 +63,11 @@ export async function purgeCloudAccountData(
   const domainEventActorEmail = email ?? emailNormalized;
 
   const r2Keys = await collectArtifactR2Keys(bindings, { tenantId, userId });
-  if (bindings.artifacts.delete) {
-    for (const key of r2Keys) {
-      await bindings.artifacts.delete(key);
-    }
+  if (r2Keys.length > 0 && !bindings.artifacts.delete) {
+    throw new Error('Account purge cannot remove owned artifact objects because blob deletion is unavailable.');
+  }
+  for (const key of r2Keys) {
+    await bindings.artifacts.delete!(key);
   }
 
   const statements = [
@@ -74,35 +75,30 @@ export async function purgeCloudAccountData(
       ? bindings.db
           .prepare(
             `DELETE FROM artifacts
-             WHERE id IN (
+             WHERE tenant_id = ?
+                OR (tenant_id IS NULL AND id IN (
                SELECT artifact_id FROM style_item_photos WHERE tenant_id = ? AND artifact_id IS NOT NULL
-             )`,
+             ))`,
           )
-          .bind(tenantId)
+          .bind(tenantId, tenantId)
       : null,
     hasExportSubject(userId, tenantId)
       ? bindings.db
           .prepare(
             `DELETE FROM artifacts
-             WHERE id IN (
-               SELECT artifact_id
+             WHERE EXISTS (
+               SELECT 1
                FROM fluent_data_exports
                WHERE ((? IS NOT NULL AND user_id = ?) OR (? IS NOT NULL AND tenant_id = ?))
-                 AND artifact_id IS NOT NULL
-             )
-                OR (entity_type = 'fluent_data_export' AND entity_id IN (
-                  SELECT id
-                  FROM fluent_data_exports
-                  WHERE ((? IS NOT NULL AND user_id = ?) OR (? IS NOT NULL AND tenant_id = ?))
-                ))
-                OR r2_key IN (
-                  SELECT artifact_r2_key
-                  FROM fluent_data_exports
-                  WHERE ((? IS NOT NULL AND user_id = ?) OR (? IS NOT NULL AND tenant_id = ?))
-                    AND artifact_r2_key IS NOT NULL
-                )`,
+                 AND (artifacts.tenant_id IS NULL OR artifacts.tenant_id = fluent_data_exports.tenant_id)
+                 AND (
+                   artifacts.id = fluent_data_exports.artifact_id
+                   OR (artifacts.entity_type = 'fluent_data_export' AND artifacts.entity_id = fluent_data_exports.id)
+                   OR artifacts.r2_key = fluent_data_exports.artifact_r2_key
+                 )
+             )`,
           )
-          .bind(userId, userId, tenantId, tenantId, userId, userId, tenantId, tenantId, userId, userId, tenantId, tenantId)
+          .bind(userId, userId, tenantId, tenantId)
       : null,
     hasExportSubject(userId, tenantId)
       ? bindings.db
@@ -211,10 +207,11 @@ async function collectArtifactR2Keys(
       .prepare(
         `SELECT DISTINCT artifacts.r2_key
          FROM artifacts
-         INNER JOIN style_item_photos ON style_item_photos.artifact_id = artifacts.id
-         WHERE style_item_photos.tenant_id = ? AND artifacts.r2_key IS NOT NULL`,
+         LEFT JOIN style_item_photos ON style_item_photos.artifact_id = artifacts.id
+         WHERE (artifacts.tenant_id = ? OR (artifacts.tenant_id IS NULL AND style_item_photos.tenant_id = ?))
+           AND artifacts.r2_key IS NOT NULL`,
       )
-      .bind(subject.tenantId)
+      .bind(subject.tenantId, subject.tenantId)
       .all<{ r2_key: string | null }>();
     for (const row of styleRows.results ?? []) {
       if (row.r2_key) {
@@ -236,6 +233,7 @@ async function collectArtifactR2Keys(
          INNER JOIN fluent_data_exports ON fluent_data_exports.artifact_id = artifacts.id
          WHERE ((? IS NOT NULL AND fluent_data_exports.user_id = ?)
             OR (? IS NOT NULL AND fluent_data_exports.tenant_id = ?))
+           AND (artifacts.tenant_id IS NULL OR artifacts.tenant_id = fluent_data_exports.tenant_id)
            AND artifacts.r2_key IS NOT NULL`,
       )
       .bind(

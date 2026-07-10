@@ -156,11 +156,11 @@ export async function buildStyleClosetStructuredContent(
   const pagedItems = idNarrowed ? statusItems : statusItems.slice(offset, offset + limit);
   const nextCursor = idNarrowed ? null : offset + limit < statusItems.length ? String(offset + limit) : null;
   // Fetch BOTH photo roles SERVER-SIDE inside this render handler, which is already authorized for the
-  // closet's read scope (meals OR style — see requireAnyScope at the render tool). The product photo is
+  // Style closet read scope. The product photo is
   // the tile/display image; the worn/fit photo (when one exists and is distinct) rides along in the
   // payload for the flip-to-detail card. Doing it here rather than via a widget-initiated
-  // fluent_get_media_bundle call keeps the detail card working under a meals-only closet token and needs
-  // no widget-callable read tool. Only items that actually have a fit photo trigger the second fetch.
+  // fluent_get_media_bundle call keeps the detail card self-contained and needs no widget-callable read
+  // tool. Only items that actually have a fit photo trigger the second fetch.
   const itemsWithFitPhoto = pagedItems.filter((item) => item.photos.some(isStyleFitPhoto));
   const [mediaBundle, fitBundle] = await Promise.all([
     style.getVisualBundle({

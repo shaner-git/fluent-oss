@@ -1,415 +1,29 @@
 import {
-  MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_BUCKET_ACTION_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_CHECKBOX_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_DONE_SYNC_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_FALLBACK_WRITE_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_HYDRATION_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_MCP_APPS_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PANTRY_UNDO_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PUBLIC_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_STALE_SOURCE_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_TRANSPORT_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_BRIDGE_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_LEGACY_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_MULTIFRAME_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
-  MEALS_GROCERY_SMOKE_TEMPLATE_URI,
-} from './domains/meals/grocery-list';
-import { BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI } from './domains/budgets/envelope-setup';
-import { MEALS_PANTRY_DASHBOARD_PREVIOUS_TEMPLATE_URI, MEALS_PANTRY_DASHBOARD_TEMPLATE_URI } from './domains/meals/pantry-dashboard';
-import {
-  MEALS_RECIPE_CARD_CACHED_TEMPLATE_URI,
-  MEALS_RECIPE_CARD_LEGACY_PREVIOUS_TEMPLATE_URI,
-  MEALS_RECIPE_CARD_PREVIOUS_TEMPLATE_URI,
-  MEALS_RECIPE_CARD_TEMPLATE_URI,
-} from './domains/meals/recipe-card';
-import {
-  STYLE_PURCHASE_ANALYSIS_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_CACHED_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_BRIDGE_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_COMPARISON_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_COMBINED_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_DECISION_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_EDITORIAL_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_FRAMED_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_HUMAN_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_HYDRATION_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_IMAGE_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_JUDGMENT_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_LEGACY_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_MCP_APPS_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_NATIVE_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_PHOTO_READ_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_SECONDARY_ACTION_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_TITLE_PREVIOUS_TEMPLATE_URI,
-} from './domains/style/purchase-analysis';
-import { STYLE_CLOSET_PREVIOUS_TEMPLATE_URI, STYLE_CLOSET_TEMPLATE_URI, STYLE_CLOSET_V2_TEMPLATE_URI, STYLE_CLOSET_V3_TEMPLATE_URI, STYLE_CLOSET_V4_TEMPLATE_URI, STYLE_CLOSET_V5_TEMPLATE_URI, STYLE_CLOSET_V6_TEMPLATE_URI } from './domains/style/closet-manager';
-import { STYLE_SETUP_CALIBRATION_TEMPLATE_URI } from './domains/style/onboarding-calibration';
-import {
-  FLUENT_HOME_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_AT_HOME_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_CACHED_TEMPLATE_URI,
-  FLUENT_HOME_CANARY_TEMPLATE_URI,
-  FLUENT_HOME_COMPAT_TEMPLATE_URI,
-  FLUENT_HOME_DIRECT_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_LEGACY_TEMPLATE_URI,
-  FLUENT_HOME_LIVE_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_MODAL_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_RECENT_TEMPLATE_URI,
-  FLUENT_HOME_REVIEW_TEMPLATE_URI,
-  FLUENT_HOME_TEMPLATE_URI,
-} from './fluent-home';
-import { fluentVNextGeneratedHostProfile } from './vnext-contract';
+  FLUENT_PUBLIC_CONTRACT_VERSION,
+  FLUENT_PUBLIC_OPTIONAL_CAPABILITIES,
+  FLUENT_PUBLIC_PROFILE_POLICY,
+  FLUENT_PUBLIC_RENDER_ADAPTERS,
+  FLUENT_PUBLIC_RESOURCE_URIS,
+  FLUENT_PUBLIC_TOOL_NAMES,
+  FLUENT_PUBLIC_WRITE_TOOL_NAMES,
+  fluentPublicProfile,
+} from './public-profile';
 
-export const FLUENT_CONTRACT_VERSION = '2026-06-01.fluent-core-v1.85';
+export const FLUENT_CONTRACT_VERSION = FLUENT_PUBLIC_CONTRACT_VERSION;
 export const FLUENT_MINIMUM_SUPPORTED_CONTRACT_VERSION = FLUENT_CONTRACT_VERSION;
-
-export const FLUENT_GUIDANCE_RESOURCE_URIS = [
-  'fluent://guidance/routing',
-  'fluent://guidance/host-capabilities',
-  'fluent://guidance/meals-planning',
-  'fluent://guidance/meals-shopping',
-  'fluent://guidance/style-purchase-analysis',
-  'fluent://guidance/style-shopping',
-  'fluent://guidance/style-enrichment',
-  'fluent://guidance/style-onboarding',
-  'fluent://guidance/health-blocks',
-] as const;
-
-export const FLUENT_RESOURCE_URIS = [
-  'fluent://core/capabilities',
-  'fluent://core/account-status',
-  'fluent://core/profile',
-  'fluent://core/domains',
-  ...FLUENT_GUIDANCE_RESOURCE_URIS,
-  FLUENT_HOME_LEGACY_TEMPLATE_URI,
-  FLUENT_HOME_COMPAT_TEMPLATE_URI,
-  FLUENT_HOME_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_RECENT_TEMPLATE_URI,
-  FLUENT_HOME_CACHED_TEMPLATE_URI,
-  FLUENT_HOME_REVIEW_TEMPLATE_URI,
-  FLUENT_HOME_CANARY_TEMPLATE_URI,
-  FLUENT_HOME_LIVE_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_DIRECT_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_MODAL_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_AT_HOME_PREVIOUS_TEMPLATE_URI,
-  FLUENT_HOME_TEMPLATE_URI,
-  'fluent://health/preferences',
-  'fluent://health/context',
-  'fluent://health/today',
-  'fluent://health/active-block',
-  'fluent://health/block-projection',
-  'fluent://health/review-context',
-  'fluent://health/blocks/{block_id}',
-  'fluent://health/goals',
-  'fluent://meals/current-plan',
-  'fluent://meals/inventory',
-  'fluent://meals/preferences',
-  'fluent://meals/plans/{week_start}',
-  'fluent://meals/recipes/{recipe_id}',
-  'fluent://meals/grocery-plan/{week_start}',
-  'fluent://meals/confirmed-order-sync/{retailer}/{retailer_order_id}',
-  MEALS_RECIPE_CARD_CACHED_TEMPLATE_URI,
-  MEALS_RECIPE_CARD_LEGACY_PREVIOUS_TEMPLATE_URI,
-  MEALS_RECIPE_CARD_PREVIOUS_TEMPLATE_URI,
-  MEALS_RECIPE_CARD_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_LIVE_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_HYDRATION_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_MCP_APPS_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_TRANSPORT_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_CHECKBOX_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_FALLBACK_WRITE_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PUBLIC_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_DONE_SYNC_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PANTRY_UNDO_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_STALE_SOURCE_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_BUCKET_ACTION_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_LEGACY_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_PREVIOUS_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_BRIDGE_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_MULTIFRAME_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI,
-  BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
-  MEALS_PANTRY_DASHBOARD_PREVIOUS_TEMPLATE_URI,
-  MEALS_PANTRY_DASHBOARD_TEMPLATE_URI,
-  'fluent://style/profile',
-  'fluent://style/context',
-  'fluent://style/onboarding-calibration',
-  'fluent://style/items',
-  'fluent://style/items/{item_id}',
-  'fluent://style/item-profiles/{item_id}',
-  'fluent://style/item-provenance/{item_id}',
-  STYLE_PURCHASE_ANALYSIS_LEGACY_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_CACHED_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_IMAGE_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_HUMAN_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_COMBINED_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_BRIDGE_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_ACTIONS_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_FRAMED_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_COMPARISON_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_EDITORIAL_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_TITLE_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_PHOTO_READ_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_DECISION_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_SECONDARY_ACTION_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_HYDRATION_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_NATIVE_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_MCP_APPS_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_JUDGMENT_PREVIOUS_TEMPLATE_URI,
-  STYLE_PURCHASE_ANALYSIS_TEMPLATE_URI,
-  STYLE_CLOSET_PREVIOUS_TEMPLATE_URI,
-  STYLE_CLOSET_V2_TEMPLATE_URI,
-  STYLE_CLOSET_V3_TEMPLATE_URI,
-  STYLE_CLOSET_V4_TEMPLATE_URI,
-  STYLE_CLOSET_V5_TEMPLATE_URI,
-  STYLE_CLOSET_V6_TEMPLATE_URI,
-  STYLE_CLOSET_TEMPLATE_URI,
-  STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
-] as const;
-
-export const FLUENT_RENDER_ADAPTER_TOOL_NAMES: readonly string[] = [
-  'fluent_render_surface',
-  'fluent_render_budgets_surface',
-  'fluent_render_style_closet_surface',
-];
-
-export const FLUENT_TOOL_NAMES = [
-  'fluent_get_capabilities',
-  'fluent_get_account_status',
-  'fluent_get_home',
-  'fluent_get_next_actions',
-  'fluent_get_profile',
-  'fluent_get_context',
-  'fluent_get_shared_profile',
-  'fluent_list_items',
-  'fluent_get_item',
-  'fluent_list_evidence',
-  'fluent_get_media_bundle',
-  'fluent_update_shared_profile_patch',
-  'fluent_save_recipe',
-  'fluent_update_recipe_patch',
-  'fluent_record_recipe_feedback',
-  'fluent_save_meal_plan',
-  'fluent_apply_grocery_list_change',
-  'fluent_apply_grocery_shopping_result',
-  'fluent_get_purchase_context',
-  'fluent_set_budget_envelope',
-  'fluent_log_budget_spend',
-  'fluent_render_surface',
-  'fluent_render_budgets_surface',
-  'fluent_render_style_closet_surface',
-  'fluent_update_style_item_patch',
-  'fluent_create_style_item',
-  'fluent_refresh_style_item_profile',
-  'fluent_set_style_item_image',
-  'fluent_upsert_item',
-  'fluent_archive_item',
-  'fluent_record_event',
-  'fluent_render_surface',
-  'fluent_update_profile',
-  'fluent_list_domains',
-  'fluent_enable_domain',
-  'fluent_disable_domain',
-  'fluent_begin_domain_onboarding',
-  'fluent_complete_domain_onboarding',
-  'health_get_preferences',
-  'health_update_preferences',
-  'health_get_context',
-  'health_get_today_context',
-  'health_get_review_context',
-  'health_get_active_block',
-  'health_get_block',
-  'health_get_block_projection',
-  'health_list_goals',
-  'health_upsert_goal',
-  'health_upsert_block',
-  'health_record_block_review',
-  'health_list_workout_logs',
-  'health_log_workout',
-  'health_list_body_metrics',
-  'health_log_body_metric',
-  'meals_list_tools',
-  'meals_get_plan',
-  'meals_list_plan_history',
-  'meals_get_day_plan',
-  'meals_get_today_context',
-  'meals_get_recipe',
-  'meals_render_recipe_card',
-  'meals_render_pantry_dashboard',
-  'meals_render_grocery_list_v2',
-  'meals_create_recipe',
-  'meals_list_recipes',
-  'meals_get_onboarding_calibration',
-  'meals_record_calibration_response',
-  'meals_get_recipe_book',
-  'meals_apply_recipe_book_action',
-  'meals_get_preferences',
-  'meals_update_preferences',
-  'meals_upsert_plan',
-  'meals_generate_plan',
-  'meals_accept_plan_candidate',
-  'meals_get_inventory',
-  'meals_get_inventory_summary',
-  'meals_get_meal_memory',
-  'meals_list_feedback',
-  'fluent_list_domain_events',
-  'meals_generate_grocery_plan',
-  'meals_get_current_grocery_list',
-  'meals_get_grocery_plan',
-  'meals_prepare_order',
-  'meals_patch_recipe',
-  'meals_log_feedback',
-  'meals_mark_meal_cooked',
-  'meals_update_inventory',
-  'meals_delete_inventory_item',
-  'meals_update_inventory_batch',
-  'meals_record_plan_review',
-  'meals_list_grocery_plan_actions',
-  'meals_upsert_grocery_plan_action',
-  'meals_delete_grocery_plan_action',
-  'meals_list_grocery_intents',
-  'meals_upsert_grocery_intent',
-  'meals_delete_grocery_intent',
-  'meals_apply_pantry_dashboard_action',
-  'style_get_profile',
-  'style_update_profile',
-  'style_get_context',
-  'style_get_onboarding_calibration',
-  'style_show_setup_calibration_widget',
-  'style_record_calibration_response',
-  'style_add_starter_closet_item',
-  'style_list_descriptor_backlog',
-  'style_list_evidence_gaps',
-  'style_analyze_wardrobe',
-  'style_list_items',
-  'style_get_item',
-  'style_get_item_profile',
-  'style_get_item_provenance',
-  'style_upsert_item',
-  'style_archive_item',
-  'style_upsert_item_profile',
-  'style_upsert_item_photos',
-  'style_set_item_product_image',
-  'style_extract_purchase_page_evidence',
-  'style_prepare_purchase_analysis',
-  'style_get_purchase_vision_packet',
-  'style_submit_purchase_visual_observations',
-  'style_analyze_purchase',
-  'style_render_purchase_analysis',
-  'style_show_purchase_analysis_widget',
-  'style_apply_purchase_analysis_action',
-  'style_get_visual_bundle',
-] as const;
-
-export const FLUENT_OPTIONAL_CAPABILITIES = [
-  'structured_content',
-  'grocery_intents',
-  'domain_events',
-  'profile_resources',
-  'meal_preferences',
-  'plan_history',
-  'grocery_plan',
-  'current_grocery_list',
-  'plan_generation',
-  'calendar_aware_planning',
-  'grocery_plan_actions',
-  'inventory_batch_updates',
-  'inventory_hard_delete',
-  'grocery_order_preflight',
-  'grocery_pantry_sufficiency_confirmation',
-  'grocery_purchase_carry_forward',
-  'meals_setup_calibration',
-  'confirmed_order_sync',
-  'tool_discovery_hints',
-  'runtime_guidance_resources',
-  'next_action_routing',
-  'host_profiles',
-  'tool_list_fallback',
-  'fluent_home',
-  'fluent_home_widget',
-  'ingredient_form_groups',
-  'recipe_card_widget',
-  'pantry_dashboard_widget',
-  'grocery_list_widget_v2',
-  'style_profile',
-  'style_context',
-  'style_setup_calibration',
-  'style_setup_calibration_widget',
-  'style_purchase_analysis',
-  'style_purchase_analysis_widget',
-  'style_onboarding_summary',
-  'style_media_roles',
-  'style_media_delivery',
-  'style_visual_bundle',
-  'style_item_status',
-  'style_item_profile_writes',
-  'style_item_provenance',
-  'style_evidence_gaps',
-  'style_descriptor_backlog',
-  'style_wardrobe_analysis',
-  'style_descriptor_enrichment',
-  'style_comparator_identity',
-  'style_comparator_coverage',
-  'health_preferences',
-  'health_block_programming',
-  'health_today_resolution',
-  'health_block_reviews',
-  'health_workout_logging',
-  'health_body_metrics',
-  'account_status_surface',
-] as const;
-
-export const FLUENT_TOOL_ALIASES = [
-  {
-    canonicalTool: 'meals_render_recipe_card',
-    name: 'meals_show_recipe',
-    note:
-      'Preferred public runtime alias for ChatGPT/App SDK recipe-opening prompts. The frozen contract keeps meals_render_recipe_card as the canonical tool name.',
-  },
-] as const;
-
-export const FLUENT_DEV_TOOL_NAMES = [
-  'meals_render_grocery_widget_smoke',
-] as const;
-
-export const FLUENT_DEV_RESOURCE_URIS = [
-  MEALS_GROCERY_SMOKE_TEMPLATE_URI,
-] as const;
-
-export const FLUENT_CHATGPT_APP_WRITE_TOOL_NAMES = [
-  'fluent_update_shared_profile_patch',
-  'fluent_save_recipe',
-  'fluent_update_recipe_patch',
-  'fluent_record_recipe_feedback',
-  'fluent_save_meal_plan',
-  'fluent_apply_grocery_list_change',
-  'fluent_apply_grocery_shopping_result',
-  'fluent_set_budget_envelope',
-  'fluent_log_budget_spend',
-  'fluent_update_style_item_patch',
-  'fluent_create_style_item',
-  'fluent_refresh_style_item_profile',
-  'fluent_set_style_item_image',
-  'fluent_archive_item',
-] as const;
-
+export const FLUENT_TOOL_NAMES = FLUENT_PUBLIC_TOOL_NAMES;
+export const FLUENT_RESOURCE_URIS = FLUENT_PUBLIC_RESOURCE_URIS;
+export const FLUENT_RENDER_ADAPTER_TOOL_NAMES = FLUENT_PUBLIC_RENDER_ADAPTERS;
+export const FLUENT_OPTIONAL_CAPABILITIES = FLUENT_PUBLIC_OPTIONAL_CAPABILITIES;
+export const FLUENT_CHATGPT_APP_WRITE_TOOL_NAMES = FLUENT_PUBLIC_WRITE_TOOL_NAMES;
 export const FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES = [] as const;
+
+// Runtime guidance from retired generations is intentionally not part of the
+// launch contract. Packaged host skills provide the current routing guidance.
+export const FLUENT_GUIDANCE_RESOURCE_URIS: readonly string[] = [];
+export const FLUENT_TOOL_ALIASES = [] as const;
+export const FLUENT_DEV_TOOL_NAMES = [] as const;
+export const FLUENT_DEV_RESOURCE_URIS = [] as const;
 
 export const FLUENT_CHATGPT_APP_PROFILE = {
   accountLinks: {
@@ -420,28 +34,19 @@ export const FLUENT_CHATGPT_APP_PROFILE = {
     signIn: '/sign-in',
   },
   degradedDomainPolicy:
-    'Expose account helpers for every connected account; expose Meals and Style surfaces only when the matching domain is ready.',
+    'Expose account helpers for every connected account; expose Meals and Style behavior only when the matching domain is ready.',
   excludedSurfacePolicy: [
-    'internal maintenance workflows',
-    'engineering diagnostics',
-    'raw export/deletion internals',
-    'Stripe webhook/billing internals',
-    'grocery checkout/cart automation',
-    'Home dashboard',
-    'widgets outside the promoted Grocery List, Budgets Envelope Setup, Style Purchase Analysis, and Style Closet Manager render adapters',
-    'Recipe Card widget',
-    'Pantry Dashboard product surface',
-    'legacy Style Purchase widgets and any Fluent-owned visual verdict flow',
-    'Health and Wellbeing tools until the product surface is redesigned',
-    'generic item upsert/event writes until their domain-specific schemas survive zero-based host review',
-    'product-page extraction',
-    'experimental preview surfaces',
-    'raw IDs/logs/traces',
+    'Health and Wellbeing until a separately reviewed public contract exists',
+    'Home dashboards and retired domain-specific tools',
+    'browser, retailer, cart, checkout, and product-page extraction',
+    'raw financial data and medical decisions',
+    'operator, migration, diagnostic, and arbitrary generic-write tools',
+    'widgets other than Grocery List, Budgets Envelope Setup, and Style Closet',
   ],
   id: 'chatgpt-app',
   title: 'Fluent ChatGPT App',
   writeIntentPolicy:
-    'Write tools must be invoked only from explicit user intent, including a direct user request to create/update state or a user-initiated grocery widget action.',
+    'Invoke write tools only after explicit user intent to change Fluent state, then rely on the returned read-after-write proof.',
 } as const;
 
 export type FluentChatGptAppDomain = 'health' | 'meals' | 'style';
@@ -450,7 +55,7 @@ export type FluentHostProfileId = 'chatgpt_app' | 'claude' | 'openclaw' | 'codex
 export interface FluentHostProfile {
   id: FluentHostProfileId;
   title: string;
-  toolExposure: 'curated_ready_domain_profile' | 'full_canonical_contract';
+  toolExposure: 'curated_product_profile';
   packagedSkills: 'available' | 'unavailable' | 'host_dependent';
   defaultAnswerMode: 'widget_plus_text' | 'native_visuals_plus_text' | 'text_first';
   widgetPolicy: string;
@@ -462,146 +67,86 @@ export interface FluentHostProfile {
   notes: readonly string[];
 }
 
-export function fluentChatGptAppProfile(options?: {
-  readyDomains?: readonly FluentChatGptAppDomain[];
-}) {
-  void options;
-  const generatedProfile = fluentVNextGeneratedHostProfile('assistant_product');
-  const tools = [...generatedProfile.tools];
-  const resources = [...generatedProfile.resources];
-
+export function fluentChatGptAppProfile(_options?: { readyDomains?: readonly FluentChatGptAppDomain[] }) {
   return {
     ...FLUENT_CHATGPT_APP_PROFILE,
-    generatedFrom: generatedProfile.contractVersion,
-    omittedConcepts: generatedProfile.omittedConceptNames,
-    resources,
-    tools,
-    writeTools: generatedProfile.writeTools,
+    generatedFrom: FLUENT_CONTRACT_VERSION,
+    omittedConcepts: [] as const,
+    ...fluentPublicProfile(),
   };
 }
 
 export function fluentAssistantAppProfile() {
-  const generatedProfile = fluentVNextGeneratedHostProfile('assistant_product');
-
   return {
-    generatedFrom: generatedProfile.contractVersion,
+    generatedFrom: FLUENT_CONTRACT_VERSION,
     id: 'assistant_app',
-    omittedConcepts: generatedProfile.omittedConceptNames,
-    resources: generatedProfile.resources,
+    omittedConcepts: [] as const,
     title: 'Fluent Assistant App',
-    tools: generatedProfile.tools,
-    writeTools: generatedProfile.writeTools,
+    ...fluentPublicProfile(),
   };
 }
-export function fluentHostProfiles(options?: {
+
+export function fluentHostProfiles(_options?: {
   readyDomains?: readonly FluentChatGptAppDomain[];
 }): FluentHostProfile[] {
-  const chatGptProfile = fluentChatGptAppProfile(options);
-  const assistantProfile = fluentAssistantAppProfile();
-  const canonicalDataFallbacks = {
-    budgetEnvelopeSetup: 'fluent_get_purchase_context plus explicit fluent_set_budget_envelope only after user approval',
-    groceryList: 'fluent_get_context or fluent_list_items',
-    pantryDashboard: 'fluent_get_context plus typed inventory items only when explicitly needed',
-    purchaseAnalysis: 'fluent_get_context(domain="style", intent="purchase", candidate, amount) in ONE read returns the complete owned-category slice (with images) plus a budget over/under fact; the host inspects the candidate, owns the closet-aware stylist judgment, and answers in PROSE. Do not call fluent_get_purchase_context separately and do not render a buy/skip card as the verdict; you may render a comparators-only closet surface (fluent_render_style_closet_surface with filter.item_ids) beneath the prose verdict.',
-    styleCloset: 'fluent_render_style_closet_surface for owned closet management; widget writes use fluent_update_style_item_patch, fluent_refresh_style_item_profile, fluent_set_style_item_image, and fluent_archive_item with provenance',
-    recipeCard: 'fluent_get_item for a specific saved recipe',
+  const profile = fluentPublicProfile();
+  const shared = {
+    advertisedResources: profile.resources,
+    advertisedTools: profile.tools,
+    canonicalFallbacks: {
+      budgetEnvelopeSetup: 'Use structured budget-envelope data in text when the host cannot mount MCP Apps.',
+      groceryList: 'Use fluent_get_context or fluent_list_items when the host cannot mount MCP Apps.',
+      styleCloset: 'Use fluent_list_items, fluent_get_item, and fluent_get_media_bundle when the host cannot mount MCP Apps.',
+    },
+    guidanceResources: [] as const,
+    notes: [
+      'Meals and Style are current. Budgets are limited to manual clothing and grocery envelopes. Health and Wellbeing are reserved.',
+      'All hosts use the same public contract and explicit-write boundary.',
+    ],
+    renderAdapters: profile.renderAdapters,
+    toolExposure: 'curated_product_profile' as const,
   };
 
   return [
     {
+      ...shared,
       id: 'chatgpt_app',
-      title: 'ChatGPT / MCP Apps',
-      toolExposure: 'curated_ready_domain_profile',
+      title: 'ChatGPT',
       packagedSkills: 'unavailable',
       defaultAnswerMode: 'widget_plus_text',
-      widgetPolicy:
-        'Use the same canonical public /mcp profile as other hosts. For ordinary grocery-list display, explicit budget-envelope setup, Style purchase-analysis, and owned Style closet-management asks, use the promoted render adapter when the host can mount MCP Apps ui:// resources; return complete text as well.',
-      advertisedTools: chatGptProfile.tools,
-      advertisedResources: chatGptProfile.resources,
-      renderAdapters: chatGptProfile.tools.filter((tool) => FLUENT_RENDER_ADAPTER_TOOL_NAMES.includes(tool)),
-      canonicalFallbacks: canonicalDataFallbacks,
-      guidanceResources: [],
-      notes: [
-        'Use the canonical protected /mcp profile as a narrow context and explicit-write surface, not a dashboard or workflow suite.',
-        'Keep Home, Recipe Card, Pantry Dashboard, Style Purchase widgets, Health, checkout, product-page extraction, preview, and internal maintenance or diagnostics workflows out of the curated profile.',
-      ],
+      widgetPolicy: 'Use the three promoted MCP Apps resources when they materially help; always preserve a text fallback.',
     },
     {
+      ...shared,
       id: 'claude',
       title: 'Claude',
-      toolExposure: 'curated_ready_domain_profile',
       packagedSkills: 'available',
       defaultAnswerMode: 'native_visuals_plus_text',
-      widgetPolicy:
-        'Prefer canonical Fluent data and Claude-native visual or artifact surfaces by default. When a Claude run is explicitly MCP Apps-capable and can mount Fluent ui:// resources, Grocery List and Budgets Envelope Setup may use their native Fluent surfaces after each surface-specific prerequisite is satisfied.',
-      advertisedTools: assistantProfile.tools,
-      advertisedResources: assistantProfile.resources,
-      renderAdapters: assistantProfile.tools.filter((tool) => FLUENT_RENDER_ADAPTER_TOOL_NAMES.includes(tool)),
-      canonicalFallbacks: canonicalDataFallbacks,
-      guidanceResources: [],
-      notes: [
-        'Hosted Claude should use the normal /mcp endpoint, which exposes the curated product-safe vNext assistant profile rather than the legacy full contract.',
-        'Packaged Fluent skills remain the primary Claude operating layer.',
-        'Do not let stale Claude visualizer guidance suppress a proven MCP Apps render path.',
-        'Use runtime guidance when packaged skill state is missing, stale, or unclear.',
-      ],
+      widgetPolicy: 'Use promoted MCP Apps resources when supported; otherwise use native presentation plus text.',
     },
     {
+      ...shared,
       id: 'openclaw',
       title: 'OpenClaw',
-      toolExposure: 'curated_ready_domain_profile',
       packagedSkills: 'available',
       defaultAnswerMode: 'text_first',
-      widgetPolicy:
-        'Default to canonical data tools and text. Use a visual surface only when that surface is explicitly configured for the host.',
-      advertisedTools: assistantProfile.tools,
-      advertisedResources: assistantProfile.resources,
-      renderAdapters: assistantProfile.tools.filter((tool) => FLUENT_RENDER_ADAPTER_TOOL_NAMES.includes(tool)),
-      canonicalFallbacks: canonicalDataFallbacks,
-      guidanceResources: [],
-      notes: [
-        'Hosted OpenClaw should use the normal /mcp endpoint, which exposes the curated product-safe vNext assistant profile rather than the legacy full contract.',
-        'OpenClaw packages may provide host-specific orchestration, but the Fluent MCP contract remains canonical.',
-        'Retailer execution and browser automation stay outside the public Fluent Core contract.',
-      ],
+      widgetPolicy: 'Prefer text and host-native presentation; promoted resources are optional adapters.',
     },
     {
+      ...shared,
       id: 'codex',
       title: 'Codex',
-      toolExposure: 'curated_ready_domain_profile',
       packagedSkills: 'available',
       defaultAnswerMode: 'text_first',
-      widgetPolicy:
-        'Default to canonical data tools and text. Use render adapters only when validating a compatible Fluent widget surface.',
-      advertisedTools: assistantProfile.tools,
-      advertisedResources: assistantProfile.resources,
-      renderAdapters: assistantProfile.tools.filter((tool) => FLUENT_RENDER_ADAPTER_TOOL_NAMES.includes(tool)),
-      canonicalFallbacks: canonicalDataFallbacks,
-      guidanceResources: [],
-      notes: [
-        'Hosted Codex should use the normal /mcp endpoint, which exposes the curated product-safe vNext assistant profile rather than the legacy full contract.',
-        'Codex skills are useful for repeated workflows and verification, but MCP capability state remains authoritative.',
-        'Prefer narrow verifiers and contract parity checks for Fluent MCP changes.',
-      ],
+      widgetPolicy: 'Prefer text and host-native presentation; promoted resources are optional adapters.',
     },
     {
+      ...shared,
       id: 'generic_mcp',
       title: 'Generic MCP',
-      toolExposure: 'curated_ready_domain_profile',
       packagedSkills: 'host_dependent',
       defaultAnswerMode: 'text_first',
-      widgetPolicy:
-        'Assume only plain MCP tools and resources. Do not assume widget, visual, or packaged-skill support until the host proves it.',
-      advertisedTools: assistantProfile.tools,
-      advertisedResources: assistantProfile.resources,
-      renderAdapters: assistantProfile.tools.filter((tool) => FLUENT_RENDER_ADAPTER_TOOL_NAMES.includes(tool)),
-      canonicalFallbacks: canonicalDataFallbacks,
-      guidanceResources: [],
-      notes: [
-        'Hosted generic MCP clients should use the normal /mcp endpoint, which exposes the curated product-safe vNext assistant profile rather than the legacy full contract.',
-        'Start from fluent_get_context for domain work and use evidence/media/write primitives only when the user request needs them.',
-        'Writes require explicit user intent and read-after-write proof.',
-      ],
+      widgetPolicy: 'Treat MCP Apps as optional and keep every workflow usable from structured data plus text.',
     },
   ];
 }
@@ -615,42 +160,25 @@ export function fluentHostProfile(
 }
 
 export const FLUENT_CONTRACT_FREEZE = {
-    backwardCompatibility:
-'Phase 101 moves the Style Closet Manager to ui://widget/fluent-style-closet-v7.html so MCP Apps hosts refetch the hardened deferred re-analyze queue flag, while v6/v5/v4/v3/v2/v1 remain registered for compatibility. Phase 100 moves the Style Closet Manager to ui://widget/fluent-style-closet-v6.html so MCP Apps hosts refetch the mobile manage-menu fix (back-face hit-test overlay and iOS outside-tap dismiss) for the card ⋯ control, while v5/v4/v3/v2/v1 remain registered for compatibility. Phase 99 removes fluent_render_style_surface from the canonical public MCP profile because the legacy render adapter is superseded by prose verdicts plus fluent_render_style_closet_surface. Phase 99 moves the Style Closet Manager to ui://widget/fluent-style-closet-v5.html so MCP Apps hosts refetch the manage-menu reopen fix for the card ⋯ control, while v4/v3/v2/v1 remain registered for compatibility. Phase 98 moves the Style Closet Manager to ui://widget/fluent-style-closet-v4.html so MCP Apps hosts refetch the decluttered two-tier manage menu with Photos and Remove-from-closet groups plus the dropped fit-photo badge, while v3/v2/v1 remain registered for compatibility. Phase 97 moves the Style Closet Manager to ui://widget/fluent-style-closet-v3.html so MCP Apps hosts refetch the per-item \'Ask to re-analyze\' affordance, while v2 and v1 remain registered for compatibility. Phase 96 moves the Style Closet Manager to ui://widget/fluent-style-closet-v2.html so MCP Apps hosts refetch the fit-photo badge and per-item add-fit affordance, while fluent-style-closet-v1.html remains registered for compatibility. Phase 95 promotes fluent_refresh_style_item_profile into the canonical public MCP profile as a rank-gated Style closet profile refresh for existing items with explicit provenance, per-field source/confidence evidence, no-image visual-source downgrade, and read-after-write proof. The public profile now exposes 26 tools, 8 resources, and 14 writes while generic item upsert and event-record adapters remain out of public review. Phase 94 promotes fluent_create_style_item into the canonical public MCP profile as a non-idempotent Style closet onboarding create with explicit user approval, host-owned visual judgment, provenance, de-duplication behavior, and read-after-write proof. The public profile exposed 26 tools, 8 resources, and 13 writes in that era while generic item upsert and event-record adapters remain out of public review. Phase 93 promotes the Meals post-shopping reconcile into the canonical public MCP profile: fluent_apply_grocery_shopping_result marks the current grocery list bought items purchased (plan items and manual intents) and refreshes inventory presence in one explicit user-approved action with provenance and read-after-write proof, without retailer, cart, checkout, or order writes, new-item invention, or quantity inference. The public profile exposed 25 tools, 8 resources, and 12 writes in that era while generic item upsert and event-record adapters remain out of public review. Phase 92 promotes the R-3.5 Style Closet Manager into the canonical public MCP profile: fluent_render_style_closet_surface mounts ui://widget/fluent-style-closet-v1.html for owned closet management, and fluent_update_style_item_patch plus fluent_set_style_item_image add provenance-backed Style closet writes with read-after-write proof. The public profile exposed 24 tools, 8 resources, and 11 writes in that era while generic item upsert and event-record adapters remain out of public review. Phase 91 promotes fluent_archive_item into the canonical public MCP profile as a non-destructive archive write with disposition, provenance, acceptance-test non-durable guard, and read-after-write proof; the public profile exposes 21 tools and 9 writes in that era while generic item upsert and event-record adapters remain out of public review. Phase 90 promotes the narrow R-1 Budgets capability into the canonical public MCP profile: fluent_get_purchase_context plus fluent_set_budget_envelope and fluent_log_budget_spend expose declared style-clothing and meals-groceries envelopes with provenance and read-after-write proof, without dashboards, category taxonomies, Plaid feeds, Meals signal consumption, or any public budget parameter on existing Style tools. Phase 89 keeps normal hosted /mcp as the single canonical public MCP profile for ChatGPT, Claude, Codex, OpenClaw, and generic MCP hosts and promotes two narrow additions together: `fluent_render_surface(surface="meals_grocery_list")` with v2 as the primary grocery-list output template plus a v1 stale-host template alias, and fluent_save_meal_plan, which saves one explicit user-approved, host-authored meal plan with read-after-write proof. Legacy server generation, candidate acceptance, retailer/cart/checkout, and generic item upsert/event writes stay out of the public profile. Historical compatibility notes follow. Phase 88 keeps normal hosted /mcp as the single canonical public MCP profile for ChatGPT, Claude, Codex, OpenClaw, and generic MCP hosts, and limits the public write surface to five explicit write tools: fluent_update_shared_profile_patch, fluent_save_recipe, fluent_update_recipe_patch, fluent_record_recipe_feedback, and fluent_apply_grocery_list_change. Generic item upsert and event-record adapters remain vNext concepts/internal full-runtime tools, but are omitted from the reviewed assistant product profile until their domain-specific schemas survive zero-based host review; fluent_archive_item graduated in Phase 91. Phase 87 makes normal hosted /mcp the single canonical public MCP profile for ChatGPT, Claude, Codex, OpenClaw, and generic MCP hosts: the generated ChatGPT app profile now uses the same vNext assistant-product tools as /mcp, including explicit provenance-backed write primitives with read-after-write proof, while render adapters and action/apply tools remain omitted until they survive zero-based review. Phase 86 adds the product-wide vNext Phase 2 write primitives as provenance-backed adapters: shared profile patch, typed item upsert, typed item archive, and event record. These write tools route through canonical Core, Meals, and Style services and return read-after-write proof. Phase 85 adds the product-wide vNext Phase 1 read concepts as read-only adapters: shared profile, context packet, typed item list/read, evidence list, and media bundle. Phase 84 adds the broader MCP Meals setup/calibration and recipe-book learning read/write tools, separates pantry/plan/history/recipe evidence from user-confirmed food preferences, feeds calibration context into meal planning and grocery-list/grocery-plan honesty, and keeps the ChatGPT v2 review focus on compact Meals onboarding, Grocery List v2, Style setup/calibration, and image-gated Style purchase analysis, with Home, account, recipe, and Health tools present as supporting context or broader profile capabilities. Phase 83 adds the broader MCP Style setup/calibration surface, separates closet evidence from user-confirmed taste, and keeps ChatGPT focused on the current Style purchase-analysis path while richer setup support matures across hosts. Phase 82 adds a 10-item Style purchase-analysis shopping-assistant eval set and tightens comparator quality across shoe wardrobe jobs, jersey-knit tops, outerwear duplicates, same-category rejection buckets, and bottom pairing evidence so broad metadata matches are not promoted as primary substitutes. Phase 81 improves Style purchase-analysis comparator quality so broad same-category top matches are bucketed by wardrobe job, MCP Apps vision packets distinguish direct comparators from adjacent and rejected context, and athletic/performance tees no longer act as primary substitutes for casual/lifestyle tees. Phase 80 moves Style purchase-analysis to v22 so ChatGPT/MCP Apps hosts can pass an agent-owned structured stylist_judgment into the native card after visual inspection, while purchase-analysis v21, v20, and v19 remain registered for compatibility. Phase 79 moves Style purchase-analysis to v21 so MCP Apps hosts refetch the native card after accepted visual observations and explicit widget rendering, while purchase-analysis v20 and v19 remain registered for compatibility. Phase 78 moves Style purchase-analysis to v20 so MCP Apps hosts refetch the native ui/initialize bridge, tool-input-partial hydration, local action state, and post-initialize size notifications, while purchase-analysis v19 remains registered for compatibility. Phase 77 moves recipe-card to v11 so MCP Apps hosts refetch the native ui/initialize bridge, delayed tool-result/tool-input hydration, tool-input-partial handling, local control state, and post-initialize size notifications, while recipe-card v10, v9, and v8 remain registered for compatibility. ' +
-    'Phase 76 moves grocery-list to v71 so each visible bucket receives the correct primary widget action even when host payload action ordering carries stale pantry metadata, while grocery-list v70 remains registered for compatibility. ' +
-    'Phase 75 moves grocery-list to v70 so optimistic Done undo prefers the item bucket the user just acted from over stale source metadata, while grocery-list v69 remains registered for compatibility. ' +
-    'Phase 74 moves grocery-list to v69 so Done undo restores pantry/check-at-home items to their prior active section during optimistic local reconciliation, while grocery-list v68 remains registered for compatibility. ' +
-    'Phase 73 moves grocery-list to v68 so successful widget saves immediately move checked items into Done, keep reversible local edits visible while host refreshes catch up, and broaden deterministic MCP Apps interaction coverage, while grocery-list v67 remains registered for compatibility. ' +
-    'Phase 72 moves grocery-list to v67 and includes safe checkbox action metadata in public structuredContent so real MCP Apps hosts render bought-item controls even when _meta is unavailable, while grocery-list v66 remains registered for compatibility. ' +
-    'Phase 71 moves grocery-list to v66 so MCP Apps hosts refetch schema-valid reconstructed checkbox and pantry fallback write actions, while grocery-list v65 remains registered for compatibility. ' +
-    'Phase 70 moves grocery-list to v65 so MCP Apps hosts refetch checkbox fallback actions when only structuredContent reaches the iframe, while grocery-list v64 remains registered for compatibility. ' +
-    'Phase 69 moves grocery-list to v64 so MCP Apps hosts refetch the single-target postMessage transport, post-initialize size notifications, and behavior-tested tool-input-partial hydration, while grocery-list v63 remains registered for compatibility. ' +
-    'Phase 68 moves grocery-list to v63 so MCP Apps hosts refetch a view-initiated MCP Apps handshake, standard initialized/size notifications, and tool-input-partial hydration, while grocery-list v62 remains registered for compatibility. ' +
-    'Phase 67 moves grocery-list to v62 so MCP Apps hosts refetch widget hydration that accepts App SDK tool-result and tool-input notifications when globals arrive late, while grocery-list v61 remains registered for compatibility. ' +
-    'Phase 66 moves Home to v21 and grocery-list to v61 so ChatGPT/App SDK hosts refetch Home modal handoff params and the Grocery widget hydrates from modal params as well as direct tool output, while Home v20 and grocery-list v60 remain registered for compatibility. ' +
-    'Phase 65 moves Home to v20 so ChatGPT/App SDK hosts refetch typed Home handoff actions, host-message fallback prompts for Grocery and Health Today, and meal-memory copy that never exposes internal statuses such as proven or retired, while v19 remains registered for compatibility. ' +
-    'Phase 64 moves Home to v19 so ChatGPT/App SDK hosts refetch direct Home action language, a Grocery List modal handoff when the host supports requestModal, less internal Health/Meals copy, and the v18 Home resource remains registered for compatibility. ' +
-    'Phase 63 moves Home to v18 so ChatGPT/App SDK hosts refetch a stricter overview-only Home surface: Home preview buttons are labeled as previews, direct grocery-list and today-training asks are explicitly routed to their dedicated Grocery and Health tools instead of Home, and the visual treatment matches the restrained Grocery/Style widget language more closely, while v17 remains registered for compatibility. ' +
-    'Phase 62 moves Style purchase-analysis to v19 so ChatGPT/App SDK hosts refetch widget hydration that accepts direct tool-result notifications when globals arrive late, while v18 remains registered for compatibility. Phase 61 moves Home to v16 so ChatGPT/App SDK hosts refetch the honest Home overview: direct grocery/training asks route to their dedicated surfaces, the in-widget grocery control is labeled as a preview rather than a launcher, projected Health sessions no longer create a fake today-training action, and Home copy/design aligns with the current Fluent widgets, while v15 remains registered for compatibility. Phase 60 moves recipe-card to v10 so ChatGPT/App SDK hosts refetch the screen-reader-visible per-serving spacing fix, while v9 and v8 remain registered for compatibility. Phase 59 moves Home to v15 and recipe-card to v9 so ChatGPT/App SDK hosts refetch the canonical living-grocery Home summary, state-aware training action, friendlier recipe fallback, and per-serving cost label, while Home v14 and recipe-card v8 remain registered for compatibility. Phase 58 moves Style purchase-analysis to v18 so ChatGPT/App SDK hosts refetch the recommendation-only closet write action; non-buy verdicts stay advisory in the widget while v17 remains registered for compatibility. Phase 57 moved Style purchase-analysis to v17 so ChatGPT/App SDK hosts refetched the less repetitive skip explanation and the now-retired secondary Add to closet anyway action, while v16 remains registered for compatibility. Phase 56 moves Home to v14 so direct grocery/training asks route to the dedicated surfaces, the Home widget uses the same restrained Fluent action language as Grocery/Style, and v13 remains registered for compatibility. Phase 55 moves recipe-card to v8 so ChatGPT/App SDK hosts refetch the cookable first-screen layout with a visible first method step, Start cook mode CTA, friendlier missing-recipe copy, and v7 retained for compatibility. Phase 54 moves Style purchase-analysis to v16 so ChatGPT/App SDK hosts refetch the photo-read explanation, less taxonomy-heavy overlap copy, secondary add-anyway action for non-buy verdicts, current metadata versioning, and stricter visual-evidence validation, while v15 remains registered for compatibility. Phase 53 moves Home to v13 so ChatGPT/App SDK hosts refetch the promotion-quality Home surface: a single recommended next step, clearer account/domain language, real grocery/training action details, and keyboard/focus/live-region semantics, while v10, v11, and v12 remain registered for compatibility. Phase 52 moves Home to v12 so ChatGPT/App SDK hosts refetch the useful Home surface: Fluent design language, human copy, and in-widget grocery/training previews after action clicks, while v10 and v11 remain registered for compatibility. Phase 51 moves Home to v11 so ChatGPT/App SDK hosts refetch account/access visibility, safe read-only next actions, accessible action status, and graceful partial-domain recovery, while v10 remains registered for snapshot compatibility. Phase 50 moves grocery-list to v60 so ChatGPT/App SDK hosts refetch the living grocery-list lifecycle surface with provenance/trust state, current-list copy, explicit Save changes/Refresh list controls, separated Already have enough/Add to buy list/Mark bought actions, and shopping-session freshness handling, while v57, v58, and v59 remain registered for compatibility. Phase 49 moves Style purchase-analysis to v15 so ChatGPT/App SDK hosts refetch the editorial title hook used by launch QA and live evidence checks, while v14 remains registered as the previous resource. Phase 48 moves grocery-list to v59 so ChatGPT/App SDK hosts refetch the accessibility target-size fix for checkboxes and the Covered toggle, while v57 and v58 remain registered for snapshot compatibility. Phase 47 moves grocery-list to v58 so ChatGPT/App SDK hosts refetch the explicit refresh/readback control, live sync status, and clearer partial-sync recovery copy, while v57 remains registered as the previous resource. Phase 46 removes non-widget Style purchase-analysis fallback tools from the current ChatGPT path while preserving them in the broader MCP contract, so ChatGPT/App SDK hosts are routed through visual observations and the rich purchase-analysis widget instead of stopping at prose. Phase 45 moves Style purchase-analysis to v14 so ChatGPT/App SDK hosts refetch the editorial purchase-analysis layout with human closet-context sections and less comparison telemetry, while v13 remains registered as the previous resource. Phase 44 moves Style purchase-analysis to v13 so the comparison strip shows closet comparators only, and no-image candidates remain not-render-ready even if a host submits visual-evidence-shaped input. Phase 43 moves Style purchase-analysis to v12 so ChatGPT/App SDK hosts refetch image-framed product thumbnails, with v11 retained as the previous template. Phase 42 moves Home to v10 so ChatGPT/App SDK hosts refetch the initial Home check-in, removes inert Home next-action buttons, and keeps account/status tool output free of first-layer hosted/cloud wording. Phase 41 keeps Pantry Dashboard in the broader MCP contract, hosted runtime, and widget resources while keeping the current ChatGPT path focused on recipe, grocery-list, Style, Health, Home, and account-status workflows. Phase 40 moves pantry-dashboard to v14 with v13 retained as the previous template and keeps the You tell me edit form draft-stable across host hydration so quantity, unit, state, and remove actions refresh the visible widget immediately. Phase 39 moves pantry-dashboard to v13 with v12 retained as the previous template and keeps the You tell me footer totals in sync after local set/remove staple mutation. Phase 38 moves pantry-dashboard to v12 with v11 retained as the previous template, makes set/remove staple interactions update from safe local mutation after successful widget tool calls, and removes raw inventory IDs from pantry action structured/text payloads. Phase 37 moves Home to v9, grocery-list to v57, pantry-dashboard to v11, and purchase-analysis to v11 so ChatGPT/App SDK hosts refetch widgets that prefer the native window.openai.callTool path over the fallback bridge; pantry render structuredContent is now summary-only so normal assistant prose cannot echo raw dashboard IDs. Phase 36 moves pantry-dashboard to v10 with v9 retained as the previous template, keeps same-id pantry refreshes working with a content fingerprint hydration guard, and avoids reusing the first v9 host cache. Phase 35 moves pantry-dashboard to v9 with v8 retained as the previous template, replaces stale same-dashboard-id widget hydration with fresh snapshots, and adds set_staple for explicit quantity, unit, and state editing. Phase 34 moves pantry-dashboard to v8 with v7 retained as the previous template and adds a reviewer-safe remove-staple action so QA/demo staples can be cleared from the dashboard. Phase 33 moves pantry-dashboard to v7 with v6 retained as the previous template, removes dashboard_id from widget-initiated pantry action calls, and moves Fluent Home to v8 so the initial Home experience no longer advertises Pantry Dashboard as a primary next action. Phase 32 moves pantry-dashboard to v6 with v5 retained as the previous template so ChatGPT/App SDK hosts refetch widget action code that preserves tool invocation metadata and item IDs. Phase 31 moves Fluent Home to v7 and keeps widget accessibility only on the tool descriptor, matching the working Meals and Style widget resource metadata shape. Phase 30 moves Fluent Home to v6 so ChatGPT/App SDK hosts refetch the Home widget with render-tool OAuth metadata in place. Phase 29 cache-busts changed widget bundles for ChatGPT/App SDK hosts by moving Fluent Home to v5, pantry-dashboard to v5 with v4 retained as the previous template, and Style purchase-analysis to v10 with v9 retained as the previous template. Phase 28 kept the previous grocery-list v55, pantry-dashboard v3, and Style purchase-analysis v8 widget resources for compatibility and adds grocery-list v56, pantry-dashboard v4, and Style purchase-analysis v9 so ChatGPT/App SDK hosts refetch bridge-first widget action code. Phase 27 kept the v2, v3, v4, v5, v6, and v7 Style purchase-analysis widget resources for compatibility and added the v8 widget resource so ChatGPT/App SDK hosts refetched the corrected inline closeness score renderer without clamping already-percent comparator scores to 100%. Phase 26 kept the v2, v3, v4, v5, and v6 Style purchase-analysis widget resources for compatibility and added the v7 widget resource so ChatGPT/App SDK hosts refetched the combined closet-comparison cards with inline closeness scores instead of rendering a redundant separate closeness section. Phase 25 kept the v2, v3, v4, and v5 Style purchase-analysis widget resources for compatibility and added the v6 widget resource so ChatGPT/App SDK hosts refetched the more human stylist copy for photo reads and verdict reasons instead of reusing cached v5 markup. Phase 24 kept the v2, v3, and v4 Style purchase-analysis widget resources for compatibility and added the v5 widget resource so ChatGPT/App SDK hosts refetched the image-CSP and closet-comparator-photo improvements instead of reusing cached v4 markup. Phase 23 kept the v2 and v3 Style purchase-analysis widget resources for compatibility and added the v4 widget resource so ChatGPT/App SDK hosts refetched the polished stylist-analysis HTML instead of reusing cached v3 markup. Phase 22 makes host profiles first-class MCP metadata so ChatGPT, Claude, OpenClaw, Codex, and generic MCP clients can share one canonical Fluent tool vocabulary while using host-aware routing, render-adapter policy, and packaged-skill expectations. Phase 21 added MCP-native runtime guidance resources and fluent_get_next_actions as the in-band skill substitute for ChatGPT and generic MCP hosts, while preserving the full canonical tool surface for Claude, OpenClaw, Codex, OSS, and operator workflows. Phase 20 kept the Style maturity surfaces for item-profile enrichment, provenance reads, evidence-gap reporting, and wardrobe analysis; removed the legacy meals_render_grocery_list alias and grocery_list_widget capability while preserving meals_render_grocery_list_v2 as the canonical ChatGPT/App SDK grocery-list render surface; added the v3 Style purchase-analysis widget resource while keeping the v2 widget resource for compatibility; added style_prepare_purchase_analysis as the first-hop purchase-analysis routing tool, keeps style_render_purchase_analysis as non-widget structured output, and gates the actual style_show_purchase_analysis_widget surface behind host visual evidence; and kept Health on the block-first coaching surface instead of the pre-production weekly-plan contract.',
-  frozenAt: 'workstream-5',
+  breakingChange: true,
+  frozenAt: '2026-07-09',
+  launchBoundary:
+    'This pre-launch 2.0 reset intentionally drops every earlier public tool, resource alias, route, and compatibility profile. There are no external active users to migrate.',
+  productScope:
+    'Meals and Style are current; Budgets is limited to manual meals-groceries and style-clothing envelopes; Health and Wellbeing are reserved.',
   requiredFields: [
     'contractVersion',
-    'backendMode',
     'availableDomains',
     'enabledDomains',
     'readyDomains',
-    'onboarding.core',
-    'onboarding.domains',
     'profile.displayName',
     'profile.timezone',
   ],
-  scopeException:
-    'Health tools prefer health:read and health:write. Style tools prefer style:read and style:write, while hosted continues to accept legacy meals scopes for the Style surface during the current bridge window.',
   stableResources: [...FLUENT_RESOURCE_URIS],
   stableTools: [...FLUENT_TOOL_NAMES],
   versionPolicy: {
-    minimumClientBehavior: 'Clients and packages declare the minimum supported contract version.',
-    packageUpdateRule: 'Breaking contract changes require package updates before release.',
+    minimumClientBehavior: 'Clients and packages must require this 2.0 contract or newer.',
+    packageUpdateRule: 'Any future breaking contract change requires a new major contract and matching package release.',
   },
 } as const;
 
@@ -665,15 +193,13 @@ export function fluentContractSnapshot() {
 
 export function fluentRuntimeSurfaceSnapshot() {
   return {
-    aliasTools: FLUENT_TOOL_ALIASES.map((entry) => ({
-      canonicalTool: entry.canonicalTool,
-      name: entry.name,
-      note: entry.note,
-    })),
+    aliasTools: [] as const,
     contractVersion: FLUENT_CONTRACT_VERSION,
-    devResources: [...FLUENT_DEV_RESOURCE_URIS],
-    devTools: [...FLUENT_DEV_TOOL_NAMES],
+    devResources: [] as const,
+    devTools: [] as const,
     publicResources: [...FLUENT_RESOURCE_URIS],
     publicTools: [...FLUENT_TOOL_NAMES],
   };
 }
+
+export { FLUENT_PUBLIC_PROFILE_POLICY, fluentPublicProfile };

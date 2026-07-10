@@ -1,7 +1,7 @@
 import type { CurrentGroceryListRecord, GroceryIntentRecord, GroceryPlanItemRecord } from './types';
 
 export const MEALS_GROCERY_LIST_WIDGET_VERSION = 'v71';
-export const FLUENT_VNEXT_GROCERY_LIST_WIDGET_VERSION = 'v1';
+export const FLUENT_PUBLIC_GROCERY_LIST_WIDGET_VERSION = 'v72';
 export const MEALS_GROCERY_SMOKE_WIDGET_VERSION = 'v1';
 export const MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v57.html';
 export const MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v58.html';
@@ -18,11 +18,8 @@ export const MEALS_GROCERY_LIST_PANTRY_UNDO_PREVIOUS_TEMPLATE_URI = 'ui://widget
 export const MEALS_GROCERY_LIST_STALE_SOURCE_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v69.html';
 export const MEALS_GROCERY_LIST_BUCKET_ACTION_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v70.html';
 export const MEALS_GROCERY_LIST_TEMPLATE_URI = `ui://widget/fluent-grocery-list-${MEALS_GROCERY_LIST_WIDGET_VERSION}.html`;
-export const MEALS_GROCERY_LIST_VNEXT_LEGACY_TEMPLATE_URI = 'ui://widget/fluent-vnext-grocery-list-v1.html';
-export const MEALS_GROCERY_LIST_VNEXT_PREVIOUS_TEMPLATE_URI = 'ui://widget/fluent-vnext-grocery-list-v2.html';
-export const MEALS_GROCERY_LIST_VNEXT_BRIDGE_TEMPLATE_URI = 'ui://widget/fluent-vnext-grocery-list-v3.html';
-export const MEALS_GROCERY_LIST_VNEXT_MULTIFRAME_TEMPLATE_URI = 'ui://widget/fluent-vnext-grocery-list-v4.html';
-export const MEALS_GROCERY_LIST_VNEXT_TEMPLATE_URI = 'ui://widget/fluent-vnext-grocery-list-v5.html';
+export const MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI =
+  `ui://widget/fluent-grocery-list-${FLUENT_PUBLIC_GROCERY_LIST_WIDGET_VERSION}.html`;
 export const MEALS_GROCERY_SMOKE_TEMPLATE_URI = `ui://widget/fluent-grocery-smoke-${MEALS_GROCERY_SMOKE_WIDGET_VERSION}.html`;
 
 export interface GroceryListRecipeReferenceViewModel {
@@ -601,15 +598,15 @@ export function buildGroceryListMetadata(viewModel: GroceryListViewModel) {
   };
 }
 
-export function buildVNextGroceryListMetadata(viewModel: GroceryListViewModel) {
+export function buildPublicGroceryListMetadata(viewModel: GroceryListViewModel) {
   return {
     experience: 'grocery_list',
     groceryList: buildGroceryListInteractiveViewModel(viewModel),
-    version: FLUENT_VNEXT_GROCERY_LIST_WIDGET_VERSION,
+    version: FLUENT_PUBLIC_GROCERY_LIST_WIDGET_VERSION,
   };
 }
 
-export function buildVNextGroceryListViewModel(currentList: CurrentGroceryListRecord): GroceryListViewModel {
+export function buildPublicGroceryListViewModel(currentList: CurrentGroceryListRecord): GroceryListViewModel {
   const planItems = currentList.groceryPlan?.raw.items ?? [];
   const resolvedItems = currentList.groceryPlan?.raw.resolvedItems ?? [];
   const unresolvedNames = new Set((currentList.preparedOrder?.unresolvedItems ?? []).map((item) => normalizeListKey(item.displayName)));
@@ -3168,10 +3165,10 @@ export function getGroceryListWidgetHtml(): string {
   })();
 </script>`;
 }
-export function getVNextGroceryListWidgetHtml(): string {
+export function getPublicGroceryListWidgetHtml(): string {
   return getGroceryListWidgetHtml()
     .replaceAll('var vNextSurface = false;', 'var vNextSurface = true;')
-    .replaceAll(MEALS_GROCERY_LIST_WIDGET_VERSION, FLUENT_VNEXT_GROCERY_LIST_WIDGET_VERSION)
+    .replaceAll(MEALS_GROCERY_LIST_WIDGET_VERSION, FLUENT_PUBLIC_GROCERY_LIST_WIDGET_VERSION)
     .replaceAll(
       "callTool('meals_render_grocery_list_v2', { week_start: viewModel.weekStart })",
       "callTool('fluent_render_surface', { surface: 'meals_grocery_list', week_start: viewModel.weekStart })",

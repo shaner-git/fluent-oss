@@ -1,6 +1,6 @@
 {
   "name": "fluent",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Fluent helps Claude use personal Meals and Style memory, with Wellbeing reserved until it earns a public surface.",
   "author": {
     "name": "Fluent"
@@ -18,7 +18,7 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "x-fluent": {
-    "minimumContractVersion": "2026-06-01.fluent-core-v1.85",
-    "currentReferenceContractVersion": "2026-06-01.fluent-core-v1.85"
+    "minimumContractVersion": "2026-07-09.fluent-core-v2.0",
+    "currentReferenceContractVersion": "2026-07-09.fluent-core-v2.0"
   }
 }

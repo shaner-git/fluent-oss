@@ -110,6 +110,16 @@ const CLAUDE_AUTH_CALLBACK_URIS = [
   'https://claude.com/api/mcp/auth_callback',
 ] as const;
 
+const OAUTH_COMPATIBILITY_CORS_ORIGINS = [
+  'https://chatgpt.com',
+  'https://claude.ai',
+  'https://claude.com',
+  'https://platform.openai.com',
+] as const;
+
+const OAUTH_COMPATIBILITY_CORS_METHODS = 'GET, HEAD, POST, DELETE, OPTIONS';
+const OAUTH_COMPATIBILITY_CORS_HEADERS = 'authorization, content-type, mcp-protocol-version';
+
 export async function maybeHandleBetterAuthRequest(
   request: Request,
   env: CloudRuntimeEnv,
@@ -219,8 +229,12 @@ export async function maybeHandleBetterAuthCompatibilityRequest(
     }
   }
 
+  if (request.method === 'OPTIONS' && (url.pathname === '/mcp' || isProfiledMcpPath(url.pathname) || compatibilityRoute)) {
+    return createOAuthCompatibilityCorsPreflightResponse(request);
+  }
+
   if (url.pathname === '/mcp' || isProfiledMcpPath(url.pathname)) {
-    return handleBetterAuthMcpRequest(request, env, ctx);
+    return withOAuthCompatibilityCorsHeaders(request, await handleBetterAuthMcpRequest(request, env, ctx));
   }
 
   if (!compatibilityRoute) {
@@ -230,17 +244,32 @@ export async function maybeHandleBetterAuthCompatibilityRequest(
   switch (compatibilityRoute) {
     case '/authorize':
       await reconcileKnownBetterAuthRedirectUrisForAuthorizeRequest(request, env);
-      return proxyBetterAuthRequest(request, env, '/api/auth/oauth2/authorize');
+      return withOAuthCompatibilityCorsHeaders(
+        request,
+        await proxyBetterAuthRequest(request, env, '/api/auth/oauth2/authorize'),
+      );
     case '/token':
-      return proxyBetterAuthRequest(request, env, '/api/auth/oauth2/token', { defaultResource: true });
+      return withOAuthCompatibilityCorsHeaders(
+        request,
+        await proxyBetterAuthRequest(request, env, '/api/auth/oauth2/token', { defaultResource: true }),
+      );
     case '/register':
-      return proxyBetterAuthRequest(request, env, '/api/auth/oauth2/register');
+      return withOAuthCompatibilityCorsHeaders(
+        request,
+        await proxyBetterAuthRequest(request, env, '/api/auth/oauth2/register'),
+      );
     case '/.well-known/oauth-authorization-server':
-      return handleBetterAuthWellKnownMetadata(request, env, 'authorization_server');
+      return withOAuthCompatibilityCorsHeaders(
+        request,
+        await handleBetterAuthWellKnownMetadata(request, env, 'authorization_server'),
+      );
     case '/.well-known/openid-configuration':
-      return handleBetterAuthWellKnownMetadata(request, env, 'openid_configuration');
+      return withOAuthCompatibilityCorsHeaders(
+        request,
+        await handleBetterAuthWellKnownMetadata(request, env, 'openid_configuration'),
+      );
     case '/.well-known/oauth-protected-resource':
-      return json(buildProtectedResourceMetadata(request, env));
+      return withOAuthCompatibilityCorsHeaders(request, json(buildProtectedResourceMetadata(request, env)));
     default:
       return null;
   }
@@ -2174,11 +2203,11 @@ function renderSignedInAccountBody(input: {
       </ol>
     </div>
     <div class="quick-step-card">
-      <p class="eyebrow-sm">ChatGPT Developer Mode</p>
+      <p class="eyebrow-sm">ChatGPT Plugins</p>
       <ol>
-        <li>Open ChatGPT connector settings.</li>
-        <li>Create a Developer Mode MCP connector.</li>
-        <li>Paste the MCP URL and finish authorization.</li>
+        <li>Open ChatGPT Plugins and select the plus button.</li>
+        <li>In New App, use Server URL with the Fluent MCP URL.</li>
+        <li>Keep OAuth selected, choose Create, and finish authorization.</li>
       </ol>
     </div>
   </div>
@@ -2809,6 +2838,86 @@ function normalizeCompatibilityRoute(pathname: string): BetterAuthCompatibilityR
       return '/.well-known/oauth-protected-resource';
     default:
       return null;
+  }
+}
+
+function createOAuthCompatibilityCorsPreflightResponse(request: Request): Response {
+  const headers = oauthCompatibilityCorsHeaders(request) ?? new Headers();
+  headers.set('allow', OAUTH_COMPATIBILITY_CORS_METHODS);
+  return new Response(null, {
+    headers,
+    status: 204,
+  });
+}
+
+function withOAuthCompatibilityCorsHeaders(request: Request, response: Response): Response {
+  const corsHeaders = oauthCompatibilityCorsHeaders(request);
+  if (!corsHeaders) {
+    return response;
+  }
+
+  const headers = new Headers(response.headers);
+  corsHeaders.forEach((value, key) => {
+    headers.set(key, value);
+  });
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
+function oauthCompatibilityCorsHeaders(request: Request): Headers | null {
+  const allowedOrigin = allowedOAuthCompatibilityCorsOrigin(request);
+  if (!allowedOrigin) {
+    return null;
+  }
+
+  const requestedHeaders = request.headers.get('Access-Control-Request-Headers')?.trim();
+  const headers = new Headers({
+    'access-control-allow-headers': requestedHeaders || OAUTH_COMPATIBILITY_CORS_HEADERS,
+    'access-control-allow-methods': OAUTH_COMPATIBILITY_CORS_METHODS,
+    'access-control-allow-origin': allowedOrigin,
+    'access-control-max-age': '600',
+  });
+  appendVary(headers, 'Origin');
+  appendVary(headers, 'Access-Control-Request-Method');
+  appendVary(headers, 'Access-Control-Request-Headers');
+  return headers;
+}
+
+function allowedOAuthCompatibilityCorsOrigin(request: Request): string | null {
+  const origin = request.headers.get('origin')?.trim();
+  if (!origin) {
+    return null;
+  }
+
+  let parsedOrigin: string;
+  try {
+    parsedOrigin = new URL(origin).origin;
+  } catch {
+    return null;
+  }
+
+  if (parsedOrigin === new URL(request.url).origin) {
+    return parsedOrigin;
+  }
+
+  return OAUTH_COMPATIBILITY_CORS_ORIGINS.includes(parsedOrigin as typeof OAUTH_COMPATIBILITY_CORS_ORIGINS[number])
+    ? parsedOrigin
+    : null;
+}
+
+function appendVary(headers: Headers, value: string): void {
+  const current = headers.get('vary');
+  if (!current) {
+    headers.set('vary', value);
+    return;
+  }
+
+  const entries = current.split(',').map((entry) => entry.trim().toLowerCase());
+  if (!entries.includes(value.toLowerCase())) {
+    headers.set('vary', `${current}, ${value}`);
   }
 }
 

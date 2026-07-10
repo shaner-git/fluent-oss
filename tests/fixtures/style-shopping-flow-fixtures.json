@@ -1,31 +1,4 @@
 {
-  "productExtractionCases": [
-    {
-      "name": "kith-purple-tee",
-      "requireImages": true,
-      "candidate": {
-        "brand": "Kith",
-        "category": "TOP",
-        "colorFamily": "purple",
-        "name": "Kith Treats Serif Tee Current",
-        "productUrl": "https://ca.kith.com/collections/mens-apparel-tees/products/khm034675-513",
-        "subcategory": "T-Shirt"
-      }
-    },
-    {
-      "name": "footlocker-triple-white-af1",
-      "requireImages": true,
-      "candidate": {
-        "brand": "Nike",
-        "category": "SHOE",
-        "colorFamily": "white",
-        "colorName": "Triple White",
-        "name": "Nike Air Force 1 '07 Men's",
-        "productUrl": "https://www.footlocker.ca/en/product/nike-air-force-1-07-mens/4100960.html",
-        "subcategory": "Sneaker"
-      }
-    }
-  ],
   "fullFlowCases": [
     {
       "name": "nocta-af1-cobalt-direct-image",
