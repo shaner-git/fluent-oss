@@ -5,22 +5,51 @@ import type { CloudRuntimeEnv } from './config';
 import { evaluateSubscriptionLifecycle } from './subscription-lifecycle';
 import type { FluentDatabase } from './storage';
 
-type AccountIdentity = { accountId?: string | null; email?: string | null; tenantId?: string | null; userId?: string | null };
+type AccountIdentity = {
+  accountId?: string | null;
+  email?: string | null;
+  tenantId?: string | null;
+  userId?: string | null;
+};
 
-export async function handleAccountStatusForIdentity(input: { db: FluentDatabase; env: CloudRuntimeEnv; identity: AccountIdentity; props?: FluentAuthProps | null; request: Request }): Promise<Response> {
-  const account = await getFluentCloudOnboardingRecord(input.db, { email: input.identity.email ?? null, userId: input.identity.userId ?? null });
+export async function handleAccountStatusForIdentity(input: {
+  db: FluentDatabase;
+  env: CloudRuntimeEnv;
+  identity: AccountIdentity;
+  props?: FluentAuthProps | null;
+  request: Request;
+}): Promise<Response> {
+  const account = await getFluentCloudOnboardingRecord(input.db, {
+    email: input.identity.email ?? null,
+    userId: input.identity.userId ?? null,
+  });
   const lifecycle = evaluateSubscriptionLifecycle(account);
   const state = publicState(account?.currentState ?? null, lifecycle.access);
   const origin = new URL(input.request.url).origin;
   return json({
     accessState: state === 'active' ? 'active' : state === 'limited' ? 'limited' : state === 'pending' ? 'pending' : 'unavailable',
-    entitlement: { state, summary: lifecycle.message, graceDeadline: lifecycle.graceDeadline, retentionDeadline: lifecycle.retentionDeadline },
-    links: { deletion: `${origin}/account/delete`, export: `${origin}/api/account/exports`, manageAccount: `${origin}/account`, supportEmail: `mailto:${FLUENT_SUPPORT_EMAIL}` },
+    entitlement: {
+      state,
+      summary: lifecycle.message,
+      graceDeadline: lifecycle.graceDeadline,
+      retentionDeadline: lifecycle.retentionDeadline,
+    },
+    links: {
+      deletion: `${origin}/account/delete`,
+      export: `${origin}/api/account/exports`,
+      manageAccount: `${origin}/account`,
+      supportEmail: `mailto:${FLUENT_SUPPORT_EMAIL}`,
+    },
     supportEmail: FLUENT_SUPPORT_EMAIL,
   });
 }
 
-export async function buildChatGptSafeRuntimeEntitlement(_db?: FluentDatabase, _input?: { email?: string | null; tenantId?: string | null; userId?: string | null }): Promise<null> { return null; }
+export async function buildChatGptSafeRuntimeEntitlement(
+  _db?: FluentDatabase,
+  _input?: { email?: string | null; tenantId?: string | null; userId?: string | null },
+): Promise<null> {
+  return null;
+}
 
 function publicState(currentState: string | null, access: ReturnType<typeof evaluateSubscriptionLifecycle>['access']) {
   if (access === 'full_access') return 'active' as const;
@@ -32,4 +61,6 @@ function publicState(currentState: string | null, access: ReturnType<typeof eval
   return 'unavailable' as const;
 }
 
-function json(value: unknown, status = 200): Response { return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json; charset=utf-8' }, status }); }
+function json(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json; charset=utf-8' }, status });
+}

@@ -1,14 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
-import {
-  FLUENT_HEALTH_READ_SCOPE,
-  FLUENT_HEALTH_WRITE_SCOPE,
-  FLUENT_MEALS_READ_SCOPE,
-  FLUENT_MEALS_WRITE_SCOPE,
-  FLUENT_STYLE_READ_SCOPE,
-  FLUENT_STYLE_WRITE_SCOPE,
-} from '../auth';
+import { FLUENT_PUBLIC_HOSTED_SCOPES } from '../auth';
 
 export const LOCAL_AUTH_MODEL = 'local-bearer-token';
 export const OSS_TOKEN_FILENAME = 'oss-access-token.json';
@@ -26,14 +19,7 @@ export interface LocalTokenState {
 }
 
 export function defaultLocalScopes(): string[] {
-  return [
-    FLUENT_MEALS_READ_SCOPE,
-    FLUENT_MEALS_WRITE_SCOPE,
-    FLUENT_HEALTH_READ_SCOPE,
-    FLUENT_HEALTH_WRITE_SCOPE,
-    FLUENT_STYLE_READ_SCOPE,
-    FLUENT_STYLE_WRITE_SCOPE,
-  ];
+  return [...FLUENT_PUBLIC_HOSTED_SCOPES];
 }
 
 export function resolveLocalTokenFile(rootDir: string): string {
@@ -107,7 +93,7 @@ export function readLocalTokenState(rootDir: string): LocalTokenState | null {
       authModel: LOCAL_AUTH_MODEL,
       createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
       rotatedAt: typeof raw.rotatedAt === 'string' ? raw.rotatedAt : null,
-      scopes: raw.scopes.filter((scope): scope is string => typeof scope === 'string'),
+      scopes: defaultLocalScopes(),
       token: raw.token,
     };
   } catch {

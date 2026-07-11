@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { CALLBACK_HOST, CALLBACK_PATH, CALLBACK_PORT } from './constants.js';
 
-const FLUENT_CLOUD_WAITLIST_URL = 'https://meetfluent.app/';
 const FLUENT_OSS_AVAILABLE_URL = 'https://github.com/shaner-git/fluent-oss';
 const FLUENT_SUPPORT_EMAIL = 'hello@meetfluent.app';
 
@@ -237,7 +237,21 @@ async function requestToken(baseUrl, body) {
 }
 
 async function openBrowser(url) {
-  process.stdout.write(`Open this URL in your browser to continue Fluent login:\n${url}\n`);
+  process.stdout.write(`Opening Fluent sign-in in your browser. If it does not open, copy this URL:\n${url}\n`);
+  const command = process.platform === 'win32' ? 'rundll32.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const args = process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url];
+  await new Promise((resolve) => {
+    try {
+      const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
+      child.once('error', () => resolve());
+      child.once('spawn', () => {
+        child.unref();
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
 }
 
 function base64Url(buffer) {
@@ -263,9 +277,8 @@ function formatFluentHostedError(source, fallback) {
   }
   if (isFluentCloudEarlyAccessDenial(source)) {
     return [
-      'Fluent is in early access and open source.',
-      'This account does not have Fluent access yet.',
-      `Request early access: ${FLUENT_CLOUD_WAITLIST_URL}`,
+      'Fluent could not finish this connection.',
+      'Try connecting again from your Fluent account.',
       `Open-source runtime: ${FLUENT_OSS_AVAILABLE_URL}`,
       `If you expected access, contact ${FLUENT_SUPPORT_EMAIL}.`,
     ].join(' ');
@@ -303,7 +316,7 @@ function renderEarlyAccessCallbackPage(clientName, detail = 'This Fluent connect
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Fluent Early Access</title>
+  <title>Fluent connection</title>
 </head>
 <body style="font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a;">
   <main style="max-width: 680px; margin: 0 auto; padding: 32px 20px;">
@@ -312,7 +325,7 @@ function renderEarlyAccessCallbackPage(clientName, detail = 'This Fluent connect
       <h1 style="margin: 0 0 12px;">Fluent connection blocked</h1>
       <p style="margin: 0 0 16px; color: #475569; line-height: 1.6;">${escapeHtml(detail)} You can return to ${escapeHtml(clientName)} after reviewing the options below.</p>
       <ul style="margin: 0; padding-left: 20px; color: #475569; line-height: 1.7;">
-        <li>Request early access: <a href="${FLUENT_CLOUD_WAITLIST_URL}">${FLUENT_CLOUD_WAITLIST_URL}</a></li>
+        <li>Manage your account: <a href="https://meetfluent.app/account">meetfluent.app/account</a></li>
         <li>Open-source runtime: <a href="${FLUENT_OSS_AVAILABLE_URL}">${FLUENT_OSS_AVAILABLE_URL}</a></li>
         <li>Contact support: <a href="mailto:${FLUENT_SUPPORT_EMAIL}">${FLUENT_SUPPORT_EMAIL}</a></li>
       </ul>

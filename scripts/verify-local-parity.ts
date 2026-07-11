@@ -36,8 +36,7 @@ async function main() {
     probeParity: null as unknown,
     unauthenticatedMcp: null as unknown,
     mcp: null as unknown,
-    writes: null as unknown,
-    eventLog: null as unknown,
+    mutationBoundary: 'Covered by focused Fluent 2.0 write-path tests; this parity probe is read-only.',
     ok: false,
   };
 
@@ -51,21 +50,8 @@ async function main() {
     liveTools: report.probe.body?.tools ?? [],
   });
 
-  const db = new DatabaseSync(paths.dbPath);
   const tokenState = ensureLocalTokenState(paths.rootDir);
-  try {
-    const eventCountBefore = readEventCount(db);
-    report.mcp = await verifyMcpSurface(tokenState.token);
-    report.writes = await verifyWrites(db);
-    const eventCountAfter = readEventCount(db);
-    report.eventLog = {
-      before: eventCountBefore,
-      after: eventCountAfter,
-      delta: eventCountAfter - eventCountBefore,
-    };
-  } finally {
-    db.close();
-  }
+  report.mcp = await verifyMcpSurface(tokenState.token);
 
   const assertions = [
     report.health.ok === true,
@@ -84,10 +70,6 @@ async function main() {
     report.mcp?.capabilities?.deploymentTrack === 'oss',
     report.mcp?.capabilities?.contractVersion === FLUENT_CONTRACT_VERSION,
     Array.isArray(report.mcp?.scopes) && defaultLocalScopes().every((scope) => report.mcp.scopes.includes(scope)),
-    report.writes?.core?.restored === true,
-    report.writes?.style?.restored === true,
-    report.writes?.meals?.restored === true,
-    (report.eventLog?.delta ?? 0) >= 2,
   ];
 
   report.ok = assertions.every(Boolean);
@@ -123,34 +105,28 @@ async function verifyMcpSurface(token: string) {
       resourcesResult,
       resourceTemplatesResult,
       capabilitiesResult,
-      profileResult,
-      domainsResult,
-      styleProfileResult,
+      accountStatusResult,
+      sharedProfileResult,
       styleContextResult,
-      inventorySummaryResult,
-      planResult,
+      mealsContextResult,
     ] =
       await Promise.all([
         client.listTools(),
         client.listResources(),
         client.listResourceTemplates(),
         client.callTool({ name: 'fluent_get_capabilities', arguments: {} }),
-        client.callTool({ name: 'fluent_get_profile', arguments: {} }),
-        client.callTool({ name: 'fluent_list_domains', arguments: {} }),
-        client.callTool({ name: 'style_get_profile', arguments: {} }),
-        client.callTool({ name: 'style_get_context', arguments: {} }),
-        client.callTool({ name: 'meals_get_inventory_summary', arguments: {} }),
-        client.callTool({ name: 'meals_get_plan', arguments: {} }),
+        client.callTool({ name: 'fluent_get_account_status', arguments: {} }),
+        client.callTool({ name: 'fluent_get_shared_profile', arguments: {} }),
+        client.callTool({ name: 'fluent_get_context', arguments: { domain: 'style', intent: 'closet' } }),
+        client.callTool({ name: 'fluent_get_context', arguments: { domain: 'meals', intent: 'planning' } }),
       ]);
 
     return {
       capabilities: extractToolStructuredContent(capabilitiesResult),
-      domains: extractToolStructuredContent(domainsResult),
-      inventorySummary: extractToolStructuredContent(inventorySummaryResult),
-      plan: extractToolStructuredContent(planResult),
-      profile: extractToolStructuredContent(profileResult),
+      accountStatus: extractToolStructuredContent(accountStatusResult),
+      mealsContext: extractToolStructuredContent(mealsContextResult),
+      sharedProfile: extractToolStructuredContent(sharedProfileResult),
       styleContext: extractToolStructuredContent(styleContextResult),
-      styleProfile: extractToolStructuredContent(styleProfileResult),
       scopes: defaultLocalScopes(),
       resourceParity: compareSets({
         expectedResources: [...FLUENT_RESOURCE_URIS],
