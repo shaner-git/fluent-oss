@@ -527,8 +527,8 @@ export function buildFluentAccountStatusToolView(status: FluentAccountStatus): F
     instructions: status.instructions,
     links: status.links,
     safety: {
-      billingBoundary: 'Managed Fluent is free during early access and has no billing flow.',
-      paymentDetails: 'Fluent does not collect payment details.',
+      billingBoundary: 'Managed Fluent is currently free.',
+      paymentDetails: 'Current price: free.',
       privacyBoundary: 'Private account identifiers are not included in assistant-facing account text.',
     },
     support: {
@@ -555,7 +555,7 @@ export function buildFluentAccountStatusToolText(status: FluentAccountStatus): s
     exportLine,
     deletionLine,
     `Support: email ${status.supportEmail}.`,
-    'Managed Fluent is free during early access. Account management happens on meetfluent.app.',
+    'Managed Fluent is currently free. Account management happens on meetfluent.app.',
   ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
@@ -2008,7 +2008,7 @@ export function registerCoreMcpSurface(
     withVNextReadSecurity({
       title: 'Get Fluent Account Status',
       description:
-        'Fetch the ChatGPT-safe Fluent account/status surface when the user asks about account status, access status, early-access availability, export, deletion, reactivation, support, or whether Fluent is ready for their account. Returns access state, enabled domains, public entitlement state, account/support links, export and deletion links or instructions, and support email. When summarizing the result, include the support line as plain text instead of a blank heading, for example: "Support: email hello@meetfluent.app." Managed Fluent is free during early access and this tool does not expose internal IDs.',
+        'Fetch the Fluent account/status surface when the user asks about account status, access, export, deletion, reactivation, support, or whether Fluent is ready for their account. Returns access state, enabled domains, account and support links, export and deletion instructions, and support email. Managed Fluent is currently free.',
       annotations: { title: 'Get Fluent Account Status', readOnlyHint: true, idempotentHint: true },
     }),
     async () => {

@@ -16,20 +16,14 @@ const DEFAULT_DOMAINS = [
   {
     displayName: 'Meals',
     domainId: 'meals',
-    lifecycleState: 'available',
+    lifecycleState: 'enabled',
     metadata: { skill: 'fluent-meals' },
   },
   {
     displayName: 'Style',
     domainId: 'style',
-    lifecycleState: 'available',
+    lifecycleState: 'enabled',
     metadata: { skill: 'fluent-style' },
-  },
-  {
-    displayName: 'Health',
-    domainId: 'health',
-    lifecycleState: 'available',
-    metadata: { skill: 'fluent-health' },
   },
 ] as const;
 
@@ -57,6 +51,7 @@ export async function ensureHostedUserProvisioned(
   user: HostedAuthUser,
   options: {
     cloudAccess?: HostedCloudProvisioningSource | null;
+    timeZone?: string | null;
   } = {},
 ): Promise<HostedProvisioningResult> {
   const existing = await getHostedUserMembership(db, user.id);
@@ -108,6 +103,7 @@ export async function ensureHostedUserProvisioned(
   const profileId = DEFAULT_PROFILE_ID;
   const displayName = normalizeDisplayName(user.name, user.email);
   const email = normalizeNullableText(user.email);
+  const timeZone = normalizeTimeZone(options.timeZone);
   const cloudAccessMetadata = {
     accessSource: options.cloudAccess?.accessSource ?? 'hosted_auth_bootstrap',
     ...(inviteAcceptance
@@ -123,6 +119,7 @@ export async function ensureHostedUserProvisioned(
     authProvider: 'better-auth',
     cloudAccess: cloudAccessMetadata,
     seedSource: 'hosted-auth-bootstrap',
+    timezoneSource: timeZone.source,
     userId: user.id,
   });
 
@@ -131,24 +128,26 @@ export async function ensureHostedUserProvisioned(
       .prepare(
         `INSERT OR IGNORE INTO fluent_tenants (
           id, slug, display_name, backend_mode, status, onboarding_state, onboarding_version, metadata_json
-        ) VALUES (?, ?, ?, 'hosted', 'onboarding', 'not_started', '1', ?)`,
+        ) VALUES (?, ?, ?, 'hosted', 'active', 'onboarding_completed', '1', ?)`,
       )
       .bind(tenantId, buildTenantSlug(user), displayName, metadataJson),
     db
       .prepare(
         `INSERT OR IGNORE INTO fluent_profile (
           tenant_id, profile_id, display_name, timezone, metadata_json
-        ) VALUES (?, ?, ?, 'America/Toronto', ?)`,
+        ) VALUES (?, ?, ?, ?, ?)`,
       )
       .bind(
         tenantId,
         profileId,
         displayName,
+        timeZone.value,
         JSON.stringify({
           authProvider: 'better-auth',
           cloudAccess: cloudAccessMetadata,
           email,
           seededBy: 'hosted-auth-bootstrap',
+          timezoneSource: timeZone.source,
         }),
       ),
     ...DEFAULT_DOMAINS.map((domain) =>
@@ -156,7 +155,7 @@ export async function ensureHostedUserProvisioned(
         .prepare(
           `INSERT OR IGNORE INTO fluent_domains (
             tenant_id, domain_id, display_name, lifecycle_state, onboarding_state, onboarding_version, metadata_json
-          ) VALUES (?, ?, ?, ?, 'not_started', '1', ?)`,
+          ) VALUES (?, ?, ?, ?, 'onboarding_completed', '1', ?)`,
         )
         .bind(tenantId, domain.domainId, domain.displayName, domain.lifecycleState, JSON.stringify(domain.metadata)),
     ),
@@ -230,6 +229,19 @@ export async function ensureHostedUserProvisioned(
     tenantId,
     waitlistEntryId: inviteAcceptance?.waitlistEntry.id ?? null,
   };
+}
+
+function normalizeTimeZone(value: string | null | undefined): { source: 'browser' | 'unconfirmed'; value: string } {
+  const normalized = normalizeNullableText(value);
+  if (normalized) {
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: normalized }).format();
+      return { source: 'browser', value: normalized };
+    } catch {
+      // Use a neutral default when the browser sends an invalid zone.
+    }
+  }
+  return { source: 'unconfirmed', value: 'UTC' };
 }
 
 async function maybeMarkSelfServeAccountActive(

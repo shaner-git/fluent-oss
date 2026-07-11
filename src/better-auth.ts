@@ -47,6 +47,7 @@ import {
 import {
   applyFluentCloudOperatorAction,
   fluentCloudOnboardingDescriptor,
+  getFluentCloudOnboardingRecord,
   listFluentCloudOnboardingEvents,
   listFluentCloudOnboardingRecords,
   markFluentCloudClientConnected,
@@ -54,6 +55,7 @@ import {
   recordFluentCloudOnboardingFailure,
   renderFluentCloudOnboardingOpsPage,
   type FluentCloudOnboardingState,
+  type FluentCloudOnboardingRecord,
 } from './cloud-onboarding';
 import { hasHostedEmailDelivery, sendHostedMagicLinkEmail } from './hosted-email';
 import { resolveHostedCloudAccess, resolveHostedCloudClientDecision } from './hosted-access-state';
@@ -420,6 +422,15 @@ async function handleConsentPage(request: Request, env: CloudRuntimeEnv): Promis
     );
   }
   const consentInfo = await getConsentClientSummary(auth, request);
+  if (consentInfo.requestedScopes.length === 0) {
+    return html(
+      renderAuthShell({
+        body: `<p class="eyebrow">⟩ Connect Fluent</p><h1 class="display">Start the connection <span class="accent">again</span></h1><p class="lede">This approval link is missing the permissions Fluent needs. Return to your AI app and connect Fluent again.</p>`,
+        title: 'Reconnect | Fluent',
+      }),
+      400,
+    );
+  }
   return html(
     renderConsentPage({
       clientId: consentInfo.clientId,
@@ -465,8 +476,15 @@ async function handleAccountPage(request: Request, env: CloudRuntimeEnv): Promis
     );
   }
 
+  const onboarding = await getFluentCloudOnboardingRecord(wrapCloudflareDatabase(env.DB), {
+    email: session.user.email ?? null,
+    tenantId: provisioning.result?.tenantId ?? null,
+    userId: session.user.id,
+  });
+
   return html(
     renderAccountNextStepsPage({
+      onboarding,
       origin: new URL(request.url).origin,
       provisioningError: provisioning.error,
       provisioningResult: provisioning.result,
@@ -766,6 +784,7 @@ async function maybeProvisionHostedSession(
       name: user.name ?? null,
     }, {
       cloudAccess: accessDecision.provisioningSource,
+      timeZone: getBrowserTimeZone(request),
     });
     await markFluentCloudEmailVerified(db, {
       email: user.email ?? null,
@@ -779,6 +798,10 @@ async function maybeProvisionHostedSession(
       result,
     };
   } catch (error) {
+    console.error('Hosted provisioning failed during sign-in', {
+      message: error instanceof Error ? error.message : String(error),
+      userId: user.id,
+    });
     await recordFluentCloudOnboardingFailure(wrapCloudflareDatabase(env.DB), {
       code: 'hosted_provisioning_failed',
       email: user.email ?? null,
@@ -789,7 +812,7 @@ async function maybeProvisionHostedSession(
     });
     return {
       accessFailureCode: null,
-      error: error instanceof Error ? error.message : String(error),
+      error: 'We could not finish preparing your Fluent account. Please try again in a moment.',
       result: null,
     };
   }
@@ -812,7 +835,7 @@ async function getConsentClientSummary(
         .split(' ')
         .map((scope) => scope.trim())
         .filter(Boolean)
-    : [...FLUENT_PUBLIC_HOSTED_OAUTH_SCOPES];
+    : [];
 
   if (!clientId) {
     return {
@@ -1521,6 +1544,7 @@ async function buildHostedAccessTokenClaims(
           name: typeof user.name === 'string' ? user.name : null,
         }, {
           cloudAccess: accessDecision.provisioningSource,
+          timeZone: getBrowserTimeZone(request),
         });
       })()
     : {
@@ -1706,12 +1730,12 @@ function stringArrayValue(value: unknown): string[] | null {
 }
 
 function betterAuthConfigErrorResponse(error: unknown): Response {
+  console.error('Better Auth configuration unavailable', {
+    message: error instanceof Error ? error.message : String(error),
+  });
   const payload = createFluentCloudAccessFailurePayload('temporarily_unavailable');
   return json(
-    {
-      ...payload,
-      detail: error instanceof Error ? error.message : 'Better Auth is not configured.',
-    },
+    payload,
     503,
   );
 }
@@ -1734,7 +1758,6 @@ function betterAuthRuntimeErrorResponse(request: Request, error: unknown): Respo
     {
       error: 'hosted_auth_failed',
       error_description: 'Hosted authorization is temporarily unavailable.',
-      detail: error instanceof Error ? error.message : String(error),
     },
     500,
   );
@@ -1748,17 +1771,13 @@ const FLUENT_LOGO_SVG = `<svg viewBox="0 0 1024 1024" fill="none" xmlns="http://
 const FLUENT_CONNECT_DOCS_URL = 'https://docs.meetfluent.app/guides/connect';
 
 function renderAuthUnavailablePage(env: CloudRuntimeEnv, title: string): string {
-  const status = buildBetterAuthStatus(env);
+  void env;
   return renderAuthShell({
     body: `
 <p class="eyebrow">⟩ ${escapeHtml(title)}</p>
 <h1 class="display">${escapeHtml(title)} is <span class="accent">unavailable</span></h1>
-<p class="lede">Fluent's Better Auth scaffold is mounted, but the required secret has not been configured yet.</p>
-<div class="status-list">
-  <div class="status-row"><span class="status-key">Secret ready</span><code class="status-val">${String(status.hasSecret)}</code></div>
-  <div class="status-row"><span class="status-key">Email delivery ready</span><code class="status-val">${String(status.hasEmailDelivery)}</code></div>
-  <div class="status-row"><span class="status-key">Migration token ready</span><code class="status-val">${String(status.hasMigrationToken)}</code></div>
-</div>`,
+<p class="lede">Fluent sign-in is temporarily unavailable. Please try again in a few minutes.</p>
+<p class="meta">Still stuck? Contact <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a>.</p>`,
     title: `${title} | Fluent`,
   });
 }
@@ -1774,7 +1793,6 @@ function renderSignInPage(input: {
   session: BetterAuthSessionPayload;
 }): string {
   const signedIn = Boolean(input.session?.user);
-  const selfServe = Boolean(input.selfServe);
   const signedInBody = signedIn
     ? renderSignedInAccountBody({
         mcpUrl: `${input.origin}/mcp`,
@@ -1795,53 +1813,31 @@ function renderSignInPage(input: {
   const signedOutBody = `
 <p class="eyebrow">⟩ Fluent sign-in</p>
 <h1 class="display">Sign in with <span class="accent">email</span></h1>
-<p class="lede">${selfServe
-    ? 'Fluent is in free early access and open source. Sign in — or create your account — with your email below.'
-    : 'Fluent is in early access and open source. Approved accounts can sign in here today, and everyone else can request early access or explore the open-source runtime.'}</p>
+<p class="lede">Enter your email to sign in or create your Fluent account.</p>
 <div class="auth-card">
-  <form id="password-form" class="stack">
+  <form id="magic-link-form" class="stack">
     <label>
       <span class="field-label">Email address</span>
       <input type="email" name="email" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="you@example.com" required />
     </label>
-    <label>
-      <span class="field-label">Password</span>
-      <input type="password" name="password" autocomplete="current-password" required />
-    </label>
-    <button id="password-submit" type="submit" class="btn-primary">
-      Sign in
-      <span class="btn-arrow">→</span>
-    </button>
-  </form>
-  <div class="divider" role="presentation"><span>or</span></div>
-  <form id="magic-link-form" class="stack">
-    <label>
-      <span class="field-label">Email address for sign-in link</span>
-      <input type="email" name="email" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="you@example.com" required />
-    </label>
     <button id="magic-link-submit" type="submit" class="btn-primary"${input.emailDeliveryReady ? '' : ' disabled'}>
-      Send sign-in link
+      Continue with email
       <span class="btn-arrow">→</span>
     </button>
   </form>
+  <details class="reviewer-sign-in">
+    <summary>Reviewer sign-in</summary>
+    <form id="password-form" class="stack">
+      <label><span class="field-label">Reviewer email</span><input type="email" name="email" autocomplete="email" required /></label>
+      <label><span class="field-label">Reviewer password</span><input type="password" name="password" autocomplete="current-password" required /></label>
+      <button id="password-submit" type="submit" class="btn-secondary">Sign in as reviewer</button>
+    </form>
+  </details>
   <div id="form-status" class="meta status-live" aria-live="polite"></div>
 </div>
 <ul class="support-list">
-  ${selfServe
-    ? `<li>New to Fluent? Sign in with your email to create your account — free while in early access.</li>
-  <li>Prefer passwordless? Use the email sign-in link option above.</li>
   <li>Open the sign-in link in this same browser. Links expire in 15 minutes.</li>
-  <li>Explore the open-source runtime at <a href="${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}">${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}</a>.</li>
-  <li>Contact <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a> if anything is stuck.</li>
-  <li>Need to delete a Fluent account later? Sign in first, then open <a href="/account/delete">/account/delete</a>.</li>`
-    : `<li>Reviewer demo accounts can sign in with issued credentials.</li>
-  <li>Approved early-access accounts may also use a sign-in link.</li>
-  <li>Only approved early-access accounts can finish sign-in right now.</li>
-  <li>Request early access at <a href="${escapeHtml(FLUENT_CLOUD_WAITLIST_URL)}">${escapeHtml(FLUENT_CLOUD_WAITLIST_URL)}</a>.</li>
-  <li>Explore the open-source runtime at <a href="${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}">${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}</a>.</li>
-  <li>Contact <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a> if you expected access.</li>`}
-  <li>Open the sign-in link in this same browser. Links expire in 15 minutes.</li>
-  <li>Need to delete a Fluent account later? Sign in first, then open <code>/account/delete</code>.</li>
+  <li>Need help? Contact <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a>.</li>
 </ul>`;
 
   return renderAuthShell({
@@ -1859,6 +1855,10 @@ const signedInStatus = document.getElementById('signed-in-status');
 const copyMcpUrlButton = document.getElementById('copy-mcp-url');
 const callbackUrl = ${JSON.stringify(input.callbackUrl)};
 const passwordRedirectUrl = ${JSON.stringify(input.passwordRedirectUrl)};
+try {
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (timeZone) document.cookie = 'fluent_timezone=' + encodeURIComponent(timeZone) + '; Path=/; Max-Age=31536000; SameSite=Lax; Secure';
+} catch {}
 async function signOutCurrentAccount(redirectUrl) {
   const targetStatus = signedInStatus || status;
   if (signOutCurrentAccountButton) signOutCurrentAccountButton.disabled = true;
@@ -1932,7 +1932,7 @@ form?.addEventListener('submit', async (event) => {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.message || data?.error || 'Unable to send sign-in link.');
-    status.textContent = 'Check your inbox. Your Fluent sign-in link is on the way.';
+    status.textContent = 'Check your inbox, then open the Fluent sign-in link in this same browser.';
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : String(error);
   } finally {
@@ -1945,6 +1945,7 @@ form?.addEventListener('submit', async (event) => {
 }
 
 function renderAccountNextStepsPage(input: {
+  onboarding: FluentCloudOnboardingRecord | null;
   origin: string;
   provisioningError: string | null;
   provisioningResult: Awaited<ReturnType<typeof ensureHostedUserProvisioned>> | null;
@@ -1957,6 +1958,7 @@ function renderAccountNextStepsPage(input: {
   return renderAuthShell({
     body: `${renderSignedInAccountBody({
       mcpUrl: `${input.origin}/mcp`,
+      onboarding: input.onboarding,
       provisioningError: null,
       provisioningResult: input.provisioningResult,
       session: input.session,
@@ -2003,53 +2005,59 @@ accountCopyMcpUrlButton?.addEventListener('click', async () => {
 
 function renderSignedInAccountBody(input: {
   mcpUrl: string;
+  onboarding?: FluentCloudOnboardingRecord | null;
   provisioningError: string | null;
   provisioningResult: Awaited<ReturnType<typeof ensureHostedUserProvisioned>> | null;
   session: BetterAuthSessionPayload;
 }): string {
   const signedInAs = escapeHtml(input.session?.user?.email ?? input.session?.user?.id ?? 'your account');
-  const statusTitle = input.provisioningResult?.created
-    ? 'Your Fluent account was created.'
-    : 'You are signed in to Fluent.';
-  const statusDetail = input.provisioningResult?.created
-    ? 'The hosted account is provisioned and ready for a client connection.'
-    : 'The hosted account is ready for a client connection.';
+  const timestamps = input.onboarding?.timestamps ?? {};
+  const clientConnected = Boolean(timestamps.firstClientConnectedAt);
+  const firstResponse = Boolean(timestamps.firstSuccessfulToolCallAt);
+  const firstArea = Boolean(input.onboarding?.firstDomainId || timestamps.profileStartedAt);
+  const connectedClient = input.onboarding?.firstConnectedClient.name ?? input.onboarding?.lastConnectedClient.name ?? null;
+  const headline = firstResponse ? 'Fluent is ready' : clientConnected ? 'Try Fluent in your AI app' : 'Finish connecting Fluent';
+  const statusTitle = firstResponse ? 'Your first Fluent response is complete.' : 'Your Fluent account is ready.';
+  const statusDetail = clientConnected
+    ? `${connectedClient ? `${connectedClient} is connected. ` : ''}Open a new conversation and try your first prompt.`
+    : 'Choose an AI app below to finish the connection.';
+  const step = (complete: boolean, label: string, detail: string) => `<li class="progress-step ${complete ? 'is-complete' : ''}"><span class="progress-mark">${complete ? '✓' : '·'}</span><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></span></li>`;
   const provisioningWarning = input.provisioningError
     ? `<div class="notice warn"><p class="notice-title">Hosted bootstrap warning</p><p>${escapeHtml(input.provisioningError)}</p></div>`
     : '';
 
   return `
 <p class="eyebrow">⟩ Fluent account</p>
-<h1 class="display">Fluent is <span class="accent">ready</span></h1>
+<h1 class="display">${escapeHtml(headline)}</h1>
 <p class="lede">Signed in as <strong>${signedInAs}</strong>.</p>
 <div class="notice success">
   <p class="notice-title">${escapeHtml(statusTitle)}</p>
   <p>${escapeHtml(statusDetail)}</p>
 </div>
 <div class="connect-card" aria-labelledby="connect-card-title">
-  <p id="connect-card-title" class="connect-title">Fluent is ready. Now connect it to your AI app:</p>
+  <p id="connect-card-title" class="connect-title">Your setup progress</p>
+  <ol class="progress-list">
+    ${step(true, 'Account created', 'Your private Fluent space is ready.')}
+    ${step(clientConnected, 'AI app connected', connectedClient ? `${connectedClient} connected.` : 'Connect ChatGPT, Codex, or Claude.')}
+    ${step(firstResponse, 'First Fluent response', 'Ask Fluent to check your account and suggest a first area.')}
+    ${step(firstArea, 'First area started', 'Start with Meals or Style when you are ready.')}
+  </ol>
+  <div class="mobile-setup-note">
+    <p><strong>Finish plugin setup on a computer.</strong></p>
+    <p>The ChatGPT mobile app cannot add plugins. Open the Fluent setup page to share, email, or copy the same ChatGPT + Codex steps to your computer.</p>
+    <p><a href="https://meetfluent.app/setup/openai">Open mobile setup options →</a></p>
+    <p><a href="https://meetfluent.app/setup/openai?device=computer">Already on a computer? Open computer steps →</a></p>
+  </div>
+  <div class="setup-actions desktop-setup-steps">
+    <a class="btn-primary" href="https://meetfluent.app/setup/openai">Add to ChatGPT + Codex <span class="btn-arrow">→</span></a>
+    <a class="btn-secondary" href="https://meetfluent.app/setup/claude">Add to Claude</a>
+  </div>
+  <p class="eyebrow-sm">Connection address</p>
   <div class="copy-row">
     <input class="copy-field" type="text" readonly value="${escapeHtml(input.mcpUrl)}" aria-label="Fluent MCP URL" />
     <button id="copy-mcp-url" type="button" class="btn-secondary" data-copy-value="${escapeHtml(input.mcpUrl)}">Copy</button>
   </div>
-  <div class="quick-steps">
-    <div class="quick-step-card">
-      <p class="eyebrow-sm">Claude.ai</p>
-      <ol>
-        <li>Open Claude.ai settings.</li>
-        <li>Add a custom connector.</li>
-        <li>Paste the MCP URL and approve Fluent.</li>
-      </ol>
-    </div>
-    <div class="quick-step-card">
-      <p class="eyebrow-sm">ChatGPT Plugins</p>
-      <ol>
-        <li>Open ChatGPT Plugins and select the plus button.</li>
-        <li>In New App, use Server URL with the Fluent MCP URL.</li>
-        <li>Keep OAuth selected, choose Create, and finish authorization.</li>
-      </ol>
-    </div>
-  </div>
+  <div class="notice soft"><p class="notice-title">A useful first prompt</p><p>“Check my Fluent account and help me choose one area to set up.”</p></div>
   <p class="notice-link">Full setup guide: <a href="${escapeHtml(FLUENT_CONNECT_DOCS_URL)}">${escapeHtml(FLUENT_CONNECT_DOCS_URL)}</a></p>
 </div>
 <div class="actions">
@@ -2071,7 +2079,7 @@ function renderConsentPage(input: {
   const scopeItems = input.requestedScopes
     .map((scope) => {
       const human = humanizeScope(scope);
-      return `<li class="scope-row"><code class="scope-code">${escapeHtml(scope)}</code><span class="scope-human">${escapeHtml(human)}</span></li>`;
+      return `<li class="scope-row"><span class="scope-human">${escapeHtml(human)}</span></li>`;
     })
     .join('');
   const warning = input.provisioningError
@@ -2096,7 +2104,7 @@ function renderConsentPage(input: {
 <div class="scope-card">
   <p class="eyebrow-sm">Requested access</p>
   <ul class="scope-list">${scopeItems}</ul>
-  <p class="meta">Client ID <code>${escapeHtml(input.clientId ?? 'unknown')}</code></p>
+  <details><summary>Connection details</summary><p class="meta">Client ID <code>${escapeHtml(input.clientId ?? 'unknown')}</code></p><p class="meta">Permissions <code>${escapeHtml(input.requestedScopes.join(' '))}</code></p></details>
 </div>
 <div class="notice soft">
   <p class="notice-title">Before you approve</p>
@@ -2117,6 +2125,13 @@ function renderConsentPage(input: {
 <script>
 const status = document.getElementById('consent-status');
 const switchAccountButton = document.getElementById('switch-account');
+const approveButton = document.getElementById('approve');
+const denyButton = document.getElementById('deny');
+function setConsentBusy(busy) {
+  if (approveButton) approveButton.disabled = busy;
+  if (denyButton) denyButton.disabled = busy;
+  if (switchAccountButton) switchAccountButton.disabled = busy;
+}
 function consentErrorMessage(data) {
   const raw = String(data?.error_description || data?.message || data?.error || '').trim();
   if (!raw) return 'We could not finish the approval. Return to the app and try connecting again.';
@@ -2128,6 +2143,7 @@ function consentErrorMessage(data) {
   return raw;
 }
 async function submitConsent(accept) {
+  setConsentBusy(true);
   status.classList.remove('status-error');
   status.textContent = accept ? 'Approving access…' : 'Denying access…';
   try {
@@ -2144,11 +2160,11 @@ async function submitConsent(accept) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(consentErrorMessage(data));
     if (data?.url) { window.location.assign(data.url); return; }
-    status.classList.remove('status-error');
-    status.textContent = 'Consent recorded.';
+    throw new Error('Fluent approved the connection, but the AI app did not provide a return link. Return to the app and start the connection again.');
   } catch (error) {
     status.classList.add('status-error');
     status.textContent = error instanceof Error ? error.message : String(error);
+    setConsentBusy(false);
   }
 }
 document.getElementById('approve')?.addEventListener('click', () => submitConsent(true));
@@ -2171,7 +2187,7 @@ switchAccountButton?.addEventListener('click', async () => {
   } catch (error) {
     status.classList.add('status-error');
     status.textContent = error instanceof Error ? error.message : String(error);
-    switchAccountButton.disabled = false;
+    setConsentBusy(false);
   }
 });
 </script>`,
@@ -2558,6 +2574,30 @@ function renderAuthShell(input: { body: string; title: string }): string {
       display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px;
     }
     .quick-steps { display: grid; gap: 12px; }
+    .progress-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+    .progress-step { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; color: var(--muted); }
+    .progress-step strong, .progress-step small { display: block; }
+    .progress-step strong { color: var(--ink-strong); font-size: 14px; }
+    .progress-step small { margin-top: 2px; font-size: 12.5px; line-height: 1.5; }
+    .progress-mark { width: 22px; height: 22px; border: 1px solid var(--border); border-radius: 999px; display: grid; place-items: center; }
+    .progress-step.is-complete .progress-mark { color: var(--success); border-color: rgba(163,176,148,0.5); }
+    .setup-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    .setup-actions a { text-decoration: none; }
+    .reviewer-sign-in { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
+    .reviewer-sign-in summary, details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+    .reviewer-sign-in form { margin-top: 14px; }
+    .mobile-setup-note {
+      display: none; padding: 14px 16px; border-radius: 12px;
+      background: rgba(250,249,246,0.03); border: 1px solid var(--border);
+    }
+    .mobile-setup-note p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
+    .mobile-setup-note p + p { margin-top: 8px; }
+    .mobile-setup-note strong { color: var(--ink-strong); }
+    .mobile-setup-note a {
+      color: var(--accent-strong); text-decoration-color: rgba(225,211,186,0.5);
+      text-underline-offset: 3px;
+    }
+    .mobile-setup-note a:hover { color: var(--ink-strong); text-decoration-color: var(--ink-strong); }
     .quick-step-card {
       padding: 14px 16px; border-radius: 12px;
       background: rgba(250,249,246,0.03); border: 1px solid var(--border);
@@ -2572,6 +2612,10 @@ function renderAuthShell(input: { body: string; title: string }): string {
     .connect-card .notice-link a {
       color: var(--accent-strong); text-decoration-color: rgba(225,211,186,0.5);
       text-underline-offset: 3px;
+    }
+    @media (max-width: 720px), (pointer: coarse) {
+      .mobile-setup-note { display: block; }
+      .desktop-setup-steps { display: none; }
     }
     .connect-card .notice-link a:hover { color: var(--ink-strong); text-decoration-color: var(--ink-strong); }
     .client-card {
@@ -2677,6 +2721,24 @@ function normalizeCompatibilityRoute(pathname: string): BetterAuthCompatibilityR
       return '/.well-known/oauth-protected-resource';
     default:
       return null;
+  }
+}
+
+function getBrowserTimeZone(request: Request): string | null {
+  const cookieHeader = request.headers.get('cookie') ?? '';
+  const rawValue = cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('fluent_timezone='))
+    ?.slice('fluent_timezone='.length);
+  if (!rawValue) return null;
+  try {
+    const value = decodeURIComponent(rawValue).trim();
+    if (!value || value.length > 100) return null;
+    new Intl.DateTimeFormat('en', { timeZone: value }).format();
+    return value;
+  } catch {
+    return null;
   }
 }
 
