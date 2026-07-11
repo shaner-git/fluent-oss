@@ -1,7 +1,7 @@
 {
   "name": "fluent",
   "version": "0.1.0",
-  "description": "Fluent helps AI assistants remember meals and style context, with wellbeing reserved until it earns a public surface.",
+  "description": "Fluent gives ChatGPT and Codex shared Meals, Style, and budget context for practical everyday decisions.",
   "author": {
     "name": "Fluent"
   },
@@ -9,8 +9,10 @@
   "keywords": [
     "fluent",
     "meals",
-    "wellbeing",
     "style",
+    "budgets",
+    "chatgpt",
+    "codex",
     "personal-mcp"
   ],
   "mcpServers": "./.mcp.json",
@@ -32,8 +34,8 @@
   },
   "interface": {
     "displayName": "Fluent",
-    "shortDescription": "Meals and style context; wellbeing reserved.",
-    "longDescription": "Fluent connects Codex to saved Meals and Style context while treating Wellbeing as a reserved public boundary.",
+    "shortDescription": "Shared Meals, Style, and budget context.",
+    "longDescription": "Fluent connects ChatGPT and Codex to the same saved Meals, Style, and budget context, with explicit approval for changes.",
     "developerName": "Fluent",
     "category": "Lifestyle",
     "capabilities": [

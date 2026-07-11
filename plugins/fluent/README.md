@@ -1,6 +1,6 @@
-# Fluent Codex Plugin
+# Fluent Plugin for Codex
 
-This public plugin bundle is for running Fluent yourself.
+This public Codex bundle is for running Fluent yourself. The managed Fluent plugin is designed for ChatGPT and Codex; its OpenAI Plugin Directory listing is pending review.
 
 Default MCP config:
 
