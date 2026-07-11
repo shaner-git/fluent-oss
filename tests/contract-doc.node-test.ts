@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderContractDocMarkdown } from '../scripts/render-contract-doc';
@@ -27,10 +27,18 @@ assert.match(doc, /2026-07-09\.fluent-core-v2\.0/);
 assert.match(domains, /Health and Wellbeing are not currently supported/);
 assert.doesNotMatch(`${doc}\n${tools}\n${domains}`, /public vNext|10 resources|compatibility render|Home dashboard.*current/);
 
-for (const skill of ['fluent-core', 'fluent-meals', 'fluent-style', 'fluent-health']) {
+for (const skill of ['fluent-core', 'fluent-meals', 'fluent-style']) {
   const codex = read(`plugins/fluent/skills/${skill}/SKILL.md`);
   assert.equal(read(`claude-plugin/fluent/skills/${skill}/SKILL.md`), codex);
   assert.equal(read(`openclaw-plugin/fluent/skills/${skill}/SKILL.md`), codex);
+}
+
+for (const host of ['plugins/fluent', 'claude-plugin/fluent', 'openclaw-plugin/fluent']) {
+  assert.equal(
+    existsSync(path.join(root, host, 'skills/fluent-health/SKILL.md')),
+    false,
+    `${host} must not package the retired Health skill.`,
+  );
 }
 
 console.log('Fluent 2.0 contract doc alignment ok');

@@ -1,7 +1,7 @@
 {
   "name": "fluent",
   "version": "0.2.0",
-  "description": "Fluent helps Claude use personal Meals and Style memory, with Wellbeing reserved until it earns a public surface.",
+  "description": "Fluent helps Claude use personal Meals and Style memory for practical everyday decisions.",
   "author": {
     "name": "Fluent"
   },
@@ -11,7 +11,6 @@
   "keywords": [
     "fluent",
     "meals",
-    "wellbeing",
     "style",
     "personal-mcp"
   ],
