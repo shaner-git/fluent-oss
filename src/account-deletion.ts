@@ -76,7 +76,7 @@ const CLOUD_ACCOUNT_DELETED_DATA = [
 
 const RETENTION_EXCEPTIONS = [
   'Fluent retains the deletion request record and minimal audit metadata so Fluent can prove fulfillment, investigate abuse, and satisfy security or legal obligations.',
-  `If a legal, billing, fraud, or safety hold applies, operators may retain only the minimum required metadata and move the request into manual review. Contact ${FLUENT_SUPPORT_EMAIL} for exceptions.`,
+  `If a legal, fraud, security, or safety hold applies, operators may retain only the minimum required metadata and move the request into manual review. Contact ${FLUENT_SUPPORT_EMAIL} for exceptions.`,
 ];
 
 const CONNECTED_CLIENT_EFFECTS = [

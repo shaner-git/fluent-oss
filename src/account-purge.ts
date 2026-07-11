@@ -167,27 +167,9 @@ export async function purgeCloudAccountData(
       ? bindings.db
           .prepare(
             `DELETE FROM fluent_entitlements
-             WHERE ((? IS NOT NULL AND user_id = ?)
+             WHERE (? IS NOT NULL AND user_id = ?)
                 OR (? IS NOT NULL AND tenant_id = ?)
-                OR (? IS NOT NULL AND email_normalized = ?))
-               AND stripe_customer_id IS NULL
-               AND stripe_subscription_id IS NULL`,
-          )
-          .bind(userId, userId, tenantId, tenantId, emailNormalized, emailNormalized)
-      : null,
-    hasEntitlementSubject(userId, tenantId, emailNormalized)
-      ? bindings.db
-          .prepare(
-            `UPDATE fluent_entitlements
-             SET user_id = NULL,
-                 tenant_id = NULL,
-                 email = NULL,
-                 email_normalized = NULL,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE ((? IS NOT NULL AND user_id = ?)
-                OR (? IS NOT NULL AND tenant_id = ?)
-                OR (? IS NOT NULL AND email_normalized = ?))
-               AND (stripe_customer_id IS NOT NULL OR stripe_subscription_id IS NOT NULL)`,
+                OR (? IS NOT NULL AND email_normalized = ?)`,
           )
           .bind(userId, userId, tenantId, tenantId, emailNormalized, emailNormalized)
       : null,

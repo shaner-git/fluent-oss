@@ -27,7 +27,6 @@ export const FLUENT_DEV_RESOURCE_URIS = [] as const;
 
 export const FLUENT_CHATGPT_APP_PROFILE = {
   accountLinks: {
-    billing: '/account/billing',
     deleteAccount: '/account/delete',
     exportData: '/account/export',
     reactivate: '/account/reactivate',

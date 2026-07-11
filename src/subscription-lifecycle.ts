@@ -278,43 +278,6 @@ export async function runSubscriptionLifecycleCleanup(
   return { cleaned, transitioned };
 }
 
-export async function createBillingPortalResponseForCurrentUser(
-  request: Request,
-  env: CloudRuntimeEnv,
-  db: FluentDatabase,
-  user: { email?: string | null; id: string },
-): Promise<Response> {
-  const record = await getFluentCloudOnboardingRecord(db, {
-    email: user.email ?? null,
-    userId: user.id,
-  });
-  const decision = evaluateSubscriptionLifecycle(record);
-  if (decision.access === 'deleted' || decision.access === 'retention_expired' || decision.access === 'suspended') {
-    return json({ error: decision.message, retentionDeadline: decision.retentionDeadline }, 403);
-  }
-
-  const configuredPortal = env.FLUENT_BILLING_PORTAL_URL?.trim();
-  const portalUrl = configuredPortal || `mailto:hello@meetfluent.app?subject=${encodeURIComponent('Fluent billing help')}`;
-  await recordLifecycleAuditEvent(db, {
-    email: user.email ?? null,
-    eventType: 'subscription_lifecycle.billing_portal_requested',
-    metadata: {
-      hasStripeCustomer: Boolean(record?.stripeCustomerId),
-      retentionDeadline: decision.retentionDeadline,
-      stripeCustomerId: record?.stripeCustomerId ?? null,
-    },
-    tenantId: record?.tenantId ?? null,
-    userId: user.id,
-  });
-  return json({
-    message: configuredPortal
-      ? 'Open the billing portal to manage your Fluent subscription.'
-      : 'Billing portal is not configured yet. Contact support to manage billing.',
-    portalUrl,
-    retentionDeadline: decision.retentionDeadline,
-  });
-}
-
 export async function reactivateCurrentUserAccount(
   db: FluentDatabase,
   user: { email?: string | null; id: string },

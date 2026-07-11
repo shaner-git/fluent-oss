@@ -527,9 +527,9 @@ export function buildFluentAccountStatusToolView(status: FluentAccountStatus): F
     instructions: status.instructions,
     links: status.links,
     safety: {
-      billingBoundary: 'Billing and account management happen on meetfluent.app, outside your assistant.',
-      paymentDetails: 'Payment details stay with the billing provider; Fluent does not collect card data directly.',
-      privacyBoundary: 'Private account and billing identifiers are not included in assistant-facing account text.',
+      billingBoundary: 'Managed Fluent is free during early access and has no billing flow.',
+      paymentDetails: 'Fluent does not collect payment details.',
+      privacyBoundary: 'Private account identifiers are not included in assistant-facing account text.',
     },
     support: {
       displayLine: `Support: email ${status.supportEmail}.`,
@@ -555,7 +555,7 @@ export function buildFluentAccountStatusToolText(status: FluentAccountStatus): s
     exportLine,
     deletionLine,
     `Support: email ${status.supportEmail}.`,
-    'Billing and account management happen on meetfluent.app, outside your assistant.',
+    'Managed Fluent is free during early access. Account management happens on meetfluent.app.',
   ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
@@ -865,21 +865,21 @@ function describeAccountStatusForUser(status: FluentAccountStatus): { label: str
       };
     case 'past_due_grace':
       return {
-        label: 'in payment grace',
-        nextStep: 'Manage billing on meetfluent.app before the grace window ends.',
+        label: 'needs review',
+        nextStep: 'Contact support to restore normal account access.',
         summary: status.entitlement.summary,
       };
     case 'limited':
     case 'canceled_retention':
       return {
         label: 'limited',
-        nextStep: 'Use meetfluent.app to export data, request deletion, reactivate, or manage billing during the retention window.',
+        nextStep: 'Use meetfluent.app to export data, request deletion, or reactivate during the retention window.',
         summary: status.entitlement.summary,
       };
     case 'retention_expired':
       return {
         label: 'past the retention window',
-        nextStep: 'Contact support if you believe this is wrong or need help with retained billing records.',
+        nextStep: 'Contact support if you believe this account state is wrong.',
         summary: status.entitlement.summary,
       };
     case 'suspended':
@@ -2008,7 +2008,7 @@ export function registerCoreMcpSurface(
     withVNextReadSecurity({
       title: 'Get Fluent Account Status',
       description:
-        'Fetch the ChatGPT-safe Fluent account/status surface when the user asks about account status, access status, paid-access boundary, export, deletion, reactivation, support, or whether Fluent is ready for their account. Returns access state, enabled domains, public entitlement state, account/support links, export and deletion links or instructions, and support email. When summarizing the result, include the support line as plain text instead of a blank heading, for example: "Support: email hello@meetfluent.app." Does not start, sell, upgrade, cancel, or manage paid access inside ChatGPT, and does not expose billing internals or internal IDs.',
+        'Fetch the ChatGPT-safe Fluent account/status surface when the user asks about account status, access status, early-access availability, export, deletion, reactivation, support, or whether Fluent is ready for their account. Returns access state, enabled domains, public entitlement state, account/support links, export and deletion links or instructions, and support email. When summarizing the result, include the support line as plain text instead of a blank heading, for example: "Support: email hello@meetfluent.app." Managed Fluent is free during early access and this tool does not expose internal IDs.',
       annotations: { title: 'Get Fluent Account Status', readOnlyHint: true, idempotentHint: true },
     }),
     async () => {

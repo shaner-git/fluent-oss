@@ -1,5 +1,5 @@
 import { getFluentAuthProps, type MutationProvenance } from './auth';
-import { buildChatGptSafeRuntimeEntitlement } from './account-billing';
+import { buildChatGptSafeRuntimeEntitlement } from './account-status';
 import { getFluentCloudOnboardingRecord, type FluentCloudOnboardingRecord } from './cloud-onboarding';
 import { markFluentCloudAccountActive } from './cloud-invites';
 import { FLUENT_SUPPORT_EMAIL } from './cloud-early-access';
@@ -1561,7 +1561,7 @@ function readyDomainActions(input: {
       {
         kind: 'read',
         reason:
-          'Use the account-status surface for account, access, billing-boundary, subscription, export, deletion, reactivation, support, or account-ready asks.',
+          'Use the account-status surface for account, access, early-access availability, export, deletion, reactivation, support, or account-ready asks.',
         tool: 'fluent_get_account_status',
       },
       {
@@ -1925,7 +1925,7 @@ function buildAccountEntitlement(
   if (deploymentTrack !== 'cloud') {
     return {
       state: 'unavailable',
-      summary: 'Hosted billing entitlements do not apply to the local OSS runtime.',
+      summary: 'Managed-service account state does not apply to the local OSS runtime.',
       graceDeadline: null,
       retentionDeadline: null,
     };
@@ -2066,7 +2066,7 @@ function buildAccountInstructions(
       deletion: 'The data retention window has ended, so deletion controls are no longer the next step.',
       export: 'Account export is no longer available after the retention window ends.',
       manageAccount: 'Open meetfluent.app/account for account status details.',
-      support: `Email ${FLUENT_SUPPORT_EMAIL} for help with retained billing records or account questions.`,
+      support: `Email ${FLUENT_SUPPORT_EMAIL} for help with account questions.`,
     };
   }
   if (state === 'suspended') {
@@ -2079,7 +2079,7 @@ function buildAccountInstructions(
   }
   if (state === 'pending' || state === 'unavailable') {
     return {
-      deletion: 'Deletion is available after account setup is complete, or through support for waitlist-only records.',
+      deletion: 'Deletion is available after account setup is complete, or through support if setup cannot finish.',
       export: 'Export is available after account setup is complete.',
       manageAccount: 'Open meetfluent.app/account to finish setup or check access.',
       support: `Email ${FLUENT_SUPPORT_EMAIL} if this account should already be active.`,
@@ -2088,7 +2088,7 @@ function buildAccountInstructions(
   return {
     deletion: 'Open the deletion link to review the deletion policy, request deletion, or confirm a pending request.',
     export: 'Open account settings on meetfluent.app to request or download an export.',
-    manageAccount: 'Open the manage account link on meetfluent.app for account, billing, export, and deletion controls.',
+    manageAccount: 'Open the manage account link on meetfluent.app for account, export, and deletion controls.',
     support: `Email ${FLUENT_SUPPORT_EMAIL} for account help.`,
   };
 }

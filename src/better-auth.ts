@@ -70,15 +70,8 @@ import {
 } from './chatgpt-profile-routing';
 import { wrapCloudflareBlobStore, wrapCloudflareDatabase } from './storage';
 import { ensureHostedUserProvisioned } from './hosted-identity';
-import {
-  handleAccountBillingCheckoutRequest,
-  handleAccountBillingPortalRequest as handleAuthoritativeAccountBillingPortalRequest,
-  handleAccountStatusForIdentity,
-} from './account-billing';
-import {
-  createBillingPortalResponseForCurrentUser,
-  reactivateCurrentUserAccount,
-} from './subscription-lifecycle';
+import { handleAccountStatusForIdentity } from './account-status';
+import { reactivateCurrentUserAccount } from './subscription-lifecycle';
 
 type BetterAuthSessionPayload = {
   session?: {
@@ -177,24 +170,8 @@ export async function maybeHandleBetterAuthRequest(
     return handleAccountDeletionPage(request, env);
   }
 
-  if (request.method === 'GET' && url.pathname === '/account/billing') {
-    return handleAccountBillingPage(request, env);
-  }
-
   if (request.method === 'GET' && url.pathname === '/account/status') {
     return handleAccountStatusRequest(request, env);
-  }
-
-  if (request.method === 'POST' && url.pathname === '/account/billing/checkout') {
-    return handleAccountBillingCheckoutSessionRequest(request, env);
-  }
-
-  if (request.method === 'POST' && url.pathname === '/account/billing/portal') {
-    return handleAccountBillingPortalSessionRequest(request, env);
-  }
-
-  if (request.method === 'POST' && url.pathname === '/api/account/billing/portal') {
-    return handleAccountBillingPortalRequest(request, env);
   }
 
   if (request.method === 'POST' && url.pathname === '/api/account/reactivate') {
@@ -580,61 +557,6 @@ async function handleAccountDeletionAction(
   );
 }
 
-async function handleAccountBillingPage(request: Request, env: CloudRuntimeEnv): Promise<Response> {
-  let auth;
-  try {
-    auth = createBetterAuth(request, env);
-  } catch {
-    return html(renderAuthUnavailablePage(env, 'Billing'), 503);
-  }
-
-  const session = await getBetterAuthSession(auth, request);
-  if (!session?.user?.id) {
-    return Response.redirect(buildSignInRedirectUrl(request.url), 302);
-  }
-
-  const accessResponse = await maybeDenyBillingForHostedAccount(request, env, session, 'Billing');
-  if (accessResponse) {
-    return accessResponse;
-  }
-
-  const portalUrl = env.FLUENT_BILLING_PORTAL_URL?.trim() || null;
-  return html(
-    renderAuthShell({
-      title: 'Billing | Fluent',
-      body: `
-<h1 class="display">Manage Fluent billing</h1>
-<p class="lede">You can update payment details, reactivate Fluent, or manage a canceled subscription during the retention window.</p>
-<div class="actions">
-  ${
-    portalUrl
-      ? `<a class="btn-primary" href="${escapeHtml(portalUrl)}">Open billing portal <span class="btn-arrow">→</span></a>`
-      : '<p class="notice">Billing portal access is enabled for this account, but FLUENT_BILLING_PORTAL_URL is not configured yet. Contact support to reactivate or update billing.</p>'
-  }
-</div>`,
-    }),
-  );
-}
-
-async function handleAccountBillingPortalRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
-  let auth;
-  try {
-    auth = createBetterAuth(request, env);
-  } catch {
-    return json({ error: 'Hosted auth is unavailable.' }, 503);
-  }
-
-  const session = await getBetterAuthSession(auth, request);
-  if (!session?.user?.id) {
-    return json({ error: 'Unauthorized' }, 401);
-  }
-
-  return createBillingPortalResponseForCurrentUser(request, env, wrapCloudflareDatabase(env.DB), {
-    email: session.user.email ?? null,
-    id: session.user.id,
-  });
-}
-
 async function handleAccountStatusRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
   let auth;
   try {
@@ -661,56 +583,6 @@ async function handleAccountStatusRequest(request: Request, env: CloudRuntimeEnv
   });
 }
 
-async function handleAccountBillingCheckoutSessionRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
-  const sessionRequest = await accountBillingRequestWithSessionIdentity(request, env);
-  if (sessionRequest instanceof Response) {
-    return sessionRequest;
-  }
-  return handleAccountBillingCheckoutRequest({
-    db: wrapCloudflareDatabase(env.DB),
-    env,
-    request: sessionRequest,
-  });
-}
-
-async function handleAccountBillingPortalSessionRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
-  const sessionRequest = await accountBillingRequestWithSessionIdentity(request, env);
-  if (sessionRequest instanceof Response) {
-    return sessionRequest;
-  }
-  return handleAuthoritativeAccountBillingPortalRequest({
-    db: wrapCloudflareDatabase(env.DB),
-    env,
-    request: sessionRequest,
-  });
-}
-
-async function accountBillingRequestWithSessionIdentity(request: Request, env: CloudRuntimeEnv): Promise<Request | Response> {
-  let auth;
-  try {
-    auth = createBetterAuth(request, env);
-  } catch {
-    return json({ error: 'Hosted auth is unavailable.' }, 503);
-  }
-
-  const session = await getBetterAuthSession(auth, request);
-  if (!session?.user?.id) {
-    return json({ error: 'Unauthorized' }, 401);
-  }
-
-  const payload = (await request.clone().json().catch(() => ({}))) as Record<string, unknown>;
-  const body = JSON.stringify({
-    ...payload,
-    email: session.user.email ?? payload.email ?? null,
-    userId: session.user.id,
-  });
-  return new Request(request.url, {
-    headers: request.headers,
-    method: request.method,
-    body,
-  });
-}
-
 async function handleAccountReactivateRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
   let auth;
   try {
@@ -733,39 +605,6 @@ async function handleAccountReactivateRequest(request: Request, env: CloudRuntim
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : 'Unable to reactivate this account.' }, 403);
   }
-}
-
-async function maybeDenyBillingForHostedAccount(
-  request: Request,
-  env: CloudRuntimeEnv,
-  session: BetterAuthSessionPayload,
-  title: string,
-): Promise<Response | null> {
-  const user = session?.user;
-  if (!user?.id) {
-    return null;
-  }
-
-  const accessDecision = await resolveHostedCloudAccess(wrapCloudflareDatabase(env.DB), env, {
-    email: user.email ?? null,
-    userId: user.id,
-  });
-  if (accessDecision.allowed) {
-    return null;
-  }
-
-  const code = accessDecision.code ?? 'not_on_waitlist';
-  const details = buildFluentCloudAccessFailureDetails(code, {
-    email: user.email ?? null,
-    title: `${title} | Fluent`,
-  });
-  return html(
-    renderFluentCloudAccessFailurePage(code, {
-      email: user.email ?? null,
-      title: `${title} | Fluent`,
-    }),
-    details.status,
-  );
 }
 
 async function handleAccountDeletionOpsRequest(request: Request, env: CloudRuntimeEnv): Promise<Response> {
@@ -2365,7 +2204,7 @@ function renderAccountDeletionPage(input: {
   const actionNotice = input.actionMessage
     ? `<div class="notice ${statusTone}"><p class="notice-title">${escapeHtml(statusLabel)}</p><p>${escapeHtml(input.actionMessage)}</p></div>`
     : '';
-  const subjectLabel = input.flow.subjectType === 'waitlist_only' ? 'Early-access request account' : 'Provisioned Fluent account';
+  const subjectLabel = input.flow.subjectType === 'waitlist_only' ? 'Unprovisioned Fluent account' : 'Provisioned Fluent account';
   const statusCard = `
 <div class="client-card">
   <div class="client-logo client-logo-fallback">${input.flow.subjectType === 'waitlist_only' ? 'W' : 'C'}</div>
@@ -2427,9 +2266,9 @@ ${actions}
   <li>Deletion attempts to finish immediately after confirmation for both provisioned Fluent accounts and early-access request accounts.</li>
   <li>If the automatic purge fails, Fluent moves the request into manual review with the last error recorded.</li>
   <li>If deletion completes, connected clients lose OAuth access immediately and must not expect Fluent to reconnect.</li>
-  <li>Need Fluent access instead of deletion? Request early access at <a href="${escapeHtml(input.support.waitlistUrl)}">${escapeHtml(input.support.waitlistUrl)}</a>.</li>
+  <li>Need Fluent access instead of deletion? Start free access at <a href="${escapeHtml(input.support.waitlistUrl)}">${escapeHtml(input.support.waitlistUrl)}</a>.</li>
   <li>Need a local alternative? Run Fluent yourself with the open-source runtime at <a href="${escapeHtml(input.support.ossUrl)}">${escapeHtml(input.support.ossUrl)}</a>.</li>
-  <li>Retained after completion: the deletion request record plus minimal audit metadata needed to prove fulfillment and satisfy legal, billing, fraud, or safety obligations.</li>
+  <li>Retained after completion: the deletion request record plus minimal audit metadata needed to prove fulfillment and satisfy legal, fraud, security, or safety obligations.</li>
   <li>Questions or retention exceptions: <a href="mailto:${escapeHtml(input.support.supportEmail)}">${escapeHtml(input.support.supportEmail)}</a>.</li>
   <li>Sign-in page: <a href="${escapeHtml(returnToSignIn)}">${escapeHtml(returnToSignIn)}</a>.</li>
 </ul>`,
