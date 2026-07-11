@@ -28,7 +28,7 @@ Fluent exposes one cross-host product contract. Meals and Style are current; Bud
 - `fluent_apply_grocery_shopping_result`
 - `fluent_render_surface`
 
-Meals supports host-authored planning, saved recipes, the current grocery list, explicit shopping reconciliation, and the Grocery List MCP App. It does not browse retailers, fill carts, or check out.
+Meals supports assistant-drafted plans, saved recipes, the current grocery list, confirmed post-shopping updates, and the Grocery List MCP App. It does not browse retailers, fill carts, or check out.
 
 ## Style
 
@@ -52,7 +52,7 @@ Budgets is limited to manual `meals-groceries` and `style-clothing` monthly enve
 <!-- current-tools:end -->
 ## Reserved
 
-Health and Wellbeing have no public tools or resources in this contract. No Home dashboard or earlier domain-specific tool family is registered as a product surface.
+Health and Wellbeing are not currently supported. Earlier Health tools and the old Home dashboard are not available.
 
 ## Resources
 

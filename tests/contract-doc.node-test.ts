@@ -24,7 +24,7 @@ for (const generatedDoc of [tools, domains]) {
 assert.equal(snapshot.tools.length, 26);
 assert.equal(snapshot.resources.length, 3);
 assert.match(doc, /2026-07-09\.fluent-core-v2\.0/);
-assert.match(domains, /Health and Wellbeing have no public tools or resources/);
+assert.match(domains, /Health and Wellbeing are not currently supported/);
 assert.doesNotMatch(`${doc}\n${tools}\n${domains}`, /public vNext|10 resources|compatibility render|Home dashboard.*current/);
 
 for (const skill of ['fluent-core', 'fluent-meals', 'fluent-style', 'fluent-health']) {

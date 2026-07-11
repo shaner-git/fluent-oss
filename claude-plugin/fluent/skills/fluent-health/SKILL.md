@@ -5,7 +5,7 @@ description: Use when the user asks whether Fluent currently supports Health or 
 
 # Fluent Health and Wellbeing
 
-Health and Wellbeing are reserved in Fluent 2.0. The public contract has no Health tools or resources.
+Health and Wellbeing are not currently supported in Fluent 2.0. The public contract has no Health tools or resources.
 
 - Do not call, name, or wait for earlier `health_*` tools.
 - Do not write goals, workouts, body metrics, block reviews, symptoms, or medical preferences through Fluent.

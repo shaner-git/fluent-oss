@@ -12,7 +12,7 @@ Use the canonical `/mcp` endpoint and contract `2026-07-09.fluent-core-v2.0`.
 - 26 tools, 14 explicit writes, 3 render adapters, and 3 resources.
 - Meals and Style are current.
 - Budgets is limited to manual grocery and clothing envelopes.
-- Health and Wellbeing are reserved.
+- Health and Wellbeing are not currently supported.
 - Hosted and open-source runtimes expose the same product contract.
 - There is no full, candidate, legacy, or compatibility route.
 
