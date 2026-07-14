@@ -6,7 +6,7 @@ Fluent is open source. This repo lets you run Fluent yourself as a self-hosted M
 - manual grocery and clothing budget envelopes
 - closet-aware style decisions
 
-Use this repo when you want Fluent running on infrastructure you control. If you want managed onboarding, connect through meetfluent.app. Managed early access is self-serve and currently free. Both paths share the same MCP contract.
+Use this repo when you want Fluent running on infrastructure you control. If you want Fluent set up for you, start at meetfluent.app. You can use it there for free. Both paths share the same MCP contract.
 
 ## Public Release
 
@@ -23,7 +23,7 @@ Use this repo when you want Fluent running on infrastructure you control. If you
 - Codex, Claude, and OpenClaw users who want an MCP server they control
 - power users who are comfortable with a local token, local storage, and a small amount of setup
 
-If you want the easiest path, managed early access is the simpler choice. If you want control, local data, and self-hosting flexibility, start here.
+If you want the easiest path, start at meetfluent.app. If you want control, local data, and self-hosting flexibility, start here.
 
 ## What You Get
 
@@ -42,11 +42,11 @@ If you want the easiest path, managed early access is the simpler choice. If you
 - this repo focuses on self-hosting, not managed billing or onboarding
 - `npm run scaffold:mcp -- --track cloud` remains a compatibility scaffold and requires an explicit `--base-url` in this public repo
 
-## Managed Early Access And Running Fluent Yourself
+## Use Fluent at meetfluent.app or run it yourself
 
 | Option | Best for | Auth | Ops model |
 | --- | --- | --- | --- |
-| managed early access | people who want managed setup | OAuth | Fluent runs it for you |
+| Fluent at meetfluent.app | people who want hosting handled | OAuth | Fluent runs it for you |
 | Fluent open-source runtime | self-hosters and power users | bearer token | you run it yourself |
 
 ## Prerequisites
@@ -219,6 +219,6 @@ Then see the operator guide:
 
 ## About This Repo
 
-This public repo is generated from Fluent's canonical private source repo so managed and open-source paths stay aligned. Public contributions are welcome, but the source of truth remains the canonical repo and changes are re-exported here.
+This public repo is generated from Fluent's canonical private source repo so hosted and open-source paths stay aligned. Public contributions are welcome, but the source of truth remains the canonical repo and changes are re-exported here.
 
 The export boundary is documented in [docs/oss/fluent-oss-artifact-boundary.md](./docs/oss/fluent-oss-artifact-boundary.md), including what ships publicly, what stays private, and which scrub gates block unsafe exports.

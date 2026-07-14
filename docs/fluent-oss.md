@@ -20,7 +20,7 @@ Public release references:
 - bearer-token protected `/mcp`
 - open `GET /health`
 - open `GET /codex-probe`
-- same MCP contract as managed Fluent early access
+- same MCP contract as Fluent at meetfluent.app
 - supported minimum contract version: `2026-07-09.fluent-core-v2.0`
 - local DB and artifacts stored under `~/.fluent/` by default
 - no OAuth, no `/authorize`, no `/token`

@@ -23,7 +23,7 @@ Primary open-source runtime expectations:
 - single-user in v1
 - self-hostable over HTTP
 - bearer-token protected `/mcp`
-- contract-compatible with managed Fluent early access
+- contract-compatible with Fluent at meetfluent.app
 - Docker-first distribution plus raw Node runtime support
 - direct runtime requirement: Node.js `22.x`
 - supported minimum contract version: `2026-07-09.fluent-core-v2.0`
