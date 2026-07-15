@@ -1,12 +1,10 @@
 # Fluent open-source runtime
 
-Fluent is open source. This repo lets you run Fluent yourself as a self-hosted MCP server for:
+**Make your AI fluent in what matters.**
 
-- meal planning and grocery workflows
-- manual grocery and clothing budget envelopes
-- closet-aware style decisions
+Fluent works inside compatible AI apps, bringing in the information that matters for each question. A clothing purchase can draw on your closet and clothing budget. A meal plan can draw on your tastes and preferences, current grocery needs, and grocery spending.
 
-Use this repo when you want Fluent running on infrastructure you control. If you want managed onboarding, connect through meetfluent.app. Managed early access is self-serve and currently free. Both paths share the same MCP contract.
+Use this repo when you want Fluent running on infrastructure you control. Managed Fluent is available at [meetfluent.app](https://meetfluent.app/), and Fluent itself is free to use. Both paths share the same MCP contract.
 
 ## Public Release
 
@@ -23,7 +21,7 @@ Use this repo when you want Fluent running on infrastructure you control. If you
 - Codex, Claude, and OpenClaw users who want an MCP server they control
 - power users who are comfortable with a local token, local storage, and a small amount of setup
 
-If you want the easiest path, managed early access is the simpler choice. If you want control, local data, and self-hosting flexibility, start here.
+If you want Fluent managed for you, start at [meetfluent.app](https://meetfluent.app/). If you want control, local data, and self-hosting flexibility, start here.
 
 ## What You Get
 
@@ -39,14 +37,14 @@ If you want the easiest path, managed early access is the simpler choice. If you
 - single-user only in v1
 - bearer-token auth instead of OAuth
 - Postgres + S3 is experimental
-- this repo focuses on self-hosting, not managed billing or onboarding
+- this repo focuses on self-hosting; managed operation lives at `meetfluent.app`
 - `npm run scaffold:mcp -- --track cloud` remains a compatibility scaffold and requires an explicit `--base-url` in this public repo
 
-## Managed Early Access And Running Fluent Yourself
+## Managed Fluent And Running Fluent Yourself
 
 | Option | Best for | Auth | Ops model |
 | --- | --- | --- | --- |
-| managed early access | people who want managed setup | OAuth | Fluent runs it for you |
+| Managed Fluent | people who want managed setup | OAuth | Fluent runs it for you |
 | Fluent open-source runtime | self-hosters and power users | bearer token | you run it yourself |
 
 ## Prerequisites
