@@ -10,7 +10,7 @@ Use the canonical Fluent 2.0 `/mcp` profile.
 ## Read path
 
 - Start broad planning and currentness questions with `fluent_get_context(domain="meals", intent="planning", detail="summary")`.
-- Ground suggestions in confirmed preferences, saved recipes, current inventory/list state, provenance, freshness, and evidence gaps.
+- Ground suggestions in confirmed preferences, saved recipes, current inventory/list state, grocery budget pressure when available and relevant, provenance, freshness, and evidence gaps.
 - Use `fluent_list_items` or `fluent_get_item` only when the user asks for a specific recipe/item or more detail than the context packet contains.
 - Do not treat inferred signals as confirmed preferences.
 
