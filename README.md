@@ -2,7 +2,7 @@
 
 **Make your AI fluent in what matters.**
 
-Fluent works inside compatible AI apps, bringing in the information that matters for each question. A clothing purchase can draw on your closet and clothing budget. A meal plan can draw on your tastes and preferences, current grocery needs, and grocery spending.
+Fluent works inside compatible AI apps, bringing in the information that matters for each question. A clothing purchase can draw on your closet and clothing budget. A meal plan can draw on your tastes and preferences, current grocery needs, and grocery spending. The AI app handles the conversation and recommendation.
 
 Use this repo when you want Fluent running on infrastructure you control. Managed Fluent is available at [meetfluent.app](https://meetfluent.app/), and Fluent itself is free to use. Both paths share the same MCP contract.
 

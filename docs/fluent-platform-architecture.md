@@ -4,7 +4,7 @@
 
 Fluent is one product with one MCP contract and two supported runtime paths:
 
-- early access
+- managed service
 - open-source runtime
 
 The contract is shared. Runtime-specific auth and infrastructure concerns are not.
@@ -16,7 +16,7 @@ Shared across both runtime paths:
 - the Fluent MCP contract
 - domain lifecycle and onboarding truth
 - profile and capability reads
-- meals, health, and style domain semantics
+- Meals and Style domain semantics, with Budgets as a narrow shared seam
 - audit event semantics
 
 Current runtime boundary in code:
@@ -32,30 +32,23 @@ This pass keeps persistence SQL-heavy and D1-shaped at the callsite while moving
 
 Current storage backends:
 
-- `d1-r2`: early-access Fluent on native Cloudflare storage bindings
+- `d1-r2`: managed Fluent on native Cloudflare storage bindings
 - `sqlite-fs`: default open-source runtime on SQLite plus filesystem artifacts
 - `postgres-s3`: experimental open-source runtime backend on Postgres plus S3-compatible blobs
 
-Early access and the default open-source runtime remain the supported production paths. `postgres-s3` is experimental and intentionally additive.
+The managed service and the default open-source runtime remain the supported production paths. `postgres-s3` is experimental and intentionally additive.
 
-## Early Access
+## Managed Service
 
-Early access owns:
+The managed service owns:
 
 - Cloudflare Workers deployment
-- current Cloudflare Access beta auth path
-- Better Auth hosted login and session surface
+- Better Auth hosted login, sessions, and MCP OAuth
+- Cloudflare Email Service-backed magic-link delivery
 - D1 and R2 managed runtime state
 - the default packaged runtime path
 
-This is the managed early-access offering.
-
-Public hosted direction:
-
-- Better Auth owns end-user login, sessions, and the hosted OAuth provider cutover
-- Cloudflare Email Service owns outbound magic-link delivery from the Worker runtime
-- Cloudflare Access is being reduced to an operator or beta-only compatibility path
-- Fluent still needs request-scoped tenant resolution before hosted multi-user is complete
+Cloudflare Access is retired from the hosted end-user auth path. Hosted requests carry explicit tenant and profile identity instead of falling back to the open-source runtime's default identity.
 
 ## Open-Source Runtime
 
@@ -64,7 +57,7 @@ The open-source runtime owns:
 - single-user self-hosted runtime behavior
 - bearer-token auth on `/mcp`
 - local DB and artifact storage
-- snapshot import/export from early access
+- snapshot import/export from the managed service
 - laptop, LAN, and VPS-style operator workflows
 - optional experimental Postgres + S3 backend
 
@@ -86,11 +79,16 @@ Client packaging stays platform-specific even though the MCP contract is shared:
 
 ## Domain Model
 
-Current domains:
+Current public areas:
 
 - `meals`
 - `style`
+- `budgets` as a narrow shared seam for grocery and clothing spending context
+
+Reserved public areas:
+
 - `health`
+- `wellbeing`
 
 Lifecycle states:
 
