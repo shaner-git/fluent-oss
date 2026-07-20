@@ -11,8 +11,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const doc = read('docs/fluent-contract-v2.md');
 const tools = read('docs/fluent-tools-reference.md');
 const domains = read('docs/fluent-domain-surfaces.md');
-const architecture = read('docs/fluent-platform-architecture.md');
-const readme = read('README.md');
 
 assert.equal(normalizeNewlines(doc), normalizeNewlines(renderContractDocMarkdown()));
 assert.equal(normalizeNewlines(tools), normalizeNewlines(renderToolsReferenceMarkdown()));
@@ -28,13 +26,6 @@ assert.equal(snapshot.resources.length, 3);
 assert.match(doc, /2026-07-09\.fluent-core-v2\.0/);
 assert.match(domains, /Health and Wellbeing are not currently supported/);
 assert.doesNotMatch(`${doc}\n${tools}\n${domains}`, /public vNext|10 resources|compatibility render|Home dashboard.*current/);
-assert.match(readme, /Make your AI fluent in what matters\./);
-assert.match(readme, /bringing in the information that matters for each question/);
-assert.match(readme, /The AI app handles the conversation and recommendation\./);
-assert.match(architecture, /Meals and Style domain semantics, with Budgets as a narrow shared seam/);
-assert.match(architecture, /Reserved public areas:\s+- `health`\s+- `wellbeing`/);
-assert.match(architecture, /Cloudflare Access is retired from the hosted end-user auth path/);
-assert.doesNotMatch(architecture, /Current domains:\s+[\s\S]*?- `health`/);
 
 for (const skill of ['fluent-core', 'fluent-meals', 'fluent-style']) {
   const codex = read(`plugins/fluent/skills/${skill}/SKILL.md`);

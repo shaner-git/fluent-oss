@@ -81,7 +81,10 @@ export interface FluentVNextReadServices {
 export interface FluentVNextSharedProfile {
   object: 'SharedProfile';
   source: 'fluent_read_layer';
-  profile: unknown;
+  profile: {
+    displayName: string | null;
+    timezone: string | null;
+  };
   capabilities: unknown;
   facts: FluentVNextSharedFact[];
   boundaries: {
@@ -257,13 +260,20 @@ export async function getFluentVNextSharedProfile(
   return {
     object: 'SharedProfile',
     source: 'fluent_read_layer',
-    profile,
+    profile: publicSharedProfileCore(profile),
     capabilities,
     facts,
     boundaries: {
       domainProfilesStayTyped: true,
       writesRequireExplicitIntent: true,
     },
+  };
+}
+
+function publicSharedProfileCore(profile: unknown): { displayName: string | null; timezone: string | null } {
+  return {
+    displayName: stringField(profile, 'displayName') || null,
+    timezone: stringField(profile, 'timezone') || null,
   };
 }
 

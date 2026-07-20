@@ -1113,7 +1113,13 @@ export function registerCoreMcpSurface(
         domains: z.array(fluentVNextDomainSchema).optional().describe('Optional domains to include in the shared profile envelope. Omit for the canonical public MCP profile.'),
         include_provenance: z.boolean().optional().describe('Set true only when the user asks where profile facts came from. Omit for a compact profile read.'),
       },
-      annotations: { title: 'Get Fluent Shared Profile', readOnlyHint: true, idempotentHint: true },
+      annotations: {
+        title: 'Get Fluent Shared Profile',
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     }),
     async () => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
@@ -1138,7 +1144,13 @@ export function registerCoreMcpSurface(
         domain: fluentVNextDomainSchema,
         intent: fluentVNextIntentSchema.optional(),
       },
-      annotations: { title: 'Start Here: Fluent Context', readOnlyHint: true, idempotentHint: true },
+      annotations: {
+        title: 'Start Here: Fluent Context',
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     }),
     async ({ amount, candidate, detail, domain, intent }) => {
       requireVNextReadScope(domain);
@@ -1174,7 +1186,13 @@ export function registerCoreMcpSurface(
           'Optional lifecycle filter. Use active for normal saved state, planned for future meal/grocery state, completed for done items, archived for inactive memory, or any when the user asks broadly.',
         ),
       },
-      annotations: { title: 'List Fluent Items', readOnlyHint: true, idempotentHint: true },
+      annotations: {
+        title: 'List Fluent Items',
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     }),
     async ({ cursor, domain, item_type, limit, query, status }) => {
       requireVNextReadScope(domain);
@@ -2009,7 +2027,13 @@ export function registerCoreMcpSurface(
       title: 'Get Fluent Account Status',
       description:
         'Fetch the Fluent account/status surface when the user asks about account status, access, export, deletion, reactivation, support, or whether Fluent is ready for their account. Returns access state, enabled domains, account and support links, export and deletion instructions, and support email. Managed Fluent is currently free.',
-      annotations: { title: 'Get Fluent Account Status', readOnlyHint: true, idempotentHint: true },
+      annotations: {
+        title: 'Get Fluent Account Status',
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     }),
     async () => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
