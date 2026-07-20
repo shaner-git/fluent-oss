@@ -1,0 +1,6 @@
+interface:
+  display_name: "Fluent Meals"
+  short_description: "Plan meals and keep recipes and groceries current"
+  default_prompt: "Use $fluent-meals to plan this week from what Fluent already knows about me."
+policy:
+  allow_implicit_invocation: true

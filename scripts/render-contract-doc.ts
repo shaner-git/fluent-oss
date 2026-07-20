@@ -32,6 +32,7 @@ export function renderContractDocMarkdown(): string {
     '- The assistant performs planning and judgment; Fluent supplies personal context, evidence, media, and explicit bounded writes.',
     '- Browser operation, retailer checkout, product-page extraction, raw financial data, medical decisions, and operator tools are outside this contract.',
     '- Every write requires explicit user intent and read-after-write proof.',
+    '- `fluent_get_shared_profile.profile` exposes only the user-facing display name and timezone. Internal profile/tenant identifiers and profile metadata are never part of that public projection.',
     '',
     '## Tools',
     '',

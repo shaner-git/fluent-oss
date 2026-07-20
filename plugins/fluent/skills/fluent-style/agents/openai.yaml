@@ -1,0 +1,6 @@
+interface:
+  display_name: "Fluent Style"
+  short_description: "Use your closet for outfits and purchase decisions"
+  default_prompt: "Use $fluent-style to help me make a grounded wardrobe or purchase decision."
+policy:
+  allow_implicit_invocation: true
