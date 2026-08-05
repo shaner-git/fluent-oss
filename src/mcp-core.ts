@@ -30,6 +30,7 @@ import { iconFor, jsonResource, provenanceInputSchema, readViewSchema, toolResul
 import { createFetchTimeoutSignal, fetchStyleVisualBundleImage } from './mcp-style';
 import { enforcePublicWriteRateLimit, type FluentRateLimitBinding } from './rate-limits';
 import {
+  getFluentVNextGroceryShoppingReconciliation,
   getFluentVNextContext,
   getFluentVNextItem,
   getFluentVNextMediaBundle,
@@ -527,8 +528,8 @@ export function buildFluentAccountStatusToolView(status: FluentAccountStatus): F
     instructions: status.instructions,
     links: status.links,
     safety: {
-      billingBoundary: 'Managed Fluent is currently free.',
-      paymentDetails: 'Current price: free.',
+      billingBoundary: 'The assistant does not start, sell, upgrade, cancel, or manage paid access.',
+      paymentDetails: 'Payment details are not returned by this tool.',
       privacyBoundary: 'Private account identifiers are not included in assistant-facing account text.',
     },
     support: {
@@ -555,7 +556,7 @@ export function buildFluentAccountStatusToolText(status: FluentAccountStatus): s
     exportLine,
     deletionLine,
     `Support: email ${status.supportEmail}.`,
-    'Managed Fluent is currently free. Account management happens on meetfluent.app.',
+    'Account management happens on meetfluent.app.',
   ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
@@ -996,7 +997,7 @@ export function registerCoreMcpSurface(
     'fluent://core/account-status',
     {
       title: 'Fluent Account Status',
-      description: 'Sanitized Fluent account access, domain, entitlement, export, deletion, and support status for ChatGPT-style clients.',
+      description: 'Data-minimized Fluent account access, domain, entitlement, export, deletion, and support status.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -1113,7 +1114,13 @@ export function registerCoreMcpSurface(
         domains: z.array(fluentVNextDomainSchema).optional().describe('Optional domains to include in the shared profile envelope. Omit for the canonical public MCP profile.'),
         include_provenance: z.boolean().optional().describe('Set true only when the user asks where profile facts came from. Omit for a compact profile read.'),
       },
-      annotations: { title: 'Get Fluent Shared Profile', readOnlyHint: true, idempotentHint: true },
+      annotations: {
+        title: 'Get Fluent Shared Profile',
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     }),
     async () => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
@@ -1138,7 +1145,13 @@ export function registerCoreMcpSurface(
         domain: fluentVNextDomainSchema,
         intent: fluentVNextIntentSchema.optional(),
       },
-      annotations: { title: 'Start Here: Fluent Context', readOnlyHint: true, idempotentHint: true },
+      annotations: {
+        title: 'Start Here: Fluent Context',
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     }),
     async ({ amount, candidate, detail, domain, intent }) => {
       requireVNextReadScope(domain);
@@ -1174,7 +1187,13 @@ export function registerCoreMcpSurface(
           'Optional lifecycle filter. Use active for normal saved state, planned for future meal/grocery state, completed for done items, archived for inactive memory, or any when the user asks broadly.',
         ),
       },
-      annotations: { title: 'List Fluent Items', readOnlyHint: true, idempotentHint: true },
+      annotations: {
+        title: 'List Fluent Items',
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     }),
     async ({ cursor, domain, item_type, limit, query, status }) => {
       requireVNextReadScope(domain);
@@ -1571,6 +1590,43 @@ export function registerCoreMcpSurface(
   );
 
   server.registerTool(
+    'fluent_get_grocery_shopping_reconciliation',
+    withVNextReadSecurity({
+      title: 'Get Fluent Grocery Shopping Reconciliation',
+      description:
+        'Fetch one authoritative Meals grocery-list plus inventory reconciliation bundle. Use after a timeout, unknown response, connector interruption, or version conflict before retrying a grocery shopping-result mutation.',
+      inputSchema: {
+        idempotency_key: z.string().optional().describe(
+          'Optional shopping-result idempotency identity whose durable receipt should be included.',
+        ),
+        week_start: z.string().optional().describe(
+          'Optional selected meal-plan week start from the grocery-list readback.',
+        ),
+      },
+      annotations: {
+        title: 'Get Fluent Grocery Shopping Reconciliation',
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+      _meta: {
+        'openai/widgetAccessible': true,
+        ui: { visibility: ['model', 'app'] },
+      },
+    }),
+    async ({ idempotency_key, week_start }) => {
+      requireVNextReadScope('meals');
+      return vNextToolResult(
+        await getFluentVNextGroceryShoppingReconciliation(vNextReadServices, {
+          idempotencyKey: idempotency_key,
+          weekStart: week_start,
+        }),
+      );
+    },
+  );
+
+  server.registerTool(
     'fluent_apply_grocery_shopping_result',
     withVNextWriteSecurity({
       title: 'Apply Fluent Grocery Shopping Result',
@@ -1600,13 +1656,16 @@ export function registerCoreMcpSurface(
         currentness_confirmed: z.boolean().optional().describe(
           'Required only when the current grocery list is stale or incomplete and the user explicitly confirms they still want to reconcile that list.',
         ),
+        idempotency_key: z.string().min(1).optional().describe(
+          'Stable identity bound to tenant, list ID/version, week, and exact selected subset. Required for mark_all_to_buy_bought; reuse it for an ambiguous-response readback or safe retry.',
+        ),
         list_id: z.string().optional().describe('Optional current grocery-list ID from a recent readback; used to prevent target mismatches.'),
         list_version: z.string().optional().describe('Optional current grocery-list version from a recent readback; used to prevent stale writes.'),
         response_mode: writeResponseModeSchema,
         week_start: z.string().optional().describe('Optional selected meal-plan week start from the current grocery-list readback.'),
         ...provenanceInputSchema,
       },
-      annotations: { title: 'Apply Fluent Grocery Shopping Result', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Apply Fluent Grocery Shopping Result', readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
         ui: {
@@ -1621,6 +1680,7 @@ export function registerCoreMcpSurface(
           boughtItems: args.bought_items?.map((entry) => ({ itemKey: entry.item_key, status: entry.status })),
           approval: args.approval,
           currentnessConfirmed: args.currentness_confirmed,
+          idempotencyKey: args.idempotency_key,
           listId: args.list_id,
           listVersion: args.list_version,
           markAllToBuyBought: args.mark_all_to_buy_bought,
@@ -2008,8 +2068,14 @@ export function registerCoreMcpSurface(
     withVNextReadSecurity({
       title: 'Get Fluent Account Status',
       description:
-        'Fetch the Fluent account/status surface when the user asks about account status, access, export, deletion, reactivation, support, or whether Fluent is ready for their account. Returns access state, enabled domains, account and support links, export and deletion instructions, and support email. Managed Fluent is currently free.',
-      annotations: { title: 'Get Fluent Account Status', readOnlyHint: true, idempotentHint: true },
+        'Fetch the data-minimized Fluent account/status surface for account access, export, deletion, reactivation, and support. Returns access state, enabled domains, account and support links, export and deletion instructions, and support email. It does not start, sell, upgrade, cancel, or manage paid access from the assistant.',
+      annotations: {
+        title: 'Get Fluent Account Status',
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     }),
     async () => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
@@ -2200,6 +2266,7 @@ function buildFluentVNextReadServices(
     meals: {
       getCurrentGroceryList: (input) => meals.getCurrentGroceryList(input),
       getInventory: () => meals.getInventory(),
+      getGroceryShoppingReconciliation: (input) => meals.getGroceryShoppingReconciliation(input),
       getMealMemory: (recipeId) => meals.getMealMemory(recipeId),
       getOnboardingCalibration: (input) => meals.getOnboardingCalibration(input),
       getPlan: (input) => input?.weekStart ? meals.getPlan(input.weekStart) : meals.getCurrentPlan(input?.today ?? undefined),
@@ -2250,6 +2317,7 @@ function buildFluentVNextWriteServices(
     meals: {
       getCurrentGroceryList: (input) => meals.getCurrentGroceryList(input),
       getInventory: () => meals.getInventory(),
+      getGroceryShoppingReconciliation: (input) => meals.getGroceryShoppingReconciliation(input),
       getMealMemory: (recipeId) => meals.getMealMemory(recipeId),
       getOnboardingCalibration: (input) => meals.getOnboardingCalibration(input),
       getPlan: (input) => input?.weekStart ? meals.getPlan(input.weekStart) : meals.getCurrentPlan(input?.today ?? undefined),

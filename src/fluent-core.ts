@@ -1357,6 +1357,7 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
           'fluent_get_context',
           'fluent_list_items',
           'fluent_get_item',
+          'fluent_get_grocery_shopping_reconciliation',
           'fluent_render_surface',
           'fluent_get_purchase_context',
           'fluent_render_budgets_surface',
@@ -1561,7 +1562,7 @@ function readyDomainActions(input: {
       {
         kind: 'read',
         reason:
-          'Use the account-status surface for account, access, early-access availability, export, deletion, reactivation, support, or account-ready asks.',
+          'Use the account-status surface for account access, availability, export, deletion, reactivation, support, or account-ready asks.',
         tool: 'fluent_get_account_status',
       },
       {
@@ -1925,7 +1926,7 @@ function buildAccountEntitlement(
   if (deploymentTrack !== 'cloud') {
     return {
       state: 'unavailable',
-      summary: 'Managed-service account state does not apply to the local OSS runtime.',
+      summary: 'Hosted account state does not apply to the local open-source runtime.',
       graceDeadline: null,
       retentionDeadline: null,
     };
@@ -2048,7 +2049,7 @@ function buildAccountInstructions(
   if (deploymentTrack !== 'cloud') {
     return {
       deletion: 'Use the self-hosted runtime controls for deletion, then remove the local Fluent data directory or database backups you control.',
-      export: 'Use the local OSS snapshot export workflow from the Fluent runtime to export the data stored on this machine.',
+      export: 'Use the local open-source snapshot export workflow from the Fluent runtime to export the data stored on this machine.',
       manageAccount: 'Use your local Fluent runtime controls for account-like settings.',
       support: `Email ${FLUENT_SUPPORT_EMAIL} for account help.`,
     };

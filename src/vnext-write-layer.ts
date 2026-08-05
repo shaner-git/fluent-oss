@@ -17,10 +17,12 @@ import type {
 import type { FluentVNextDomain } from './vnext-contract';
 import { enforcePublicWriteRateLimit, type FluentRateLimitBinding } from './rate-limits';
 import {
+  getFluentVNextGroceryShoppingReconciliation,
   getFluentVNextCurrentGroceryListItem,
   getFluentVNextItem,
   getFluentVNextPurchaseContext,
   getFluentVNextSharedProfile,
+  projectFluentVNextCurrentGroceryListItem,
   listFluentVNextItemsPage,
   type FluentVNextItemType,
   type FluentVNextReadServices,
@@ -151,6 +153,9 @@ export interface FluentVNextWriteServices extends FluentVNextReadServices {
     upsertPlan?: (input: { createNewPlan?: boolean; plan: unknown; provenance: MutationProvenance }) => Promise<unknown>;
     applyGroceryShoppingResult?: (input: {
       boughtItems?: Array<{ itemKey: string; status?: 'bought' | 'skipped' }>;
+      idempotencyKey?: string | null;
+      listId?: string | null;
+      listVersion?: string | null;
       markAllToBuyBought?: boolean;
       provenance: MutationProvenance;
       weekStart?: string | null;
@@ -567,6 +572,7 @@ export async function applyFluentVNextGroceryShoppingResult(
     approval: FluentVNextRecipeWriteApproval;
     boughtItems?: Array<{ itemKey: string; status?: 'bought' | 'skipped' }>;
     currentnessConfirmed?: boolean;
+    idempotencyKey?: string | null;
     listId?: string | null;
     listVersion?: string | null;
     markAllToBuyBought?: boolean;
@@ -582,6 +588,8 @@ export async function applyFluentVNextGroceryShoppingResult(
       'fluent_apply_grocery_shopping_result requires bought_items (non-empty) or mark_all_to_buy_bought=true.',
     );
   }
+  const markAllRequest = !hasExplicit && input.markAllToBuyBought === true;
+  const idempotencyKey = input.idempotencyKey?.trim() || null;
   if (!services.meals?.getCurrentGroceryList || !services.meals?.applyGroceryShoppingResult) {
     return notImplementedAck('meals', 'grocery_shopping_result', input.boughtItems ?? null, {
       id: input.listId ?? null,
@@ -593,7 +601,9 @@ export async function applyFluentVNextGroceryShoppingResult(
     skipCalibrationContext: true,
     weekStart: input.weekStart ?? undefined,
   }) ?? {});
-  assertCurrentListMatches(input, currentList);
+  if (!services.meals.getGroceryShoppingReconciliation) {
+    assertCurrentListMatches(input, currentList);
+  }
   if (currentListIsStale(currentList) && input.currentnessConfirmed !== true) {
     throw new Error(
       'fluent_apply_grocery_shopping_result requires currentness_confirmed=true before reconciling a stale or incomplete grocery list.',
@@ -602,10 +612,20 @@ export async function applyFluentVNextGroceryShoppingResult(
 
   const weekStart = input.weekStart ?? currentListWeekStart(currentList);
   const targetId = currentListId(currentList) ?? input.listId ?? 'current_grocery_list';
-  const buildReadAfterWrite = async () => ({
-    groceryList: await getFluentVNextCurrentGroceryListItem(services, { weekStart }),
-    inventory: groceryShoppingInventorySummary((await services.meals?.getInventory?.()) ?? []),
-  });
+  const buildReadAfterWrite = async (receiptIdempotencyKey: string | null) => {
+    const reconciliation = await getFluentVNextGroceryShoppingReconciliation(services, {
+      idempotencyKey: receiptIdempotencyKey,
+      weekStart,
+    });
+    return {
+      groceryList: projectFluentVNextCurrentGroceryListItem(reconciliation.groceryList),
+      inventory: {
+        ...groceryShoppingInventorySummary(reconciliation.inventory),
+        items: reconciliation.inventory,
+      },
+      receipt: reconciliation.receipt,
+    };
+  };
 
   if (isAcceptanceTestProvenance(input.provenance)) {
     return writeAck({
@@ -617,24 +637,42 @@ export async function applyFluentVNextGroceryShoppingResult(
         markAllToBuyBought: input.markAllToBuyBought ?? false,
         status: 'acceptance_test_non_durable',
       },
-      readAfterWrite: await buildReadAfterWrite(),
+      readAfterWrite: await buildReadAfterWrite(idempotencyKey),
       source: 'meals.applyGroceryShoppingResult.acceptance_test_non_durable',
       target: { id: targetId, type: 'grocery_list' },
     });
   }
+  if (markAllRequest && !idempotencyKey) {
+    throw new Error(
+      'fluent_apply_grocery_shopping_result requires idempotency_key for mark_all_to_buy_bought so Retry cannot widen beyond the original approval.',
+    );
+  }
 
   const result = await services.meals.applyGroceryShoppingResult({
     boughtItems: input.boughtItems,
+    idempotencyKey,
+    listId: input.listId,
+    listVersion: input.listVersion,
     markAllToBuyBought: input.markAllToBuyBought,
     provenance: input.provenance,
     weekStart,
   });
+  const resultRecord = asRecord(result);
+  const resultIdempotencyKey =
+    typeof resultRecord?.idempotencyKey === 'string'
+      ? resultRecord.idempotencyKey.trim()
+      : '';
+  if (!resultIdempotencyKey) {
+    throw new Error(
+      'fluent_apply_grocery_shopping_result did not return the durable idempotency identity required for authoritative readback.',
+    );
+  }
 
   return writeAck({
     domain: 'meals',
     kind: 'grocery_shopping_result',
     payload: { durable: true, result },
-    readAfterWrite: await buildReadAfterWrite(),
+    readAfterWrite: await buildReadAfterWrite(resultIdempotencyKey),
     source: 'meals.applyGroceryShoppingResult',
     target: { id: targetId, type: 'grocery_list' },
   });

@@ -1,7 +1,7 @@
 import type { CurrentGroceryListRecord, GroceryIntentRecord, GroceryPlanItemRecord } from './types';
 
 export const MEALS_GROCERY_LIST_WIDGET_VERSION = 'v71';
-export const FLUENT_PUBLIC_GROCERY_LIST_WIDGET_VERSION = 'v72';
+export const FLUENT_PUBLIC_GROCERY_LIST_WIDGET_VERSION = 'v78';
 export const MEALS_GROCERY_SMOKE_WIDGET_VERSION = 'v1';
 export const MEALS_GROCERY_LIST_LEGACY_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v57.html';
 export const MEALS_GROCERY_LIST_COMPAT_TEMPLATE_URI = 'ui://widget/fluent-grocery-list-v58.html';
@@ -151,6 +151,8 @@ export interface GroceryListPublicItemViewModel {
   detail: string | null;
   quantityDisplay: string | null;
   checked: boolean;
+  isManual?: boolean;
+  manualIntentId?: string | null;
   syncAction?: GroceryListInteractiveSyncActionViewModel | null;
   syncActions?: GroceryListInteractiveSyncActionViewModel[];
 }
@@ -361,6 +363,8 @@ function buildGroceryListInteractiveViewModel(viewModel: GroceryListViewModel): 
         detail: deriveItemDetail(item, interactiveBucketId),
         displayName: item.displayName,
         itemKey: item.itemKey,
+        isManual: item.isManual,
+        manualIntentId: item.manualIntentId,
         quantityDisplay: item.quantityDisplay,
         syncAction: buildPrimarySyncAction(item, bucket.id),
         syncActions: buildSyncActions(item, bucket.id),
@@ -924,6 +928,7 @@ export function getGroceryListWidgetHtml(): string {
     font-family: var(--grocery-font-sans);
     background: transparent;
     color: var(--grocery-text);
+    overflow: visible;
   }
 
   .grocery-card {
@@ -1049,7 +1054,7 @@ export function getGroceryListWidgetHtml(): string {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    min-height: 32px;
+    min-height: 44px;
     padding: 6px 0;
     border: 0;
     background: transparent;
@@ -1220,6 +1225,7 @@ export function getGroceryListWidgetHtml(): string {
     line-height: 1.2;
     font-weight: 500;
     cursor: pointer;
+    min-height: 44px;
   }
 
   .grocery-verify-button[data-active="true"] {
@@ -1264,8 +1270,8 @@ export function getGroceryListWidgetHtml(): string {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 32px;
-    min-height: 32px;
+    min-width: 44px;
+    min-height: 44px;
     margin: -5px 0;
   }
 
@@ -1360,6 +1366,7 @@ export function getGroceryListWidgetHtml(): string {
     line-height: 1.2;
     font-weight: 500;
     cursor: pointer;
+    min-height: 44px;
     transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
   }
 
@@ -1387,6 +1394,7 @@ export function getGroceryListWidgetHtml(): string {
     font: inherit;
     font-size: 13px;
     line-height: 1.2;
+    min-height: 44px;
   }
 
   .grocery-add-input::placeholder {
@@ -1403,6 +1411,7 @@ export function getGroceryListWidgetHtml(): string {
     line-height: 1.2;
     font-weight: 500;
     cursor: pointer;
+    min-height: 44px;
   }
 
   .grocery-add-submit {
@@ -1455,6 +1464,13 @@ export function getGroceryListWidgetHtml(): string {
     font-size: 13px;
     line-height: 1.5;
     color: #b42318;
+  }
+
+  .grocery-sync-state {
+    margin: 10px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--grocery-text-muted);
   }
 
   .grocery-sync-sent {
@@ -1513,8 +1529,13 @@ export function getGroceryListWidgetHtml(): string {
     var locallySavedActions = Object.create(null);
     var locallyAddedItems = Object.create(null);
     var syncError = '';
+    var syncNotice = '';
     var syncSent = false;
     var syncPending = false;
+    var savePhase = 'idle';
+    var activeIdempotencyKey = '';
+    var hostToolCapability = 'checking';
+    var hostCapabilities = null;
     var vNextSurface = false;
 
     function getOpenAI() {
@@ -1875,7 +1896,7 @@ export function getGroceryListWidgetHtml(): string {
       }
 
     function toggleItem(itemKey) {
-      if (syncPending) {
+      if (syncPending || hostToolCapability !== 'mutable') {
         return;
       }
       if (stagedSelections[itemKey]) {
@@ -1884,12 +1905,15 @@ export function getGroceryListWidgetHtml(): string {
         stagedSelections[itemKey] = '__primary__';
       }
       syncError = '';
+      syncNotice = '';
       syncSent = false;
+      savePhase = 'idle';
+      activeIdempotencyKey = '';
       render();
     }
 
     function selectItemAction(itemKey, actionId) {
-      if (syncPending) {
+      if (syncPending || hostToolCapability !== 'mutable') {
         return;
       }
       if (stagedSelections[itemKey] === actionId) {
@@ -1898,7 +1922,10 @@ export function getGroceryListWidgetHtml(): string {
         stagedSelections[itemKey] = actionId;
       }
       syncError = '';
+      syncNotice = '';
       syncSent = false;
+      savePhase = 'idle';
+      activeIdempotencyKey = '';
       render();
     }
 
@@ -1908,7 +1935,10 @@ export function getGroceryListWidgetHtml(): string {
       }
       stagedSelections = Object.create(null);
       syncError = '';
+      syncNotice = '';
       syncSent = false;
+      savePhase = 'idle';
+      activeIdempotencyKey = '';
       render();
     }
 
@@ -1921,6 +1951,7 @@ export function getGroceryListWidgetHtml(): string {
         addItemDraft = '';
       }
       syncError = '';
+      syncNotice = '';
       syncSent = false;
       render();
     }
@@ -2079,6 +2110,7 @@ export function getGroceryListWidgetHtml(): string {
       }
 
       syncError = '';
+      syncNotice = '';
       syncPending = true;
       syncSent = false;
       render();
@@ -2108,6 +2140,8 @@ export function getGroceryListWidgetHtml(): string {
           detail: 'Added manually',
           displayName: itemName,
           itemKey: localItemKey,
+          isManual: true,
+          manualIntentId: addedRecord ? (addedRecord.id || addedRecord.intentId || addedRecord.intent_id) : null,
           quantityDisplay: null,
           syncAction: localAddAction,
           syncActions: [localAddAction],
@@ -2147,16 +2181,10 @@ export function getGroceryListWidgetHtml(): string {
     var bridgeInitialized = false;
 
     function getBridgeTargets() {
-      var targets = [];
       if (window.parent && window.parent !== window) {
-        targets.push(window.parent);
+        return [window.parent];
       }
-      try {
-        if (window.top && window.top !== window && targets.indexOf(window.top) === -1) {
-          targets.push(window.top);
-        }
-      } catch (error) {}
-      return targets;
+      return [];
     }
 
     function isBridgeSource(source) {
@@ -2169,6 +2197,10 @@ export function getGroceryListWidgetHtml(): string {
       if (!message || message.jsonrpc !== '2.0') return;
       if (message.method === 'ui/initialize' && message.id != null) {
         hydrateFromCandidate(message);
+        if (message.params && message.params.hostCapabilities) {
+          hostCapabilities = message.params.hostCapabilities;
+          hostToolCapability = hostCapabilities.serverTools ? 'mutable' : 'readonly';
+        }
         event.source.postMessage({
           jsonrpc: '2.0',
           id: message.id,
@@ -2203,8 +2235,8 @@ export function getGroceryListWidgetHtml(): string {
 
     function bridgeRequest(method, params, timeoutMs) {
       return new Promise(function (resolve, reject) {
-        var targets = getBridgeTargets();
-        if (!targets.length) {
+        var target = getBridgeTargets()[0];
+        if (!target) {
           reject(new Error('MCP Apps bridge is not available.'));
           return;
         }
@@ -2218,7 +2250,7 @@ export function getGroceryListWidgetHtml(): string {
           }, timeoutMs || 12000),
         };
         var message = { jsonrpc: '2.0', id: id, method: method, params: params };
-        targets.forEach(function (target) { target.postMessage(message, '*'); });
+        target.postMessage(message, '*');
       });
     }
 
@@ -2226,9 +2258,10 @@ export function getGroceryListWidgetHtml(): string {
       if (method !== 'ui/notifications/initialized' && !bridgeInitialized) {
         return;
       }
-      getBridgeTargets().forEach(function (target) {
+      var target = getBridgeTargets()[0];
+      if (target) {
         target.postMessage({ jsonrpc: '2.0', method: method, params: params || {} }, '*');
-      });
+      }
     }
 
     function connectMcpAppsHost() {
@@ -2237,7 +2270,10 @@ export function getGroceryListWidgetHtml(): string {
       }
 
       if (!getBridgeTargets().length) {
+        hostCapabilities = getOpenAI().hostCapabilities || null;
+        hostToolCapability = hostCapabilities && hostCapabilities.serverTools ? 'mutable' : 'readonly';
         bridgeReady = Promise.resolve(null);
+        render();
         return bridgeReady;
       }
 
@@ -2251,18 +2287,26 @@ export function getGroceryListWidgetHtml(): string {
       }, 6000)
         .then(function (result) {
           bridgeInitialized = true;
+          hostCapabilities = result && result.hostCapabilities ? result.hostCapabilities : null;
+          hostToolCapability = hostCapabilities && hostCapabilities.serverTools ? 'mutable' : 'readonly';
           bridgeNotify('ui/notifications/initialized', {});
           render();
           return result;
         })
         .catch(function () {
+          hostToolCapability = 'readonly';
+          render();
           return null;
         });
 
       return bridgeReady;
     }
 
-    function callToolViaBridge(name, args) {
+    async function callToolViaBridge(name, args) {
+      await connectMcpAppsHost();
+      if (hostToolCapability !== 'mutable') {
+        throw new Error('MCP Apps host did not advertise serverTools capability.');
+      }
       return bridgeRequest('tools/call', { name: name, arguments: args || {} }, 20000);
     }
 
@@ -2316,7 +2360,7 @@ export function getGroceryListWidgetHtml(): string {
           }
         };
       }
-      if (compatibilityCall) {
+      if (compatibilityCall && hostToolCapability === 'mutable') {
         return async function callToolCompatibilityOnly(name, args) {
           try {
             return await compatibilityCall(name, args);
@@ -2363,6 +2407,7 @@ export function getGroceryListWidgetHtml(): string {
       }
 
       syncError = '';
+      syncNotice = '';
       syncPending = true;
       syncSent = false;
       render();
@@ -2837,10 +2882,10 @@ export function getGroceryListWidgetHtml(): string {
     }
 
     function renderToggle(item, isChecked) {
-      if (item.syncAction) {
+      if (hostToolCapability === 'mutable' && item.syncAction) {
         return '<label class="grocery-item-toggle' + (item.checked ? ' grocery-item-toggle--covered' : '') + '"><input type="checkbox" data-item-key="' + escapeHtml(item.itemKey) + '"' + (isChecked ? ' checked' : '') + ' aria-label="' + escapeHtml(toDisplayName(item.displayName)) + '" /></label>';
       }
-      return '<span class="grocery-item-toggle" aria-hidden="true"></span>';
+      return '<span class="grocery-item-toggle" aria-hidden="true">' + (item.checked ? '✓' : '') + '</span>';
     }
 
     function renderItem(item) {
@@ -2891,10 +2936,10 @@ export function getGroceryListWidgetHtml(): string {
             '<div class="grocery-verify-row">',
             detailMarkup,
             '<div class="grocery-verify-actions">',
-            haveItAction
+            hostToolCapability === 'mutable' && haveItAction
               ? '<button type="button" class="grocery-verify-button" data-verify-item-key="' + escapeHtml(item.itemKey) + '" data-action-id="already_have_enough" data-active="' + (selectedActionId === 'already_have_enough' ? 'true' : 'false') + '" aria-label="' + escapeHtml('Mark ' + toDisplayName(item.displayName) + ' as already enough at home') + '" aria-pressed="' + (selectedActionId === 'already_have_enough' ? 'true' : 'false') + '">Already have enough</button>'
               : '',
-            needItAction
+            hostToolCapability === 'mutable' && needItAction
               ? '<button type="button" class="grocery-verify-button" data-verify-item-key="' + escapeHtml(item.itemKey) + '" data-action-id="need_to_buy" data-active="' + (selectedActionId === 'need_to_buy' ? 'true' : 'false') + '" aria-label="' + escapeHtml('Add ' + toDisplayName(item.displayName) + ' to the buy list') + '" aria-pressed="' + (selectedActionId === 'need_to_buy' ? 'true' : 'false') + '">Add to buy list</button>'
               : '',
             '</div>',
@@ -2947,6 +2992,9 @@ export function getGroceryListWidgetHtml(): string {
     }
 
     function renderAddItemControls() {
+      if (hostToolCapability !== 'mutable') {
+        return '';
+      }
       if (!addItemExpanded) {
         return '<button type="button" class="grocery-sync-button-add" data-add-item>Add item</button>';
       }
@@ -2961,54 +3009,399 @@ export function getGroceryListWidgetHtml(): string {
       ].join('');
     }
 
+    function stableSubsetIdentity(viewModel, stagedItems) {
+      var subset = stagedItems.map(function (entry) {
+        return String(shoppingResultItemKey(entry)) + ':bought';
+      }).sort().join('|');
+      var source = [
+        viewModel.listId || 'unknown-list',
+        viewModel.version || 'unknown-version',
+        viewModel.weekStart || 'unknown-week',
+        subset,
+      ].join('::');
+      var hash = 2166136261;
+      for (var index = 0; index < source.length; index += 1) {
+        hash ^= source.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return 'grocery-shopping:' + (hash >>> 0).toString(16) + ':' + subset.length;
+    }
+
+    function isShoppingCompletion(stagedItem) {
+      return Boolean(
+        stagedItem
+        && stagedItem.action
+        && stagedItem.action.id === 'mark_bought'
+        && (stagedItem.sourceBucketId === 'need_to_buy' || stagedItem.sourceBucketId === 'verify_quantity'),
+      );
+    }
+
+    function shoppingResultItemKey(stagedItem) {
+      var args = stagedItem && stagedItem.action ? (stagedItem.action.args || {}) : {};
+      var change = args.change || {};
+      return change.intent_id
+        || change.intentId
+        || args.intent_id
+        || args.intentId
+        || args.id
+        || (stagedItem && stagedItem.item ? stagedItem.item.manualIntentId : '')
+        || (stagedItem && stagedItem.item ? stagedItem.item.itemKey : '');
+    }
+
+    function findShoppingReceipt(candidate) {
+      if (!candidate || typeof candidate !== 'object') {
+        return null;
+      }
+      if (
+        Array.isArray(candidate.rows)
+        && typeof candidate.idempotencyKey === 'string'
+        && (candidate.outcome === 'confirmed' || candidate.outcome === 'needs_attention')
+      ) {
+        return candidate;
+      }
+      var keys = ['receipt', 'result', 'payload', 'readAfterWrite', 'structuredContent', 'data', 'value'];
+      for (var index = 0; index < keys.length; index += 1) {
+        if (candidate[keys[index]]) {
+          var nested = findShoppingReceipt(candidate[keys[index]]);
+          if (nested) {
+            return nested;
+          }
+        }
+      }
+      return null;
+    }
+
+    function findAuthoritativeBundle(candidate) {
+      if (!candidate || typeof candidate !== 'object') {
+        return null;
+      }
+      if (candidate.groceryList && candidate.inventory && typeof candidate.inventory === 'object') {
+        return candidate;
+      }
+      var keys = ['readAfterWrite', 'structuredContent', 'result', 'payload', 'data', 'value'];
+      for (var index = 0; index < keys.length; index += 1) {
+        if (candidate[keys[index]]) {
+          var nested = findAuthoritativeBundle(candidate[keys[index]]);
+          if (nested) {
+            return nested;
+          }
+        }
+      }
+      return null;
+    }
+
+    function advanceAuthoritativeIdentity(viewModel, groceryList) {
+      if (!viewModel || !groceryList || typeof groceryList !== 'object') {
+        return viewModel;
+      }
+      var identity = groceryList.payload && typeof groceryList.payload === 'object'
+        ? groceryList.payload
+        : groceryList;
+      var next = cloneJson(viewModel);
+      next.listId = identity.listId || identity.list_id || next.listId;
+      next.version = identity.version || next.version;
+      next.weekStart = identity.weekStart || identity.week_start || next.weekStart;
+      return next;
+    }
+
+    function applyConfirmedShoppingReadback(viewModel, stagedItems, result) {
+      var bundle = findAuthoritativeBundle(result);
+      var receipt = findShoppingReceipt(result);
+      if (!bundle || !receipt) {
+        return { confirmed: false, unresolved: stagedItems };
+      }
+      var confirmedKeys = Object.create(null);
+      (receipt.rows || []).forEach(function (row) {
+        if (row && row.outcome === 'confirmed') {
+          confirmedKeys[row.itemKey] = true;
+        }
+      });
+      var confirmedItems = stagedItems.filter(function (entry) {
+        return Boolean(confirmedKeys[shoppingResultItemKey(entry)]);
+      });
+      var unresolved = stagedItems.filter(function (entry) {
+        return !confirmedKeys[shoppingResultItemKey(entry)];
+      });
+      rememberSavedActions(confirmedItems.map(function (entry) {
+        var resultItemKey = shoppingResultItemKey(entry);
+        var isManual = entry.item.isManual === true
+          || Boolean(entry.item.manualIntentId)
+          || resultItemKey !== entry.item.itemKey
+          || (entry.action && String(entry.action.toolName || '').indexOf('grocery_intent') >= 0);
+        return Object.assign({}, entry, {
+          action: {
+            args: {
+              change: isManual
+                ? {
+                    display_name: entry.item.displayName,
+                    intent_id: resultItemKey,
+                    kind: 'update_manual_item',
+                    status: 'completed',
+                  }
+                : {
+                    item_key: entry.item.itemKey,
+                    kind: 'mark_plan_item',
+                    status: 'bought',
+                  },
+              list_id: viewModel.listId || undefined,
+              list_version: viewModel.version || undefined,
+              week_start: viewModel.weekStart,
+            },
+            id: 'mark_bought',
+            label: 'Mark bought',
+            toolName: 'fluent_apply_grocery_list_change',
+          },
+        });
+      }));
+      confirmedItems.forEach(function (entry) {
+        delete stagedSelections[entry.item.itemKey];
+      });
+      var advanced = advanceAuthoritativeIdentity(viewModel, bundle.groceryList);
+      publishViewModel(advanced, { clearMissingLocalEdits: false });
+      return {
+        confirmed: confirmedItems.length > 0 && unresolved.length === 0 && receipt.outcome === 'confirmed',
+        unresolved: unresolved,
+      };
+    }
+
+    function projectNeedsAttentionRows(authorityViewModel, stagedItems, receipt) {
+      if (!receipt || !Array.isArray(receipt.rows)) {
+        return authorityViewModel;
+      }
+      var rowsByKey = Object.create(null);
+      receipt.rows.forEach(function (row) {
+        if (row && row.outcome === 'needs_attention') {
+          rowsByKey[row.itemKey] = row;
+        }
+      });
+      var next = cloneJson(authorityViewModel);
+      stagedItems.forEach(function (entry) {
+        if (!rowsByKey[shoppingResultItemKey(entry)]) {
+          return;
+        }
+        var sourceBucketId = entry.sourceBucketId === 'verify_quantity' ? 'verify_quantity' : 'need_to_buy';
+        (next.buckets || []).forEach(function (bucket) {
+          bucket.items = (bucket.items || []).filter(function (item) {
+            return !(
+              item.itemKey === shoppingResultItemKey(entry)
+              || item.itemKey === entry.item.itemKey
+              || normalizeManualItemKey(item.displayName) === normalizeManualItemKey(entry.item.displayName)
+            );
+          });
+        });
+        var unresolvedItem = Object.assign({}, cloneJson(entry.item), {
+          checked: false,
+          syncAction: cloneSyncAction(entry.action),
+          syncActions: [cloneSyncAction(entry.action)],
+        });
+        ensureBucket(next, sourceBucketId, sourceBucketId === 'verify_quantity' ? 'Check amount' : 'To buy')
+          .items.push(unresolvedItem);
+        stagedSelections[entry.item.itemKey] = entry.action.id || '__primary__';
+      });
+      updateBucketCounts(next);
+      return normalizeGroceryListForWidget(next);
+    }
+
+    function reconcileStagedAgainstAuthority(authorityViewModel, stagedItems, receipt) {
+      var applicable = [];
+      var alreadyDone = 0;
+      var removed = 0;
+      var receiptRows = Object.create(null);
+      if (receipt && Array.isArray(receipt.rows)) {
+        receipt.rows.forEach(function (row) {
+          if (row) {
+            receiptRows[row.itemKey] = row;
+          }
+        });
+      }
+      stagedItems.forEach(function (entry) {
+        var receiptRow = receiptRows[shoppingResultItemKey(entry)];
+        if (receiptRow && receiptRow.outcome === 'needs_attention') {
+          applicable.push(entry);
+          return;
+        }
+        var bucketId = findItemBucket(
+          authorityViewModel,
+          shoppingResultItemKey(entry) || entry.item.itemKey,
+          entry.item.displayName,
+        );
+        if (bucketId === 'covered') {
+          delete stagedSelections[entry.item.itemKey];
+          alreadyDone += 1;
+          return;
+        }
+        if (!bucketId) {
+          delete stagedSelections[entry.item.itemKey];
+          removed += 1;
+          return;
+        }
+        applicable.push(entry);
+      });
+      return {
+        alreadyDone: alreadyDone,
+        applicable: applicable,
+        removed: removed,
+      };
+    }
+
+    async function reconcileShoppingResult(callTool, viewModel, stagedItems) {
+      savePhase = 'checking';
+      syncPending = true;
+      render();
+      var result = await callTool('fluent_get_grocery_shopping_reconciliation', {
+        idempotency_key: activeIdempotencyKey,
+        week_start: viewModel.weekStart,
+      });
+      var applied = applyConfirmedShoppingReadback(viewModel, stagedItems, result);
+      var bundle = findAuthoritativeBundle(result);
+      var receipt = findShoppingReceipt(result);
+      var rawAuthorityViewModel = bundle ? findGroceryList(bundle.groceryList) || findGroceryList(bundle) : null;
+      var authorityViewModel = rawAuthorityViewModel
+        ? projectNeedsAttentionRows(rawAuthorityViewModel, applied.unresolved, receipt)
+        : null;
+      var authorityDisposition = authorityViewModel
+        ? reconcileStagedAgainstAuthority(authorityViewModel, applied.unresolved, receipt)
+        : { alreadyDone: 0, applicable: applied.unresolved, removed: 0 };
+      if (authorityDisposition.alreadyDone) {
+        syncNotice = authorityDisposition.alreadyDone + ' selected item'
+          + (authorityDisposition.alreadyDone === 1 ? ' was' : 's were')
+          + ' already Done in the current list.';
+      }
+      if (authorityDisposition.removed) {
+        syncNotice = (syncNotice ? syncNotice + ' ' : '')
+          + authorityDisposition.removed + ' selected item'
+          + (authorityDisposition.removed === 1 ? ' was' : 's were')
+          + ' removed from the current list.';
+      }
+      applied = {
+        confirmed: (
+          applied.confirmed
+          || (
+            authorityDisposition.alreadyDone > 0
+            && authorityDisposition.applicable.length === 0
+            && authorityDisposition.removed === 0
+          )
+        ),
+        removed: authorityDisposition.removed,
+        unresolved: authorityDisposition.applicable,
+      };
+      if (!applied.confirmed) {
+        if (authorityViewModel) {
+          var advanced = advanceAuthoritativeIdentity(authorityViewModel, bundle.groceryList);
+          publishViewModel(advanced, { clearMissingLocalEdits: false });
+        } else {
+          try {
+          var rendered = await refreshGroceryList(callTool, viewModel);
+          applyRenderResult(rendered, { clearMissingLocalEdits: true, preserveStagedSelections: true });
+          } catch (refreshError) {}
+        }
+      }
+      return applied;
+    }
+
     async function sendSync(viewModel) {
       var stagedItems = getStagedItems(viewModel);
       if (!stagedItems.length) {
         return;
       }
 
+      if (syncPending || hostToolCapability !== 'mutable') {
+        return;
+      }
       var callTool = getCallTool();
       if (!callTool) {
-        syncError = 'This host cannot call Fluent tools from the widget yet.';
+        hostToolCapability = 'readonly';
+        syncError = '';
         render();
         return;
       }
 
       syncError = '';
+      syncNotice = '';
       syncPending = true;
       syncSent = false;
+      savePhase = 'saving';
       render();
 
-      var completedCount = 0;
-
-        try {
-          for (var index = 0; index < stagedItems.length; index += 1) {
-            var stagedItem = stagedItems[index];
-            await callStagedGroceryAction(callTool, viewModel, stagedItem);
-            completedCount += 1;
+      var shoppingItems = stagedItems.filter(isShoppingCompletion);
+      var otherItems = stagedItems.filter(function (entry) { return !isShoppingCompletion(entry); });
+      try {
+        if (shoppingItems.length) {
+          activeIdempotencyKey = activeIdempotencyKey || stableSubsetIdentity(viewModel, shoppingItems);
+          var writeResult;
+          try {
+            writeResult = await callTool('fluent_apply_grocery_shopping_result', {
+              approval: 'explicit_user_approved',
+              bought_items: shoppingItems.map(function (entry) {
+                return { item_key: shoppingResultItemKey(entry), status: 'bought' };
+              }),
+              currentness_confirmed: true,
+              idempotency_key: activeIdempotencyKey,
+              list_id: viewModel.listId || undefined,
+              list_version: viewModel.version || undefined,
+              response_mode: 'full',
+              week_start: viewModel.weekStart,
+            });
+          } catch (writeError) {
+            var errorText = describeToolCallError(writeError).toLowerCase();
+            if (errorText.indexOf('version conflict') >= 0 || errorText.indexOf('timed out') >= 0 || errorText.indexOf('interruption') >= 0 || errorText.indexOf('connection') >= 0) {
+              var reconciledAfterError = await reconcileShoppingResult(callTool, viewModel, shoppingItems);
+              if (!reconciledAfterError.confirmed) {
+                syncPending = false;
+                syncSent = false;
+                savePhase = 'attention';
+                syncError = reconciledAfterError.removed
+                  ? 'Needs attention. Removed rows were not saved; still-applicable selections remain available for Retry.'
+                  : 'Needs attention. The selected items were not all confirmed. Retry when you’re ready.';
+                render();
+                return;
+              }
+            } else {
+              throw writeError;
+            }
           }
-
-        rememberSavedActions(stagedItems);
-        publishViewModel(viewModel);
-        stagedSelections = Object.create(null);
-        syncSent = true;
-        render();
-
-        try {
-          var refreshed = await refreshGroceryList(callTool, viewModel);
-          applyRenderResult(refreshed);
-        } catch (refreshError) {
-          syncPending = false;
-          syncSent = true;
-          syncError = 'Changes saved. Refresh did not return a new grocery list yet.';
-          render();
+          if (writeResult) {
+            var applied = applyConfirmedShoppingReadback(viewModel, shoppingItems, writeResult);
+            if (!applied.confirmed) {
+              var reconciled = await reconcileShoppingResult(callTool, viewModel, shoppingItems);
+              if (!reconciled.confirmed) {
+                syncPending = false;
+                syncSent = false;
+                savePhase = 'attention';
+                syncError = reconciled.removed
+                  ? 'Needs attention. Removed rows were not saved; still-applicable selections remain available for Retry.'
+                  : 'Needs attention. The selected items were not all confirmed. Retry when you’re ready.';
+                render();
+                return;
+              }
+            }
+          }
         }
+
+        for (var index = 0; index < otherItems.length; index += 1) {
+          await callStagedGroceryAction(callTool, viewModel, otherItems[index]);
+          if (otherItems[index].item && otherItems[index].item.itemKey) {
+            delete locallySavedActions[otherItems[index].item.itemKey];
+          }
+        }
+        if (otherItems.length) {
+          var refreshed = await refreshGroceryList(callTool, viewModel);
+          applyRenderResult(refreshed, { clearMissingLocalEdits: true, preserveStagedSelections: true });
+          otherItems.forEach(function (entry) {
+            delete stagedSelections[entry.item.itemKey];
+          });
+        }
+
+        syncPending = false;
+        syncSent = true;
+        savePhase = 'done';
+        syncError = '';
+        render();
       } catch (error) {
         syncSent = false;
         syncPending = false;
-        syncError = completedCount
-          ? 'Some selected changes may have saved before the connection failed. Refresh the list before retrying.'
-          : 'Unable to save the grocery list changes. Nothing was confirmed by the widget.';
+        savePhase = 'attention';
+        syncError = 'Needs attention. Nothing unconfirmed was cleared. Retry when you’re ready. Host said: ' + visibleToolCallError(error);
         render();
       }
     }
@@ -3028,17 +3421,28 @@ export function getGroceryListWidgetHtml(): string {
       var coveredMarkup = renderCovered(coveredBucket);
       var stagedCount = getStagedItems(viewModel).length;
       var progress = getProgressSummary(viewModel);
-      var syncCopy = stagedCount
-          ? stagedCount + ' item' + (stagedCount === 1 ? '' : 's') + ' selected. Save when you’re ready.'
-        : 'Check items locally, then save changes when you’re ready.';
+      var mutationAvailable = hostToolCapability === 'mutable';
+      var syncCopy = !mutationAvailable
+        ? 'Updating items is temporarily unavailable'
+        : savePhase === 'checking'
+          ? 'Checking save…'
+          : savePhase === 'attention'
+            ? 'Selections are still here. Retry after reviewing the list.'
+            : stagedCount
+              ? stagedCount + ' item' + (stagedCount === 1 ? '' : 's') + ' selected. Save when you’re ready.'
+              : savePhase === 'done'
+                ? 'Done'
+                : 'Check items locally, then save changes when you’re ready.';
       var headline = escapeHtml(viewModel.summary.needToBuyCount + ' to buy · ' + aisleGroups.length + ' aisles');
       var formattedWeekStart = formatWeekStart(viewModel.weekStart);
-      var syncStatus = syncPending
-        ? 'Saving changes.'
+      var syncStatus = savePhase === 'checking'
+        ? 'Checking save…'
+        : savePhase === 'saving'
+          ? 'Saving'
         : syncError
           ? syncError
           : syncSent
-            ? 'Saved and refreshed.'
+            ? 'Done'
             : syncCopy;
       root.innerHTML = [
         '<article class="grocery-card">',
@@ -3061,17 +3465,20 @@ export function getGroceryListWidgetHtml(): string {
         aisleMarkup ? '<div class="grocery-aisles">' + aisleMarkup + '</div>' : '<p class="grocery-empty">Nothing left to buy on this list.</p>',
         verifyMarkup,
         coveredMarkup,
-        '<div class="grocery-sync-bar" aria-busy="' + (syncPending ? 'true' : 'false') + '">',
+        '<div class="grocery-sync-bar" aria-busy="' + (syncPending ? 'true' : 'false') + '" data-save-phase="' + escapeHtml(savePhase) + '">',
         '<p class="grocery-sync-copy">' + escapeHtml(syncCopy) + '</p>',
         '<div class="grocery-sync-actions">',
         renderAddItemControls(),
-        '<button type="button" class="grocery-sync-button" data-sync-button aria-label="' + escapeHtml(stagedCount ? 'Save ' + stagedCount + ' grocery list change' + (stagedCount === 1 ? '' : 's') : 'Save changes') + '"' + (stagedCount && !syncPending ? '' : ' disabled') + '>' + escapeHtml(syncPending ? 'Saving…' : 'Save changes') + '</button>',
-        '<button type="button" class="grocery-sync-refresh" data-refresh-button aria-label="Refresh list"' + (syncPending ? ' disabled' : '') + '>Refresh list</button>',
-        (stagedCount ? '<button type="button" class="grocery-sync-clear" data-clear-staged-button aria-label="Clear staged grocery list changes"' + (syncPending ? ' disabled' : '') + '>Clear changes</button>' : ''),
+        (mutationAvailable
+          ? '<button type="button" class="grocery-sync-button" data-sync-button aria-label="' + escapeHtml(stagedCount ? (savePhase === 'attention' ? 'Retry ' : 'Save ') + stagedCount + ' grocery list change' + (stagedCount === 1 ? '' : 's') : 'Save changes') + '"' + (stagedCount && !syncPending ? '' : ' disabled') + '>' + escapeHtml(savePhase === 'checking' ? 'Checking save…' : savePhase === 'saving' ? 'Saving…' : savePhase === 'attention' ? 'Retry' : 'Save changes') + '</button>'
+          : ''),
+        (mutationAvailable ? '<button type="button" class="grocery-sync-refresh" data-refresh-button aria-label="Refresh list"' + (syncPending ? ' disabled' : '') + '>Refresh list</button>' : ''),
+        (mutationAvailable && stagedCount ? '<button type="button" class="grocery-sync-clear" data-clear-staged-button aria-label="Clear staged grocery list changes"' + (syncPending ? ' disabled' : '') + '>Clear changes</button>' : ''),
         '</div>',
-        '<p class="grocery-visually-hidden" role="status" aria-live="polite">' + escapeHtml(syncStatus) + '</p>',
+        '<p class="' + (mutationAvailable ? 'grocery-sync-state' : 'grocery-visually-hidden') + '" role="status" aria-live="polite">' + escapeHtml(syncStatus) + '</p>',
         (syncError ? '<p class="grocery-sync-error" role="alert">' + escapeHtml(syncError) + '</p>' : ''),
-        (syncSent ? '<p class="grocery-sync-sent">Saved and refreshed.</p>' : ''),
+        (syncNotice ? '<p class="grocery-sync-notice">' + escapeHtml(syncNotice) + '</p>' : ''),
+        (syncSent ? '<p class="grocery-sync-sent">Done</p>' : ''),
         '</div>',
         '</article>',
       ].join('');

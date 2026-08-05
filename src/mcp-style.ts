@@ -3443,7 +3443,13 @@ export function registerStyleMcpSurface(
         filter: styleClosetFilterSchema,
         limit: z.number().int().min(1).max(120).optional(),
       },
-      annotations: { title: 'Show Fluent Style Closet', readOnlyHint: true, idempotentHint: true },
+      annotations: {
+        title: 'Show Fluent Style Closet',
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
       _meta: {
         ui: {
           csp: closetWidgetMeta.ui.csp,
