@@ -12,6 +12,7 @@ export const FLUENT_PUBLIC_TOOL_NAMES = [
   'fluent_update_shared_profile_patch',
   'fluent_list_items',
   'fluent_get_item',
+  'fluent_get_grocery_shopping_reconciliation',
   'fluent_save_recipe',
   'fluent_update_recipe_patch',
   'fluent_record_recipe_feedback',

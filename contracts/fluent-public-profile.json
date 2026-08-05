@@ -8,6 +8,7 @@
     "fluent_update_shared_profile_patch",
     "fluent_list_items",
     "fluent_get_item",
+    "fluent_get_grocery_shopping_reconciliation",
     "fluent_save_recipe",
     "fluent_update_recipe_patch",
     "fluent_record_recipe_feedback",
@@ -29,7 +30,7 @@
     "fluent_render_style_closet_surface"
   ],
   "resources": [
-    "ui://widget/fluent-grocery-list-v72.html",
+    "ui://widget/fluent-grocery-list-v78.html",
     "ui://widget/fluent-budgets-envelope-setup-v1.html",
     "ui://widget/fluent-style-closet-v7.html"
   ],

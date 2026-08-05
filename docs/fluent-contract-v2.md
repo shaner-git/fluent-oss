@@ -10,6 +10,7 @@ This is the single product contract exposed by hosted and open-source `/mcp`. Th
 - The assistant performs planning and judgment; Fluent supplies personal context, evidence, media, and explicit bounded writes.
 - Browser operation, retailer checkout, product-page extraction, raw financial data, medical decisions, and operator tools are outside this contract.
 - Every write requires explicit user intent and read-after-write proof.
+- `fluent_get_shared_profile.profile` exposes only the user-facing display name and timezone. Internal profile/tenant identifiers and profile metadata are never part of that public projection.
 
 ## Tools
 
@@ -20,6 +21,7 @@ This is the single product contract exposed by hosted and open-source `/mcp`. Th
 - `fluent_update_shared_profile_patch`
 - `fluent_list_items`
 - `fluent_get_item`
+- `fluent_get_grocery_shopping_reconciliation`
 - `fluent_save_recipe`
 - `fluent_update_recipe_patch`
 - `fluent_record_recipe_feedback`
@@ -42,7 +44,7 @@ This is the single product contract exposed by hosted and open-source `/mcp`. Th
 
 ## Resources
 
-- `ui://widget/fluent-grocery-list-v72.html`
+- `ui://widget/fluent-grocery-list-v78.html`
 - `ui://widget/fluent-budgets-envelope-setup-v1.html`
 - `ui://widget/fluent-style-closet-v7.html`
 

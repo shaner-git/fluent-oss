@@ -13,6 +13,7 @@ This reference is generated from the single Fluent 2.0 public contract. There is
 - `fluent_get_shared_profile`
 - `fluent_list_items`
 - `fluent_get_item`
+- `fluent_get_grocery_shopping_reconciliation`
 - `fluent_get_purchase_context`
 - `fluent_list_evidence`
 - `fluent_get_media_bundle`
@@ -42,3 +43,5 @@ This reference is generated from the single Fluent 2.0 public contract. There is
 <!-- current-tools:end -->
 
 Writes require explicit user intent and returned read-after-write proof. Render adapters are optional presentation layers; structured data and text remain canonical.
+
+`fluent_get_shared_profile` returns shared facts plus a minimal public profile projection containing only `displayName` and `timezone`; it excludes internal identifiers and metadata in hosted and open-source runtimes.

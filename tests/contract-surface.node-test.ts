@@ -18,8 +18,8 @@ assert.deepEqual(frozenContractSnapshot, {
   freeze: FLUENT_CONTRACT_FREEZE,
 });
 assert.deepEqual(frozenPublicProfile, fluentPublicProfile());
-assert.equal(FLUENT_TOOL_NAMES.length, 26);
-assert.equal(new Set(FLUENT_TOOL_NAMES).size, 26, 'The public contract must not contain duplicate tools.');
+assert.equal(FLUENT_TOOL_NAMES.length, 27);
+assert.equal(new Set(FLUENT_TOOL_NAMES).size, 27, 'The public contract must not contain duplicate tools.');
 assert.equal(FLUENT_RESOURCE_URIS.length, 3);
 assert.deepEqual(FLUENT_TOOL_ALIASES, [], 'The 2.0 launch contract has no public tool aliases.');
 
@@ -28,7 +28,7 @@ for (const profile of ['assistant_app', 'chatgpt_app'] as const) {
   assert.deepEqual(
     Object.keys(server._registeredTools).sort(),
     [...FLUENT_TOOL_NAMES].sort(),
-    `${profile} must expose exactly the 26-tool launch contract.`,
+    `${profile} must expose exactly the 27-tool additive candidate contract.`,
   );
   const resourceUris = Object.keys(server._registeredResources).sort();
   assert.deepEqual(resourceUris, [...FLUENT_RESOURCE_URIS].sort(), `${profile} must expose exactly three resources.`);

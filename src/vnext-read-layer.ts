@@ -50,6 +50,10 @@ export interface FluentVNextReadServices {
       weekStart?: string | null;
     }) => Promise<unknown>;
     getInventory?: () => Promise<unknown[]>;
+    getGroceryShoppingReconciliation?: (input?: {
+      idempotencyKey?: string | null;
+      weekStart?: string | null;
+    }) => Promise<unknown>;
     getMealMemory?: (recipeId?: string) => Promise<unknown[]>;
     getOnboardingCalibration?: (input?: { includeCurrentGroceryList?: boolean }) => Promise<unknown>;
     getPreferences?: () => Promise<unknown>;
@@ -78,10 +82,47 @@ export interface FluentVNextReadServices {
   };
 }
 
+export async function getFluentVNextGroceryShoppingReconciliation(
+  services: FluentVNextReadServices,
+  input: { idempotencyKey?: string | null; weekStart?: string | null } = {},
+): Promise<{
+  object: 'GroceryShoppingReconciliation';
+  groceryList: unknown;
+  inventory: unknown[];
+  receipt: unknown | null;
+  source: string;
+}> {
+  if (services.meals?.getGroceryShoppingReconciliation) {
+    const result = objectRecord(await services.meals.getGroceryShoppingReconciliation(input)) ?? {};
+    return {
+      object: 'GroceryShoppingReconciliation',
+      groceryList: result.groceryList ?? null,
+      inventory: Array.isArray(result.inventory) ? result.inventory : [],
+      receipt: result.receipt ?? null,
+      source: 'meals.getGroceryShoppingReconciliation',
+    };
+  }
+  return {
+    object: 'GroceryShoppingReconciliation',
+    groceryList: services.meals?.getCurrentGroceryList
+      ? await services.meals.getCurrentGroceryList({
+          skipCalibrationContext: true,
+          weekStart: input.weekStart ?? undefined,
+        })
+      : null,
+    inventory: (await services.meals?.getInventory?.()) ?? [],
+    receipt: null,
+    source: 'meals.groceryShoppingReconciliation.fallback',
+  };
+}
+
 export interface FluentVNextSharedProfile {
   object: 'SharedProfile';
   source: 'fluent_read_layer';
-  profile: unknown;
+  profile: {
+    displayName: string | null;
+    timezone: string | null;
+  };
   capabilities: unknown;
   facts: FluentVNextSharedFact[];
   boundaries: {
@@ -257,13 +298,20 @@ export async function getFluentVNextSharedProfile(
   return {
     object: 'SharedProfile',
     source: 'fluent_read_layer',
-    profile,
+    profile: publicSharedProfileCore(profile),
     capabilities,
     facts,
     boundaries: {
       domainProfilesStayTyped: true,
       writesRequireExplicitIntent: true,
     },
+  };
+}
+
+function publicSharedProfileCore(profile: unknown): { displayName: string | null; timezone: string | null } {
+  return {
+    displayName: stringField(profile, 'displayName') || null,
+    timezone: stringField(profile, 'timezone') || null,
   };
 }
 
@@ -2302,7 +2350,15 @@ export async function getFluentVNextCurrentGroceryListItem(
     skipCalibrationContext: true,
     weekStart: input.weekStart ?? undefined,
   });
-  return grocery ? domainItem('meals', 'current_grocery_list', 'grocery_list', grocery, 'meals.getCurrentGroceryList') : null;
+  return projectFluentVNextCurrentGroceryListItem(grocery);
+}
+
+export function projectFluentVNextCurrentGroceryListItem(
+  grocery: unknown,
+): FluentVNextDomainItem | null {
+  return grocery
+    ? domainItem('meals', 'current_grocery_list', 'grocery_list', grocery, 'meals.getCurrentGroceryList')
+    : null;
 }
 
 async function findMealsRecipeEvidence(
@@ -3328,7 +3384,7 @@ function mealsResponseGuidance(intent: FluentVNextReadIntent): unknown {
     weeklyMealPlanningBoundary:
       'For weekly meal planning, the host model may draft a 2-4 dinner plan from returned Meals facts and user turn context, but Fluent does not persist that plan. Before proposing grocery-list deltas, resolve named recipes with fluent_list_items/fluent_get_item/fluent_list_evidence and check current grocery-list evidence so duplicate or already-covered items are not proposed. When the user explicitly approves a drafted plan, proactively offer to save it with fluent_save_meal_plan (the exact approved plan), then cite read-after-write before claiming it was saved. If you offered to save a plan and the user did not answer, ask once more before ending the task or moving past planning; an unanswered offer is not a decline, but never save without an answer.',
     approvedGroceryDeltaBoundary:
-      'Apply grocery changes only one explicit user-approved item at a time through fluent_apply_grocery_list_change, then cite the WriteAck readAfterWrite before saying anything changed. Do not batch hidden deltas, infer pantry/fridge quantity truth, browse retailers, mutate carts, place orders, or save the draft plan as memory. When the user confirms they bought or already have a single item for the current week, proactively offer it and on their explicit yes call fluent_apply_grocery_list_change (approval="explicit_user_approved", currentness_confirmed=true), then cite read-after-write. When the user says they finished a whole shop ("I went shopping", "got everything"), proactively offer the post-shopping reconcile and on their explicit yes call fluent_apply_grocery_shopping_result (mark_all_to_buy_bought=true, or the specific bought_items, currentness_confirmed=true): it marks the current list bought items purchased and refreshes inventory presence in one approved action (presence only, never inventing quantities), then cite read-after-write before claiming anything changed.',
+      'Apply grocery changes only one explicit user-approved item at a time through fluent_apply_grocery_list_change, then cite the WriteAck readAfterWrite before saying anything changed. Do not batch hidden deltas, infer pantry/fridge quantity truth, browse retailers, mutate carts, place orders, or save the draft plan as memory. When the user confirms they bought or already have a single item for the current week, proactively offer it and on their explicit yes call fluent_apply_grocery_list_change (approval="explicit_user_approved", currentness_confirmed=true), then cite read-after-write. When the user says they finished a whole shop ("I went shopping", "got everything"), proactively offer the post-shopping reconcile and on their explicit yes call fluent_apply_grocery_shopping_result (mark_all_to_buy_bought=true with a stable idempotency_key, or the specific bought_items, currentness_confirmed=true): it marks the original approved current-list set bought and refreshes inventory presence in one approved action (presence only, never inventing quantities). Reuse the same idempotency_key for mark-all readback or Retry, then cite read-after-write before claiming anything changed.',
     outcomeLearningBoundary:
       'Recipe outcomes belong on fluent_record_recipe_feedback for one saved recipe. Do not turn one meal outcome into broad preferences, grocery state, inventory, or durable routine memory. When the user says they cooked, ate, or tried a saved recipe, make a brief explicit offer in the same reply to record it (for example: "Want me to log that to Fluent — tasted great, would repeat?") and do not end the turn without offering; you may also ask one quick clarifying detail. Only on the user\'s yes, call fluent_record_recipe_feedback (approval="explicit_user_approved", with taste/difficulty/repeat from the conversation), then cite read-after-write before claiming it was recorded.',
     routineLearningBoundary:

@@ -56,6 +56,6 @@ Health and Wellbeing are not currently supported. Earlier Health tools and the o
 
 ## Resources
 
-- `ui://widget/fluent-grocery-list-v72.html`
+- `ui://widget/fluent-grocery-list-v78.html`
 - `ui://widget/fluent-budgets-envelope-setup-v1.html`
 - `ui://widget/fluent-style-closet-v7.html`

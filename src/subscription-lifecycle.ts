@@ -144,7 +144,7 @@ export function evaluateSubscriptionLifecycle(
         access: 'blocked',
         currentState: record.currentState,
         graceDeadline,
-        message: 'This Fluent account is still on the early-access waitlist. There is nothing to fix in ChatGPT yet.',
+        message: 'This sign-in does not currently have access to Fluent. Open meetfluent.app/account or contact support for account help.',
         retentionDeadline,
       };
     case 'invited':

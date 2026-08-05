@@ -108,6 +108,8 @@ import type {
   ApplyGroceryPlanActionResult,
   ApplyGroceryShoppingResultInput,
   ApplyGroceryShoppingResultRecord,
+  GroceryShoppingReconciliationRecord,
+  GroceryShoppingReceiptRow,
   GroceryShoppingResultItemStatus,
 } from './types-extra';
 import { deriveExecutionSupportSummary } from './summaries';
@@ -2775,9 +2777,16 @@ export class MealsService {
     input: ApplyGroceryShoppingResultInput,
   ): Promise<ApplyGroceryShoppingResultRecord> {
     const hasExplicit = Array.isArray(input.boughtItems) && input.boughtItems.length > 0;
+    const requestedIdempotencyKey = input.idempotencyKey?.trim() || null;
     if (!hasExplicit && input.markAllToBuyBought !== true) {
       throw new Error(
         'applyGroceryShoppingResult requires bought_items (non-empty) or mark_all_to_buy_bought=true.',
+      );
+    }
+    const markAllRequest = !hasExplicit && input.markAllToBuyBought === true;
+    if (markAllRequest && !requestedIdempotencyKey) {
+      throw new Error(
+        'applyGroceryShoppingResult requires idempotency_key for mark_all_to_buy_bought so Retry cannot widen beyond the original approval.',
       );
     }
 
@@ -2786,9 +2795,12 @@ export class MealsService {
       skipCalibrationContext: true,
     });
     const weekStart = currentList.weekStart;
+    const listId = input.listId ?? currentList.listId;
+    const listVersion = input.listVersion ?? currentList.version;
     // raw.items (the current to-buy bucket) and raw.resolvedItems (settled or already-have items)
-    // are DISJOINT sets. mark_all_to_buy_bought reconciles the to-buy bucket only; an explicit
-    // item_key may name an item from either bucket, so resolution uses the deduped union.
+    // are DISJOINT sets. mark_all_to_buy_bought resolves the to-buy bucket exactly once before the
+    // durable receipt is established. Every retry then uses the receipt's frozen approvedItems
+    // rather than widening to rows that became eligible later.
     const toBuyPlanItems = currentList.groceryPlan ? currentList.groceryPlan.raw.items : [];
     const allPlanItems: GroceryPlanItemRecord[] = [];
     if (currentList.groceryPlan) {
@@ -2807,7 +2819,24 @@ export class MealsService {
     const intentById = new Map(intents.map((intent) => [intent.id, intent]));
     const totalItems = allPlanItems.length + intents.length;
 
-    let targets: Array<{ itemKey: string; status: GroceryShoppingResultItemStatus }>;
+    const normalizedRequestedSubset = (input.boughtItems ?? [])
+      .map((entry) => ({ itemKey: entry.itemKey, status: entry.status ?? 'bought' as const }))
+      .sort((left, right) => left.itemKey.localeCompare(right.itemKey));
+    if (hasExplicit) {
+      const seenRequestedItemKeys = new Set<string>();
+      for (const entry of normalizedRequestedSubset) {
+        if (seenRequestedItemKeys.has(entry.itemKey)) {
+          throw new Error(
+            `applyGroceryShoppingResult received duplicate bought_items item_key ${entry.itemKey}.`,
+          );
+        }
+        seenRequestedItemKeys.add(entry.itemKey);
+      }
+    }
+    let initiallyApprovedItems: Array<{
+      itemKey: string;
+      status: GroceryShoppingResultItemStatus;
+    }>;
     if (hasExplicit) {
       const boughtItems = input.boughtItems ?? [];
       if (boughtItems.length > totalItems) {
@@ -2822,7 +2851,10 @@ export class MealsService {
           );
         }
       }
-      targets = boughtItems.map((entry) => ({ itemKey: entry.itemKey, status: entry.status ?? 'bought' }));
+      initiallyApprovedItems = boughtItems.map((entry) => ({
+        itemKey: entry.itemKey,
+        status: entry.status ?? 'bought',
+      }));
     } else {
       const planTargets = toBuyPlanItems
         .filter((item) => this.isGroceryPlanItemToBuy(item))
@@ -2830,13 +2862,127 @@ export class MealsService {
       const intentTargets = intents
         .filter((intent) => this.isGroceryIntentToBuy(intent))
         .map((intent) => ({ itemKey: intent.id, status: 'bought' as const }));
-      targets = [...planTargets, ...intentTargets];
-      if (targets.length === 0) {
+      initiallyApprovedItems = [...planTargets, ...intentTargets];
+    }
+    const subsetRecord = {
+      approvedItems: initiallyApprovedItems,
+      boughtItems: normalizedRequestedSubset,
+      markAllToBuyBought: markAllRequest,
+    };
+    const requestFingerprint = await hashStableJson({
+      listId,
+      listVersion,
+      ...subsetRecord,
+      tenantId: this.tenantId,
+      weekStart,
+    });
+    const idempotencyKey = requestedIdempotencyKey || `grocery-shopping:${requestFingerprint}`;
+    const receiptId = `grocery-shopping-receipt:${this.tenantId}:${idempotencyKey}`;
+    const executionToken = crypto.randomUUID();
+    let receipt = await this.getGroceryShoppingReceiptRow(idempotencyKey);
+    if (receipt) {
+      await this.assertGroceryShoppingReceiptBinding(receipt, {
+        listId,
+        subsetRecord,
+        weekStart,
+      });
+      if (receipt.status === 'confirmed' && receipt.result_json) {
+        const replay = safeParse(receipt.result_json) as ApplyGroceryShoppingResultRecord;
+        return { ...replay, replayed: true };
+      }
+      if (receipt.status === 'in_progress') {
+        const settled = await this.waitForGroceryShoppingReceipt(idempotencyKey);
+        if (settled?.result_json && settled.status !== 'in_progress') {
+          const replay = safeParse(settled.result_json) as ApplyGroceryShoppingResultRecord;
+          return { ...replay, replayed: true };
+        }
+      }
+      if (
+        input.listVersion
+        && input.listVersion !== currentList.version
+        && input.listVersion !== receipt.list_version
+      ) {
+        throw new Error(
+          `Grocery shopping version conflict: list_version ${input.listVersion} does not match authoritative ${currentList.version}.`,
+        );
+      }
+      const claimed = await this.claimGroceryShoppingReceipt(receipt.id, executionToken);
+      if (!claimed) {
+        const settled = await this.waitForGroceryShoppingReceipt(idempotencyKey);
+        if (settled?.result_json && settled.status !== 'in_progress') {
+          const replay = safeParse(settled.result_json) as ApplyGroceryShoppingResultRecord;
+          return { ...replay, replayed: true };
+        }
+        throw new Error(
+          'Grocery shopping result is still in progress. Reconcile the durable receipt before retrying.',
+        );
+      }
+      receipt = await this.getGroceryShoppingReceiptRow(idempotencyKey);
+    } else {
+      if (!hasExplicit && initiallyApprovedItems.length === 0) {
         throw new Error(
           'applyGroceryShoppingResult found no to-buy items on the current list to mark bought.',
         );
       }
+      if (input.listId && input.listId !== currentList.listId) {
+        throw new Error(
+          `Grocery shopping version conflict: list_id ${input.listId} does not match authoritative ${currentList.listId}.`,
+        );
+      }
+      if (input.listVersion && input.listVersion !== currentList.version) {
+        throw new Error(
+          `Grocery shopping version conflict: list_version ${input.listVersion} does not match authoritative ${currentList.version}.`,
+        );
+      }
+      const now = new Date().toISOString();
+      const leaseExpiresAt = new Date(Date.now() + 30_000).toISOString();
+      await this.db
+        .prepare(
+          `INSERT INTO meal_grocery_shopping_receipts (
+            id, tenant_id, idempotency_key, request_fingerprint, list_id, list_version, week_start,
+            subset_json, status, execution_token, lease_expires_at, result_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, NULL, ?, ?)
+          ON CONFLICT(tenant_id, idempotency_key) DO NOTHING`,
+        )
+        .bind(
+          receiptId,
+          this.tenantId,
+          idempotencyKey,
+          requestFingerprint,
+          listId,
+          listVersion,
+          weekStart,
+          stringifyJson(subsetRecord),
+          executionToken,
+          leaseExpiresAt,
+          now,
+          now,
+        )
+        .run();
+      receipt = await this.getGroceryShoppingReceiptRow(idempotencyKey);
+      if (!receipt) {
+        throw new Error('Failed to establish a durable grocery shopping idempotency receipt.');
+      }
+      await this.assertGroceryShoppingReceiptBinding(receipt, {
+        listId,
+        subsetRecord,
+        weekStart,
+      });
+      if (receipt.execution_token !== executionToken) {
+        const settled = await this.waitForGroceryShoppingReceipt(idempotencyKey);
+        if (settled?.result_json && settled.status !== 'in_progress') {
+          const replay = safeParse(settled.result_json) as ApplyGroceryShoppingResultRecord;
+          return { ...replay, replayed: true };
+        }
+        throw new Error(
+          'Grocery shopping result is still in progress. Reconcile the durable receipt before retrying.',
+        );
+      }
     }
+    if (!receipt) {
+      throw new Error('Failed to load the durable grocery shopping receipt.');
+    }
+    const targets = this.parseGroceryShoppingApprovedItems(receipt.subset_json);
 
     const reconcileMetadata = {
       fluentLifecycle: {
@@ -2850,67 +2996,439 @@ export class MealsService {
     const intentResults: ApplyGroceryShoppingResultRecord['manualIntents'] = [];
     const inventoryRefreshed: ApplyGroceryShoppingResultRecord['inventoryRefreshed'] = [];
     const skipped: ApplyGroceryShoppingResultRecord['skipped'] = [];
-
-    for (const target of targets) {
-      const planItem = planByKey.get(target.itemKey);
-      if (planItem) {
-        const actionStatus = target.status === 'skipped' ? 'skipped' : 'purchased';
-        await this.upsertGroceryPlanAction({
-          weekStart,
-          itemKey: planItem.itemKey,
-          actionStatus,
-          mealPlanId: currentList.groceryPlan?.mealPlanId ?? null,
-          metadata: reconcileMetadata,
-          provenance: input.provenance,
+    const rowsByItemKey = new Map(
+      (await this.listGroceryShoppingReceiptRows(receiptId)).map((row) => [row.itemKey, row]),
+    );
+    const appendConfirmedResult = (row: GroceryShoppingReceiptRow): void => {
+      const result = asRecord(row.result);
+      if (!result) return;
+      if (result.kind === 'plan_item') {
+        planResults.push({
+          actionStatus: String(result.actionStatus ?? ''),
+          itemKey: row.itemKey,
+          name: String(result.name ?? row.itemKey),
         });
-        planResults.push({ itemKey: planItem.itemKey, name: planItem.name, actionStatus });
-        if (actionStatus === 'purchased') {
-          // upsertGroceryPlanAction('purchased') auto-refreshes inventory presence (service.ts).
-          inventoryRefreshed.push({ name: planItem.name });
-        }
-        continue;
-      }
-
-      const intent = intentById.get(target.itemKey);
-      if (intent) {
-        const intentStatus = target.status === 'skipped' ? 'skipped' : 'purchased';
-        const baseMeta =
-          intent.metadata && typeof intent.metadata === 'object' && !Array.isArray(intent.metadata)
-            ? (intent.metadata as Record<string, unknown>)
-            : {};
-        await this.upsertGroceryIntent({
-          id: intent.id,
-          displayName: intent.displayName,
-          quantity: intent.quantity,
-          unit: intent.unit,
-          notes: intent.notes,
-          status: intentStatus,
-          targetWindow: intent.targetWindow,
-          mealPlanId: intent.mealPlanId,
-          metadata: { ...baseMeta, ...reconcileMetadata },
-          regenerateGroceryPlan: false,
-          provenance: input.provenance,
+      } else if (result.kind === 'manual_intent') {
+        intentResults.push({
+          displayName: String(result.displayName ?? row.itemKey),
+          id: row.itemKey,
+          status: String(result.status ?? ''),
         });
-        intentResults.push({ id: intent.id, displayName: intent.displayName, status: intentStatus });
-        if (intentStatus === 'purchased') {
-          // Manual intents have no auto-inventory path — refresh presence explicitly.
-          await this.refreshInventoryEvidenceFromPurchasedIntent({ intent, provenance: input.provenance });
-          inventoryRefreshed.push({ name: intent.displayName });
-        }
-        continue;
       }
-
-      skipped.push({ itemKey: target.itemKey, reason: 'not_on_current_list' });
+      if (result.inventoryRefreshed === true) {
+        inventoryRefreshed.push({ name: String(result.name ?? result.displayName ?? row.itemKey) });
+      }
+    };
+    for (const row of rowsByItemKey.values()) {
+      if (row.outcome === 'confirmed') appendConfirmedResult(row);
     }
 
-    return {
+    for (const target of targets) {
+      const existingRow = rowsByItemKey.get(target.itemKey);
+      if (existingRow?.outcome === 'confirmed') {
+        continue;
+      }
+      const planItem = planByKey.get(target.itemKey);
+      try {
+        const confirmedResult = await this.runWithGroceryShoppingReceiptLease(
+          receiptId,
+          executionToken,
+          async () => {
+            if (planItem) {
+              const actionStatus = target.status === 'skipped' ? 'skipped' : 'purchased';
+              await this.upsertGroceryPlanAction({
+                weekStart,
+                itemKey: planItem.itemKey,
+                actionStatus,
+                mealPlanId: currentList.groceryPlan?.mealPlanId ?? null,
+                metadata: reconcileMetadata,
+                provenance: input.provenance,
+              });
+              return {
+                actionStatus,
+                inventoryRefreshed: actionStatus === 'purchased',
+                kind: 'plan_item',
+                name: planItem.name,
+              };
+            }
+            const intent = intentById.get(target.itemKey);
+            if (!intent) {
+              throw new Error('not_on_current_list');
+            }
+            const intentStatus = target.status === 'skipped' ? 'skipped' : 'purchased';
+            const baseMeta =
+              intent.metadata && typeof intent.metadata === 'object' && !Array.isArray(intent.metadata)
+                ? (intent.metadata as Record<string, unknown>)
+                : {};
+            await this.upsertGroceryIntent({
+              id: intent.id,
+              displayName: intent.displayName,
+              quantity: intent.quantity,
+              unit: intent.unit,
+              notes: intent.notes,
+              status: intentStatus,
+              targetWindow: intent.targetWindow,
+              mealPlanId: intent.mealPlanId,
+              metadata: { ...baseMeta, ...reconcileMetadata },
+              regenerateGroceryPlan: false,
+              provenance: input.provenance,
+            });
+            if (intentStatus === 'purchased') {
+              await this.refreshInventoryEvidenceFromPurchasedIntent({ intent, provenance: input.provenance });
+            }
+            return {
+              displayName: intent.displayName,
+              inventoryRefreshed: intentStatus === 'purchased',
+              kind: 'manual_intent',
+              name: intent.displayName,
+              status: intentStatus,
+            };
+          },
+        );
+        const confirmedRow: GroceryShoppingReceiptRow = {
+          error: null,
+          itemKey: target.itemKey,
+          outcome: 'confirmed',
+          requestedStatus: target.status,
+          result: confirmedResult,
+        };
+        await this.upsertGroceryShoppingReceiptRow(receiptId, confirmedRow);
+        rowsByItemKey.set(target.itemKey, confirmedRow);
+        appendConfirmedResult(confirmedRow);
+      } catch (error) {
+        const failedRow: GroceryShoppingReceiptRow = {
+          error: String(error instanceof Error ? error.message : error).slice(0, 300),
+          itemKey: target.itemKey,
+          outcome: 'needs_attention',
+          requestedStatus: target.status,
+          result: null,
+        };
+        await this.upsertGroceryShoppingReceiptRow(receiptId, failedRow);
+        rowsByItemKey.set(target.itemKey, failedRow);
+      }
+    }
+
+    const rows = targets.map((target) => rowsByItemKey.get(target.itemKey)).filter(
+      (row): row is GroceryShoppingReceiptRow => Boolean(row),
+    );
+    const outcome = rows.every((row) => row.outcome === 'confirmed') ? 'confirmed' : 'needs_attention';
+    const record: ApplyGroceryShoppingResultRecord = {
+      idempotencyKey,
+      listId,
+      listVersion,
+      outcome,
+      replayed: false,
       weekStart,
       appliedCount: planResults.length + intentResults.length,
       planItems: planResults,
       manualIntents: intentResults,
       inventoryRefreshed,
+      rows,
       skipped,
     };
+    const finalized = await this.db
+      .prepare(
+        `UPDATE meal_grocery_shopping_receipts
+         SET status = ?, result_json = ?, updated_at = ?
+         WHERE tenant_id = ? AND id = ? AND execution_token = ?`,
+      )
+      .bind(outcome, stringifyJson(record), new Date().toISOString(), this.tenantId, receiptId, executionToken)
+      .run();
+    if (finalized.meta.changes !== 1) {
+      throw new Error('Grocery shopping receipt lease was lost before the result could be finalized.');
+    }
+    return record;
+  }
+
+  async getGroceryShoppingReconciliation(input: {
+    idempotencyKey?: string | null;
+    weekStart?: string | null;
+  } = {}): Promise<GroceryShoppingReconciliationRecord> {
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    const [groceryList, inventory, receiptRow] = await Promise.all([
+      this.getCurrentGroceryList({
+        skipCalibrationContext: true,
+        weekStart: input.weekStart ?? undefined,
+      }),
+      this.getInventory(),
+      idempotencyKey ? this.getGroceryShoppingReceiptRow(idempotencyKey) : Promise.resolve(null),
+    ]);
+    let receipt = receiptRow?.result_json
+      ? safeParse(receiptRow.result_json) as ApplyGroceryShoppingResultRecord
+      : null;
+    if (receiptRow && !receipt) {
+      const rows = await this.listGroceryShoppingReceiptRows(receiptRow.id);
+      receipt = {
+        idempotencyKey: receiptRow.idempotency_key,
+        listId: receiptRow.list_id,
+        listVersion: receiptRow.list_version,
+        outcome: 'needs_attention',
+        replayed: false,
+        weekStart: receiptRow.week_start,
+        appliedCount: rows.filter((row) => row.outcome === 'confirmed').length,
+        planItems: [],
+        manualIntents: [],
+        inventoryRefreshed: [],
+        rows,
+        skipped: [],
+      };
+    }
+    return {
+      groceryList,
+      inventory,
+      receipt,
+    };
+  }
+
+  private async getGroceryShoppingReceiptRow(idempotencyKey: string): Promise<{
+    execution_token: string;
+    id: string;
+    idempotency_key: string;
+    lease_expires_at: string;
+    list_id: string;
+    list_version: string;
+    request_fingerprint: string;
+    result_json: string | null;
+    status: string;
+    subset_json: string;
+    updated_at: string;
+    week_start: string;
+  } | null> {
+    return this.db
+      .prepare(
+        `SELECT id, idempotency_key, request_fingerprint, list_id, list_version, week_start,
+                subset_json, status, execution_token, lease_expires_at, result_json, updated_at
+         FROM meal_grocery_shopping_receipts
+         WHERE tenant_id = ? AND idempotency_key = ?
+         LIMIT 1`,
+      )
+      .bind(this.tenantId, idempotencyKey)
+      .first();
+  }
+
+  private async assertGroceryShoppingReceiptBinding(
+    receipt: {
+      list_id: string;
+      list_version: string;
+      request_fingerprint: string;
+      subset_json: string;
+      week_start: string;
+    },
+    requested: {
+      listId: string;
+      subsetRecord: {
+        approvedItems: Array<{ itemKey: string; status: GroceryShoppingResultItemStatus }>;
+        boughtItems: Array<{ itemKey: string; status: GroceryShoppingResultItemStatus }>;
+        markAllToBuyBought: boolean;
+      };
+      weekStart: string;
+    },
+  ): Promise<void> {
+    const storedSubset = asRecord(safeParse(receipt.subset_json)) ?? {};
+    const approvedItems = this.parseGroceryShoppingApprovedItems(receipt.subset_json);
+    const storedBoughtItems = this.parseGroceryShoppingSubsetItems(
+      storedSubset.boughtItems,
+      'boughtItems',
+      true,
+    );
+    const storedMarkAll = storedSubset.markAllToBuyBought === true;
+    const storedFingerprint = await hashStableJson({
+      listId: receipt.list_id,
+      listVersion: receipt.list_version,
+      approvedItems,
+      boughtItems: storedBoughtItems,
+      markAllToBuyBought: storedMarkAll,
+      tenantId: this.tenantId,
+      weekStart: receipt.week_start,
+    });
+    if (storedFingerprint !== receipt.request_fingerprint) {
+      throw new Error(
+        'Grocery shopping receipt integrity conflict: the durable approved subset does not match its original identity.',
+      );
+    }
+
+    const sameListAndMode =
+      receipt.list_id === requested.listId
+      && receipt.week_start === requested.weekStart
+      && storedMarkAll === requested.subsetRecord.markAllToBuyBought;
+    const sameExplicitSubset = storedMarkAll
+      || await hashStableJson(storedBoughtItems)
+        === await hashStableJson(requested.subsetRecord.boughtItems);
+    if (!sameListAndMode || !sameExplicitSubset) {
+      throw new Error(
+        'Grocery shopping idempotency conflict: this idempotency_key is already bound to a different list/week/subset.',
+      );
+    }
+  }
+
+  private parseGroceryShoppingApprovedItems(
+    subsetJson: string,
+  ): Array<{ itemKey: string; status: GroceryShoppingResultItemStatus }> {
+    const subset = asRecord(safeParse(subsetJson));
+    return this.parseGroceryShoppingSubsetItems(subset?.approvedItems, 'approvedItems', false);
+  }
+
+  private parseGroceryShoppingSubsetItems(
+    value: unknown,
+    fieldName: string,
+    allowEmpty: boolean,
+  ): Array<{ itemKey: string; status: GroceryShoppingResultItemStatus }> {
+    if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
+      throw new Error(`Grocery shopping receipt is missing its durable ${fieldName} subset.`);
+    }
+    const seen = new Set<string>();
+    return value.map((entry) => {
+      const item = asRecord(entry);
+      const itemKey = typeof item?.itemKey === 'string' ? item.itemKey : '';
+      const status = item?.status;
+      if (!itemKey || (status !== 'bought' && status !== 'skipped') || seen.has(itemKey)) {
+        throw new Error(`Grocery shopping receipt has an invalid durable ${fieldName} subset.`);
+      }
+      seen.add(itemKey);
+      return { itemKey, status };
+    });
+  }
+
+  private async claimGroceryShoppingReceipt(receiptId: string, executionToken: string): Promise<boolean> {
+    const now = new Date();
+    const result = await this.db
+      .prepare(
+        `UPDATE meal_grocery_shopping_receipts
+         SET status = 'in_progress', execution_token = ?, lease_expires_at = ?, updated_at = ?
+         WHERE tenant_id = ? AND id = ?
+           AND (
+             status = 'needs_attention'
+             OR (status = 'in_progress' AND lease_expires_at <= ?)
+           )`,
+      )
+      .bind(
+        executionToken,
+        new Date(now.getTime() + 30_000).toISOString(),
+        now.toISOString(),
+        this.tenantId,
+        receiptId,
+        now.toISOString(),
+      )
+      .run();
+    return result.meta.changes === 1;
+  }
+
+  private async renewGroceryShoppingReceiptLease(receiptId: string, executionToken: string): Promise<void> {
+    const now = new Date();
+    const result = await this.db
+      .prepare(
+        `UPDATE meal_grocery_shopping_receipts
+         SET lease_expires_at = ?, updated_at = ?
+         WHERE tenant_id = ? AND id = ? AND status = 'in_progress' AND execution_token = ?`,
+      )
+      .bind(
+        new Date(now.getTime() + 30_000).toISOString(),
+        now.toISOString(),
+        this.tenantId,
+        receiptId,
+        executionToken,
+      )
+      .run();
+    if (result.meta.changes !== 1) {
+      throw new Error('Grocery shopping receipt lease is no longer owned by this request.');
+    }
+  }
+
+  private async runWithGroceryShoppingReceiptLease<T>(
+    receiptId: string,
+    executionToken: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    let leaseFailure: unknown = null;
+    let heartbeat = Promise.resolve();
+    const heartbeatTimer = setInterval(() => {
+      heartbeat = heartbeat
+        .then(() => this.renewGroceryShoppingReceiptLease(receiptId, executionToken))
+        .catch((error) => {
+          leaseFailure = error;
+        });
+    }, 250);
+    try {
+      await this.renewGroceryShoppingReceiptLease(receiptId, executionToken);
+      const result = await operation();
+      await heartbeat;
+      if (leaseFailure) {
+        throw leaseFailure;
+      }
+      // Verify ownership after the domain effect and immediately before the durable row receipt.
+      await this.renewGroceryShoppingReceiptLease(receiptId, executionToken);
+      return result;
+    } finally {
+      clearInterval(heartbeatTimer);
+      await heartbeat;
+    }
+  }
+
+  private async waitForGroceryShoppingReceipt(
+    idempotencyKey: string,
+  ): Promise<Awaited<ReturnType<MealsService['getGroceryShoppingReceiptRow']>>> {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const receipt = await this.getGroceryShoppingReceiptRow(idempotencyKey);
+      if (!receipt || receipt.status !== 'in_progress') {
+        return receipt;
+      }
+    }
+    return this.getGroceryShoppingReceiptRow(idempotencyKey);
+  }
+
+  private async listGroceryShoppingReceiptRows(receiptId: string): Promise<GroceryShoppingReceiptRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT item_key, requested_status, outcome, result_json, error_text
+         FROM meal_grocery_shopping_receipt_rows
+         WHERE tenant_id = ? AND receipt_id = ?
+         ORDER BY item_key ASC`,
+      )
+      .bind(this.tenantId, receiptId)
+      .all<{
+        error_text: string | null;
+        item_key: string;
+        outcome: GroceryShoppingReceiptRow['outcome'];
+        requested_status: GroceryShoppingResultItemStatus;
+        result_json: string | null;
+      }>();
+    return (result.results ?? []).map((row) => ({
+      error: row.error_text,
+      itemKey: row.item_key,
+      outcome: row.outcome,
+      requestedStatus: row.requested_status,
+      result: safeParse(row.result_json),
+    }));
+  }
+
+  private async upsertGroceryShoppingReceiptRow(
+    receiptId: string,
+    row: GroceryShoppingReceiptRow,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO meal_grocery_shopping_receipt_rows (
+          receipt_id, tenant_id, item_key, requested_status, outcome, result_json, error_text, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(receipt_id, item_key) DO UPDATE SET
+          requested_status = excluded.requested_status,
+          outcome = excluded.outcome,
+          result_json = excluded.result_json,
+          error_text = excluded.error_text,
+          updated_at = excluded.updated_at`,
+      )
+      .bind(
+        receiptId,
+        this.tenantId,
+        row.itemKey,
+        row.requestedStatus,
+        row.outcome,
+        stringifyJson(row.result),
+        row.error,
+        new Date().toISOString(),
+      )
+      .run();
   }
 
   private isGroceryPlanItemToBuy(item: GroceryPlanItemRecord): boolean {

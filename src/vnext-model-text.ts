@@ -42,10 +42,23 @@ export function buildVNextModelText(value: unknown, options: VNextModelTextOptio
   const body = json.length > MAX_TEXT_LENGTH
     ? `${json.slice(0, MAX_TEXT_LENGTH)}\n... truncated for model-visible tool text`
     : json;
+  const guidance = isWriteReceipt(safeValue)
+    ? [
+        'Fluent returned an internal write receipt.',
+        'Confirm the saved change in ordinary user language.',
+        'Identifiers in this receipt are for internal tool chaining only. Never include them in the user-facing answer.',
+      ]
+    : ['Fluent returned this model-visible context. Use it as evidence, not as final judgment.'];
   return [
-    'Fluent returned this model-visible context. Use it as evidence, not as final judgment.',
+    ...guidance,
     body,
   ].join('\n');
+}
+
+function isWriteReceipt(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.kind === 'string' && 'readAfterWrite' in record && 'target' in record;
 }
 
 export function toVNextModelVisibleValue(

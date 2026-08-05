@@ -30,6 +30,7 @@ export function renderToolsReferenceMarkdown(): string {
     '## Optional render adapters', '', ...snapshot.tools.filter((tool) => renders.has(tool)).map((tool) => `- \`${tool}\``),
     '<!-- current-tools:end -->', '',
     'Writes require explicit user intent and returned read-after-write proof. Render adapters are optional presentation layers; structured data and text remain canonical.', '',
+    '`fluent_get_shared_profile` returns shared facts plus a minimal public profile projection containing only `displayName` and `timezone`; it excludes internal identifiers and metadata in hosted and open-source runtimes.', '',
   ].join('\n');
 }
 

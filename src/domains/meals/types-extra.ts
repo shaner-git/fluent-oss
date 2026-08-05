@@ -7,6 +7,8 @@ import type {
   MealsConfidenceBreakdown,
   MealsReadinessRecord,
   MealsTrainingContextRecord,
+  CurrentGroceryListRecord,
+  InventoryRecord,
   RecipeBookActionId,
   RecipeCatalogSummaryRecord,
 } from './types';
@@ -162,19 +164,44 @@ export interface ApplyGroceryPlanActionResult {
 export type GroceryShoppingResultItemStatus = 'bought' | 'skipped';
 
 export interface ApplyGroceryShoppingResultInput {
+  idempotencyKey?: string | null;
+  listId?: string | null;
+  listVersion?: string | null;
   weekStart?: string | null;
   markAllToBuyBought?: boolean;
   boughtItems?: Array<{ itemKey: string; status?: GroceryShoppingResultItemStatus }>;
   provenance: MutationProvenance;
 }
 
+export type GroceryShoppingReceiptOutcome = 'confirmed' | 'needs_attention';
+
+export interface GroceryShoppingReceiptRow {
+  itemKey: string;
+  requestedStatus: GroceryShoppingResultItemStatus;
+  outcome: GroceryShoppingReceiptOutcome;
+  result: unknown | null;
+  error: string | null;
+}
+
 export interface ApplyGroceryShoppingResultRecord {
+  idempotencyKey: string;
+  listId: string;
+  listVersion: string;
+  outcome: 'confirmed' | 'needs_attention';
+  replayed: boolean;
   weekStart: string;
   appliedCount: number;
   planItems: Array<{ itemKey: string; name: string; actionStatus: string }>;
   manualIntents: Array<{ id: string; displayName: string; status: string }>;
   inventoryRefreshed: Array<{ name: string }>;
+  rows: GroceryShoppingReceiptRow[];
   skipped: Array<{ itemKey: string; reason: string }>;
+}
+
+export interface GroceryShoppingReconciliationRecord {
+  groceryList: CurrentGroceryListRecord;
+  inventory: InventoryRecord[];
+  receipt: ApplyGroceryShoppingResultRecord | null;
 }
 
 export interface DeleteGroceryPlanActionInput {
