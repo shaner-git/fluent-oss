@@ -2034,6 +2034,16 @@ function renderSignedInAccountBody(input: {
   <p class="notice-title">${escapeHtml(statusTitle)}</p>
   <p>${escapeHtml(statusDetail)}</p>
 </div>
+<div class="scope-card account-controls" aria-labelledby="account-controls-title">
+  <p class="eyebrow-sm">Account controls</p>
+  <p id="account-controls-title" class="account-controls-title">Manage your Fluent account</p>
+  <p class="account-controls-copy">You can permanently delete your Fluent account and the personal data stored in it.</p>
+  <div class="account-control-row">
+    <a class="account-control-link account-control-link-danger" href="/account/delete">Delete account</a>
+    <a class="account-control-link" href="https://meetfluent.app/support/">Get support</a>
+  </div>
+  <p class="meta">Opening the deletion page does not remove anything. You can review what will be deleted before you confirm.</p>
+</div>
 <div class="connect-card" aria-labelledby="connect-card-title">
   <p id="connect-card-title" class="connect-title">Your setup progress</p>
   <ol class="progress-list">
@@ -2058,7 +2068,7 @@ function renderSignedInAccountBody(input: {
     <button id="copy-mcp-url" type="button" class="btn-secondary" data-copy-value="${escapeHtml(input.mcpUrl)}">Copy</button>
   </div>
   <div class="notice soft"><p class="notice-title">A useful first prompt</p><p>“Check my Fluent account and help me choose one area to set up.”</p></div>
-  <p class="notice-link">Full setup guide: <a href="${escapeHtml(FLUENT_CONNECT_DOCS_URL)}">${escapeHtml(FLUENT_CONNECT_DOCS_URL)}</a></p>
+  <p class="notice-link">Full setup guide: <a href="${escapeHtml(FLUENT_CONNECT_DOCS_URL)}">Open the Fluent setup guide →</a></p>
 </div>
 <div class="actions">
   <button id="sign-out-current-account" type="button" class="btn-secondary">Use a different account</button>
@@ -2503,7 +2513,7 @@ function renderAuthShell(input: { body: string; title: string }): string {
       font-size: 12.5px;
     }
     input[type="email"]::placeholder, input[type="password"]::placeholder { color: var(--faint); }
-    input:focus-visible, button:focus-visible {
+    input:focus-visible, button:focus-visible, .account-control-link:focus-visible {
       outline: none; border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(212,196,168,0.18);
     }
@@ -2565,13 +2575,14 @@ function renderAuthShell(input: { body: string; title: string }): string {
     .connect-card {
       margin-top: 20px; padding: 20px; border-radius: 14px;
       background: rgba(0,0,0,0.22); border: 1px solid var(--border);
-      display: grid; gap: 16px;
+      display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px;
     }
     .connect-title {
       margin: 0; color: var(--ink-strong); font-weight: 600; font-size: 15px;
     }
     .copy-row {
       display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px;
+      min-width: 0; width: 100%;
     }
     .quick-steps { display: grid; gap: 12px; }
     .progress-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
@@ -2644,6 +2655,20 @@ function renderAuthShell(input: { body: string; title: string }): string {
       padding: 18px; border-radius: 14px; margin: 4px 0 22px;
       background: rgba(0,0,0,0.22); border: 1px solid var(--border);
     }
+    .account-controls { margin-top: 20px; }
+    .account-controls-title { margin: 0; color: var(--ink-strong); font-weight: 600; font-size: 15px; }
+    .account-controls-copy { margin: 8px 0 16px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .account-control-row { display: flex; flex-wrap: wrap; gap: 10px; }
+    .account-control-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 140px; padding: 12px 16px; border-radius: 10px;
+      color: var(--ink); border: 1px solid var(--border-strong);
+      font-size: 14px; font-weight: 600; text-decoration: none;
+      transition: color .18s ease, border-color .18s ease, background .18s ease;
+    }
+    .account-control-link:hover { color: var(--ink-strong); border-color: var(--ink); }
+    .account-control-link-danger { color: var(--warn); border-color: rgba(224,155,125,0.45); }
+    .account-control-link-danger:hover { color: #f0b49a; border-color: var(--warn); background: rgba(224,155,125,0.06); }
     .scope-list { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 10px; }
     .scope-row { display: grid; gap: 4px; }
     .scope-code {
