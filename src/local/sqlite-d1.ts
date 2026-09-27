@@ -15,12 +15,24 @@ export class SqliteD1Database implements FluentDatabase {
     return new SqlitePreparedStatement(this.sqlite, query);
   }
 
-  async batch<T = unknown>(statements: FluentPreparedStatement[]): Promise<FluentStatementResult<T>[]> {
+  private batchQueue: Promise<unknown> = Promise.resolve();
+
+  // Like D1, a batch is one atomic transaction. Batches are serialized so two
+  // overlapping callers never try to open nested transactions, and native
+  // statements run synchronously so nothing else interleaves inside one.
+  batch<T = unknown>(statements: FluentPreparedStatement[]): Promise<FluentStatementResult<T>[]> {
+    const run = this.batchQueue.then(() => this.runBatch<T>(statements));
+    this.batchQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async runBatch<T>(statements: FluentPreparedStatement[]): Promise<FluentStatementResult<T>[]> {
     const results: FluentStatementResult<T>[] = [];
     this.sqlite.exec('BEGIN TRANSACTION;');
     try {
-      for (const statement of statements as SqlitePreparedStatement[]) {
-        const runResult = await statement.run();
+      for (const statement of statements) {
+        const runResult =
+          statement instanceof SqlitePreparedStatement ? statement.runSync() : await statement.run();
         results.push({
           success: true,
           meta: runResult.meta,
@@ -80,6 +92,10 @@ class SqlitePreparedStatement {
   }
 
   async run<T = unknown>(): Promise<FluentStatementResult<T>> {
+    return this.runSync<T>();
+  }
+
+  runSync<T = unknown>(): FluentStatementResult<T> {
     const result = this.statement.run(...this.bindings);
     return {
       success: true,

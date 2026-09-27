@@ -144,7 +144,7 @@ export function evaluateSubscriptionLifecycle(
         access: 'blocked',
         currentState: record.currentState,
         graceDeadline,
-        message: 'This Fluent account is still on the early-access waitlist. There is nothing to fix in ChatGPT yet.',
+        message: 'This sign-in does not currently have access to Fluent. Open meetfluent.app/account or contact support for account help.',
         retentionDeadline,
       };
     case 'invited':
@@ -364,12 +364,13 @@ async function recordLifecycleAuditEvent(
   await db
     .prepare(
       `INSERT INTO domain_events (
-         id, domain, entity_type, entity_id, event_type, patch_json,
+         id, tenant_id, domain, entity_type, entity_id, event_type, patch_json,
          source_agent, source_type, actor_email
-       ) VALUES (?, 'core', 'subscription_lifecycle', ?, ?, ?, 'fluent-cloud', 'system', ?)`,
+       ) VALUES (?, ?, 'core', 'subscription_lifecycle', ?, ?, ?, 'fluent-cloud', 'system', ?)`,
     )
     .bind(
       `domain-event:${crypto.randomUUID()}`,
+      input.tenantId ?? null,
       input.userId ?? input.tenantId ?? input.email ?? 'unknown',
       input.eventType,
       JSON.stringify(input.metadata ?? null),

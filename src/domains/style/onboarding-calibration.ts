@@ -8,17 +8,224 @@ import type {
   StyleItemCalibrationRecord,
   StyleItemRecord,
   StyleItemWearStatus,
+  StyleInventoryOrigin,
   StyleOnboardingCalibrationRecord,
+  StylePresentationMediaSource,
+  StylePresentationReadinessRecord,
+  StylePresentationReadinessState,
   StyleProfileRecord,
   StyleSetupState,
 } from './types';
+import { isStyleFitPhoto } from './helpers';
+import { normalizeStyleRemoteImageSourceUrl } from './media';
 
 export const STYLE_SETUP_CALIBRATION_TEMPLATE_VERSION = 'v1';
 export const STYLE_SETUP_CALIBRATION_TEMPLATE_URI = 'ui://widget/fluent-style-setup-calibration-v1.html';
+export const STYLE_PRESENTATION_REPAIR_QUEUE_LIMIT = 24;
+export const STYLE_PRESENTATION_REPAIR_ITEM_NAME_LIMIT = 80;
+
+type StylePresentationProvenance = { sourceSnapshot?: unknown } | null | undefined;
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+export function findApprovedStyleCatalogPhoto(item: StyleItemRecord, provenance: StylePresentationProvenance) {
+  const snapshot = recordOrNull(provenance?.sourceSnapshot);
+  const marker = recordOrNull(snapshot?.catalogNormalizationQuality);
+  if (!marker || marker.status !== 'approved' || marker.itemId !== item.id) return null;
+  const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
+  const photoId = text(marker.catalogPhotoId);
+  const artifactId = text(marker.catalogArtifactId);
+  const sourcePhotoId = text(marker.sourcePhotoId);
+  const sourceArtifactId = text(marker.sourceArtifactId);
+  const mode = marker.mode === 'inspected_source' ? 'inspected_source' : 'host_generated';
+  if (!photoId || !artifactId || !sourcePhotoId || !sourceArtifactId) return null;
+  const digest = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  if (
+    !digest(marker.catalogSha256)
+    || !digest(marker.generationInputSha256)
+    || !digest(marker.sourceSha256)
+    || !digest(marker.reviewBoardSha256)
+  ) return null;
+  const checks = recordOrNull(marker.checks);
+  const requiredChecks = [
+    'backgroundClean', 'centered', 'colorAndPatternMatch', 'detailsAndLogoMatch',
+    'frontFacing', 'fullSilhouette', 'identityAndCategoryMatch', 'scaleAndMatteConsistent',
+  ];
+  if (!checks || requiredChecks.some((key) => checks[key] !== true)) return null;
+  const catalog = item.photos.find((photo) =>
+    photo.id === photoId
+    && photo.artifactAvailable === true
+    && photo.artifactId === artifactId
+    && (mode === 'host_generated'
+      ? photo.source === 'generated_metadata' && photo.importedFrom === 'fluent_style_host_generated'
+      : photo.source !== 'generated_metadata' && photo.importedFrom !== 'fluent_style_host_generated')
+    && photo.kind === 'product'
+    && photo.view === 'front'
+    && photo.isPrimary === true
+    && !isStyleFitPhoto(photo),
+  );
+  const source = item.photos.find((photo) =>
+    photo.id === sourcePhotoId
+    && photo.artifactAvailable === true
+    && photo.artifactId === sourceArtifactId
+    && photo.source !== 'generated_metadata'
+  );
+  if (!catalog || !source) return null;
+  if (mode === 'inspected_source' && (catalog.id !== source.id || catalog.artifactId !== source.artifactId)) {
+    return null;
+  }
+  return catalog;
+}
+
+export function hasStyleNormalizationSource(item: StyleItemRecord): boolean {
+  return item.photos.some((photo) => {
+    if (
+      photo.source === 'generated_metadata'
+      || photo.importedFrom === 'fluent_style_host_generated'
+    ) return false;
+    if (photo.artifactAvailable === true) return true;
+    const source = photo.sourceUrl?.trim() || photo.url?.trim() || '';
+    return normalizeStyleRemoteImageSourceUrl(source) !== null;
+  });
+}
+
+export function deriveStyleItemInventoryOrigin(item: StyleItemRecord): StyleInventoryOrigin {
+  const importedPhotoMarker = item.photos.some((photo) => photo.legacyPhotoId !== null);
+  if (item.legacyItemId !== null || item.id.startsWith('style-item:fluent-web:') || importedPhotoMarker) {
+    return 'imported';
+  }
+  return item.id.trim() || item.createdAt || item.updatedAt ? 'current' : 'unknown';
+}
+
+export function deriveStyleItemPresentationMediaSource(item: StyleItemRecord): StylePresentationMediaSource {
+  if (item.photos.length === 0) return 'none';
+  const gridCandidates = item.photos.filter((photo) => !isStyleFitPhoto(photo));
+  const hasDeliverableNonGeneratedPrimary = gridCandidates.some((photo) => {
+    if (!photo.isPrimary || photo.source === 'generated_metadata') return false;
+    const source = photo.sourceUrl?.trim() || photo.url?.trim() || '';
+    return (photo.artifactAvailable === true && Boolean(photo.delivery?.originalUrl))
+      || normalizeStyleRemoteImageSourceUrl(source) !== null;
+  });
+  // A deliverable generated Catalog reference is the active presentation asset even when the same
+  // item also retains an owned Original. Keep that source evidence immutable, but do not let its
+  // artifact-backed storage mask the Catalog presentation state.
+  if (gridCandidates.some((photo) => {
+    const source = photo.sourceUrl?.trim() || photo.url?.trim() || '';
+    return photo.source === 'generated_metadata'
+      && photo.importedFrom === 'fluent_style_host_generated'
+      && photo.kind === 'product'
+      && photo.view === 'front'
+      && (photo.isPrimary || !hasDeliverableNonGeneratedPrimary)
+      && photo.artifactAvailable !== true
+      && normalizeStyleRemoteImageSourceUrl(source) !== null;
+  })) {
+    return 'generated_catalog_reference';
+  }
+  if (gridCandidates.some((photo) => photo.artifactAvailable === true && Boolean(photo.delivery?.originalUrl))) {
+    return 'owned_artifact';
+  }
+  if (gridCandidates.some((photo) => {
+    const source = photo.sourceUrl?.trim() || photo.url?.trim() || '';
+    return photo.source !== 'generated_metadata'
+      && photo.importedFrom !== 'fluent_style_host_generated'
+      && normalizeStyleRemoteImageSourceUrl(source) !== null;
+  })) {
+    return 'retained_remote';
+  }
+  return 'legacy_unavailable';
+}
+
+export function deriveStyleItemPresentationReadiness(item: StyleItemRecord, provenance?: StylePresentationProvenance): {
+  inventoryOrigin: StyleInventoryOrigin;
+  mediaSource: StylePresentationMediaSource;
+  state: StylePresentationReadinessState;
+} {
+  const mediaSource = deriveStyleItemPresentationMediaSource(item);
+  const approvedCatalog = findApprovedStyleCatalogPhoto(item, provenance);
+  const hasNormalizationSource = hasStyleNormalizationSource(item);
+  return {
+    inventoryOrigin: deriveStyleItemInventoryOrigin(item),
+    mediaSource,
+    // Deliverable bytes are not the same thing as normalized Catalog presentation. Exact readiness
+    // requires the same source-bound durable quality marker used by the Closet surface.
+    state: approvedCatalog
+      ? 'presentation_ready'
+      : hasNormalizationSource
+        ? 'needs_normalization'
+        : mediaSource === 'none'
+          ? 'no_photo'
+          : 'photo_unavailable',
+  };
+}
+
+export function buildStylePresentationReadiness(
+  items: StyleItemRecord[],
+  provenanceByItemId: ReadonlyMap<string, StylePresentationProvenance> = new Map(),
+): StylePresentationReadinessRecord {
+  const activeItems = items.filter((item) => item.status === 'active');
+  const classified = activeItems.map((item) => ({
+    item,
+    ...deriveStyleItemPresentationReadiness(item, provenanceByItemId.get(item.id)),
+  }));
+  const repairEntries = classified
+    .filter((entry) => entry.state !== 'presentation_ready')
+    .sort((left, right) => {
+      const priority = (state: StylePresentationReadinessState) =>
+        state === 'needs_normalization' || state === 'recoverable_source' ? 0 : state === 'photo_unavailable' ? 1 : 2;
+      return priority(left.state) - priority(right.state) || left.item.id.localeCompare(right.item.id);
+    })
+    .map((entry) => ({
+      inventoryOrigin: entry.inventoryOrigin,
+      itemId: entry.item.id,
+      itemName: safeStylePresentationRepairItemName(entry.item.name),
+      nextAction: entry.state === 'recoverable_source' || entry.state === 'needs_normalization'
+        ? 'normalize_source' as const
+        : entry.state === 'no_photo'
+          ? 'attach_photo' as const
+          : 'attach_replacement_photo' as const,
+      state: entry.state as Exclude<StylePresentationReadinessState, 'presentation_ready'>,
+    }));
+  const repairOrigins = new Set(repairEntries.map((entry) => entry.inventoryOrigin));
+  const repairInventoryScope: StyleInventoryOrigin | 'mixed' = repairOrigins.size === 1
+    ? [...repairOrigins][0] ?? 'unknown'
+    : repairOrigins.size > 1
+      ? 'mixed'
+      : 'unknown';
+  const repairQueue = repairEntries.slice(0, STYLE_PRESENTATION_REPAIR_QUEUE_LIMIT);
+  return {
+    automaticWrites: false,
+    itemCount: activeItems.length,
+    noPhotoCount: classified.filter((entry) => entry.state === 'no_photo').length,
+    photoUnavailableCount: classified.filter((entry) => entry.state === 'photo_unavailable').length,
+    presentationReadyCount: classified.filter((entry) => entry.state === 'presentation_ready').length,
+    recoverableSourceCount: classified.filter((entry) => entry.state === 'recoverable_source' || entry.state === 'needs_normalization').length,
+    repairInventoryScope,
+    repairPreservesSourceEvidence: true,
+    repairQueue,
+    repairQueueIncludedCount: repairQueue.length,
+    repairQueueLimit: STYLE_PRESENTATION_REPAIR_QUEUE_LIMIT,
+    repairQueueOmittedCount: Math.max(0, repairEntries.length - STYLE_PRESENTATION_REPAIR_QUEUE_LIMIT),
+    repairRequiredCount: repairEntries.length,
+  };
+}
+
+function safeStylePresentationRepairItemName(value: string | null): string | null {
+  const normalized = value?.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim() ?? '';
+  if (!normalized) return null;
+  if (/(?:https?:\/\/|[a-z][a-z0-9+.-]*:\/\/|(?:artifact|style-photo|style-item):[^\s]+)/i.test(normalized)) {
+    return 'Saved closet item';
+  }
+  return normalized.length <= STYLE_PRESENTATION_REPAIR_ITEM_NAME_LIMIT
+    ? normalized
+    : `${normalized.slice(0, STYLE_PRESENTATION_REPAIR_ITEM_NAME_LIMIT - 1).trimEnd()}…`;
+}
 
 export function buildStyleOnboardingCalibration(input: {
   items: StyleItemRecord[];
   profile: StyleProfileRecord;
+  provenanceByItemId?: ReadonlyMap<string, StylePresentationProvenance>;
 }): StyleOnboardingCalibrationRecord {
   const itemCalibrationById = new Map(input.profile.raw.itemCalibration.map((entry) => [entry.itemId, entry]));
   const activeItems = input.items.filter((item) => item.status === 'active');
@@ -29,6 +236,7 @@ export function buildStyleOnboardingCalibration(input: {
   const itemCountWithDeliverablePhoto = evidenceItems.filter((item) => item.photos.some((photo) => photo.delivery)).length;
   const itemCountWithProfile = evidenceItems.filter((item) => Boolean(item.profile)).length;
   const inferredStyleSignals = inferSignalsFromCloset(evidenceItems, input.profile.raw.calibrationSignals);
+  const presentationReadiness = buildStylePresentationReadiness(activeItems, input.provenanceByItemId);
   const confirmedStyleSignals = confirmedSignalsFromProfile(input.profile);
   const confidenceBreakdown = buildConfidenceBreakdown({
     confirmedSignalCount: confirmedStyleSignals.length,
@@ -62,6 +270,7 @@ export function buildStyleOnboardingCalibration(input: {
     confirmedSignalCount: confirmedStyleSignals.length,
     evidenceItems,
     profile: input.profile,
+    presentationReadiness,
     state,
     unresolvedQuestions,
   });
@@ -71,6 +280,11 @@ export function buildStyleOnboardingCalibration(input: {
     calibrationPrompts,
     categoryCoverage,
     closetStatus: {
+      claimBoundary: input.profile.raw.closetCoverage === 'representative'
+        ? 'closet_wide_saved_state'
+        : 'qualified_saved_items_only',
+      coverage: input.profile.raw.closetCoverage,
+      coverageConfirmedAt: input.profile.raw.closetCoverageConfirmedAt,
       hasImportedCloset: Boolean(input.profile.raw.importedClosetAt || input.profile.raw.importSource),
       importedClosetConfirmed: input.profile.raw.importedClosetConfirmed,
       state,
@@ -86,6 +300,7 @@ export function buildStyleOnboardingCalibration(input: {
       itemCountWithPhoto,
       photoCoverage: ratio(itemCountWithPhoto, evidenceItems.length),
     },
+    presentationReadiness,
     purchaseAnalysisReadiness,
     suggestedNextAction,
     unresolvedQuestions,
@@ -187,6 +402,12 @@ export function getStyleSetupCalibrationWidgetHtml(): string {
   .ss-next { border-left:4px solid var(--accent); background:#fbf7f8; border-radius:8px; padding:12px; }
   .ss-next b { display:block; font-size:14px; margin-bottom:4px; }
   .ss-next span { display:block; color:var(--soft); font-size:13px; line-height:1.4; }
+  .ss-media { border:1px solid var(--line); border-radius:10px; padding:12px; background:#fbfaf8; }
+  .ss-media-grid { display:grid; gap:8px; grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:9px; }
+  .ss-media-stat { min-width:0; }
+  .ss-media-stat b { display:block; font-size:16px; }
+  .ss-media-stat span { color:var(--muted); display:block; font-size:11px; line-height:1.3; margin-top:2px; }
+  .ss-media-note { color:var(--soft); font-size:12px; line-height:1.4; margin:10px 0 0; }
   @media (max-width: 560px) { .ss-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .ss-head,.ss-body { padding-left:14px; padding-right:14px; } }
 </style>
 <script>
@@ -209,6 +430,10 @@ export function getStyleSetupCalibrationWidgetHtml(): string {
     return "Confirm the strongest closet-suggested signals.";
   };
   const c = data.confidenceBreakdown || {};
+  const media = data.presentationReadiness || {};
+  const mediaNote = Number(media.repairRequiredCount || 0) > 0
+    ? "Original evidence stays intact. Source-photo candidates still need byte, decode, and identity inspection; missing or unavailable photos need an owned attachment. Nothing is changed automatically."
+    : "Closet presentation media is ready. Original evidence remains separately retained."
   const root = document.getElementById("style-setup-root");
   root.innerHTML = '<article class="ss-card">' +
     '<header class="ss-head"><div class="ss-kicker">Style setup</div><h2 class="ss-title">' + esc(setupTitle()) + '</h2></header>' +
@@ -219,6 +444,12 @@ export function getStyleSetupCalibrationWidgetHtml(): string {
         '<div class="ss-meter"><b>' + pct(c.visualEvidenceConfidence) + '</b><span>visual evidence</span></div>' +
         '<div class="ss-meter"><b>' + pct(c.preferenceCalibrationConfidence) + '</b><span>confirmed taste</span></div>' +
       '</div>' +
+      '<section class="ss-media"><h3>Closet photos</h3><div class="ss-media-grid">' +
+        '<div class="ss-media-stat"><b>' + esc(media.presentationReadyCount ?? 0) + '</b><span>presentation ready</span></div>' +
+        '<div class="ss-media-stat"><b>' + esc(media.recoverableSourceCount ?? 0) + '</b><span>source candidate to inspect</span></div>' +
+        '<div class="ss-media-stat"><b>' + esc(media.photoUnavailableCount ?? 0) + '</b><span>replacement needed</span></div>' +
+        '<div class="ss-media-stat"><b>' + esc(media.noPhotoCount ?? 0) + '</b><span>no photo yet</span></div>' +
+      '</div><p class="ss-media-note">' + esc(mediaNote) + '</p></section>' +
       '<section class="ss-section"><h3>Confirmed taste</h3><div>' + signals(data.confirmedStyleSignals, "No confirmed taste signals yet") + '</div></section>' +
       '<section class="ss-section"><h3>What Fluent is guessing</h3><div>' + signals(data.inferredStyleSignals, "No strong closet pattern yet") + '</div></section>' +
       '<section class="ss-section"><h3>Evidence gaps</h3><ul class="ss-list">' + list(data.unresolvedQuestions, "No high-priority evidence gap right now") + '</ul></section>' +
@@ -474,6 +705,7 @@ function buildSuggestedNextAction(input: {
   confirmedSignalCount: number;
   evidenceItems: StyleItemRecord[];
   profile: StyleProfileRecord;
+  presentationReadiness: StylePresentationReadinessRecord;
   state: StyleSetupState;
   unresolvedQuestions: string[];
 }) {
@@ -499,6 +731,26 @@ function buildSuggestedNextAction(input: {
         ? 'Style needs at least three real pieces before it should make wardrobe-fit claims.'
         : 'Style can run a provisional purchase read now; five anchors makes the read sharper.',
       toolName: 'style_add_starter_closet_item',
+    };
+  }
+  if (input.presentationReadiness.repairRequiredCount > 0) {
+    const scope = input.presentationReadiness.repairInventoryScope;
+    const label = scope === 'imported'
+      ? 'Finish imported closet photos'
+      : scope === 'mixed'
+        ? 'Finish imported and current closet photos'
+        : 'Finish closet photos';
+    const scopeText = scope === 'imported'
+      ? 'The queue contains imported closet items.'
+      : scope === 'mixed'
+        ? 'The queue includes imported and current closet items.'
+        : scope === 'current'
+          ? 'The queue contains current closet items.'
+          : 'The queue contains closet items whose import lineage is unknown.';
+    return {
+      label,
+      rationale: `${scopeText} ${input.presentationReadiness.recoverableSourceCount} source-photo candidate(s) require byte, decode, and exact-item inspection before preparation; ${input.presentationReadiness.photoUnavailableCount} item(s) need a replacement attachment and ${input.presentationReadiness.noPhotoCount} item(s) need their first photo. Nothing changes until each exact item is reviewed and written.`,
+      toolName: 'fluent_set_style_item_image',
     };
   }
   if (input.profile.raw.budgetProfile == null) {

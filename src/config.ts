@@ -18,12 +18,14 @@ export interface CoreRuntimeBindings {
   publicBaseUrl?: string;
   publicWriteRateLimiter?: FluentRateLimitBinding;
   storageBackend: FluentStorageBackend;
+  styleImageThumbnails?: boolean;
 }
 
 export interface CloudRuntimeEnv {
   OAUTH_KV: KVNamespace;
   DB: D1Database;
   ARTIFACTS: R2Bucket;
+  IMAGES?: ImagesBinding;
   EMAIL?: HostedEmailBinding;
   FLUENT_AUTH_RATE_LIMITER?: FluentRateLimitBinding;
   FLUENT_PROVISION_RATE_LIMITER?: FluentRateLimitBinding;
@@ -100,6 +102,7 @@ export function coreBindingsFromCloudEnv(env: CloudRuntimeEnv): CoreRuntimeBindi
     publicBaseUrl: env.PUBLIC_BASE_URL,
     publicWriteRateLimiter: env.FLUENT_PUBLIC_WRITE_RATE_LIMITER,
     storageBackend: 'd1-r2',
+    styleImageThumbnails: Boolean(env.IMAGES),
   };
 }
 

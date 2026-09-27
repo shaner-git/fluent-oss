@@ -61,7 +61,7 @@ The open-source runtime owns:
 - laptop, LAN, and VPS-style operator workflows
 - optional experimental Postgres + S3 backend
 
-The open-source runtime is intentionally single-user in v1. It does not try to replicate the early-access control plane.
+The open-source runtime is intentionally single-user in v1. It does not try to replicate the hosted service control plane.
 
 ## Client Bundles
 

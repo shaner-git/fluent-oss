@@ -15,6 +15,7 @@ export function summarizeStyleProfile(profile: StyleProfileRecord) {
     brandAffinities: profile.raw.brandAffinities,
     budgetProfile: profile.raw.budgetProfile,
     closetCoverage: profile.raw.closetCoverage,
+    closetCoverageConfirmedAt: profile.raw.closetCoverageConfirmedAt,
     colorPreferences: profile.raw.colorPreferences,
     colorDirections: profile.raw.colorDirections,
     contextRules: profile.raw.contextRules,

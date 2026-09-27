@@ -1,0 +1,6 @@
+interface:
+  display_name: "Fluent Style"
+  short_description: "Import, review, and use your Fluent closet"
+  default_prompt: "Use $fluent-style to import these clothes into my Fluent closet and show me the result."
+policy:
+  allow_implicit_invocation: true

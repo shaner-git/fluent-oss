@@ -332,12 +332,13 @@ export class MealsRepository {
     await this.db
       .prepare(
         `INSERT INTO domain_events (
-          id, domain, entity_type, entity_id, event_type, before_json, after_json, patch_json,
+          id, tenant_id, domain, entity_type, entity_id, event_type, before_json, after_json, patch_json,
           source_agent, source_skill, session_id, confidence, source_type, actor_email, actor_name
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         `domain-event:${crypto.randomUUID()}`,
+        this.tenantId,
         'meals',
         input.entityType,
         input.entityId,

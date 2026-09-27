@@ -1,0 +1,47 @@
+/* Host-following dark wardrobe theme. Original photos retain their pixels. */
+html[data-theme="dark"]{color-scheme:dark;background:#181a17}
+html[data-theme="dark"] body{color:#f2f0e9;background:transparent}
+html[data-theme="dark"] .wardrobe{--paper:#252722;--card-bg:#252722;color:#f2f0e9;background:var(--paper)}
+html[data-theme="dark"] .wardrobe :is(nav,.category-toolbar,.item-actions,.mutation-receipt,.metadata-row,.facet-types,.facet-search,.facet-footer,.photo-navigation,.detail-section,.item-overview,.facts dl,.metadata-option){border-color:#45473f}
+html[data-theme="dark"] :is(dt,.missing-photo,.missing-photo small,.collection-tools,.item-actions,.photo-meta,.photo-provenance,.photo-count,.metadata-label,.metadata-empty,.facet-types button,.facet-count,.facet-option small,.metadata-picker p,.metadata-picker small,.item-notes,.overview-meta){color:#bbbcb1}
+html[data-theme="dark"] .wardrobe nav button{color:#b8b9ae}
+html[data-theme="dark"] .wardrobe nav button[aria-pressed="true"]{color:#f2f0e9}
+html[data-theme="dark"] .search-launch{background:#35382f;color:#eeece4}
+html[data-theme="dark"] .production-wardrobe .search{background:#35382f;color:#f2f0e9;box-shadow:none}
+html[data-theme="dark"] .production-wardrobe .search:focus-within{background:#30332c;box-shadow:0 0 0 1px #a89f89,0 4px 18px #0003}
+html[data-theme="dark"] .production-wardrobe .search>svg{background:#44483d;color:#eeeade}
+html[data-theme="dark"] .production-wardrobe .search input::placeholder{color:#b5b6aa}
+html[data-theme="dark"] .production-wardrobe .search button:hover{background:#484b40}
+html[data-theme="dark"] .wardrobe :is(button,input,select,summary):focus-visible{outline-color:#c1b49b}
+html[data-theme="dark"] .wardrobe :is(.facet-panel,.metadata-picker,.collection-tools details>div,.photo-viewer){background:#2c2f28;color:#f2f0e9;border-color:#51554a;box-shadow:0 12px 35px #0005}
+html[data-theme="dark"] .facet-types button[aria-pressed="true"]{background:#414638;color:#f2f0e9}
+html[data-theme="dark"] .wardrobe :is(.facet-option:hover,.metadata-option:hover,.metadata-row:hover){background:#373c30}
+html[data-theme="dark"] .wardrobe :is(.primary,.facet-apply){background:#dad8c9;color:#242720}
+html[data-theme="dark"] .wardrobe :is(input,select){accent-color:#d3d4ba}
+html[data-theme="dark"] .wardrobe :is(form input,select){background:#30342b;border-color:#5b6052}
+html[data-theme="dark"] .wardrobe .facet-search input{background:none}
+html[data-theme="dark"] .active-filters button{color:#deded2;background:none;border-color:#606553}
+html[data-theme="dark"] .wardrobe :is(.garment img,.item-stage img,.inspection-photo img,.photo-thumbs img,.photo-viewer img){mix-blend-mode:normal}
+html[data-theme="dark"] .wardrobe .garment img{filter:drop-shadow(0 1px 1px #ffffff12)}
+html[data-theme="dark"] :is(.inspection-photo,.inspection-plane,.item-stage,.photo-stage,.form-actions){background:var(--paper)}
+html[data-theme="dark"] .wardrobe .caption{color:#e9e9dd;background:var(--paper)}
+html[data-theme="dark"] :is(.error,.photo-error){color:#f3af96}
+html[data-theme="dark"] .closet-position input::-webkit-slider-runnable-track{background:#464a3e}
+html[data-theme="dark"] .closet-position input::-webkit-slider-thumb{background:#b3b89d}
+html[data-theme="dark"] .closet-position input::-moz-range-track{background:#464a3e}
+html[data-theme="dark"] .closet-position input::-moz-range-thumb{background:#b3b89d}
+html[data-theme="dark"] .closet-position input:hover::-webkit-slider-thumb{background:#d0d2b9}
+html[data-theme="dark"] .collection{scrollbar-color:#777e68 transparent}
+
+html[data-theme="dark"] :is(.browse-all,.photo-provenance,.photo-caption,.photo-navigation,.item-actions button){color:#c4c6b9}
+html[data-theme="dark"] .facet-option{color:#e4e6d9}
+html[data-theme="dark"] .facet-option input{background:#30342b;border-color:#808673}
+html[data-theme="dark"] .facet-footer button:last-child{background:#d8dbc7;color:#252920}
+/* One continuous photographic surface, no individual item cards. */
+html[data-theme="dark"] .facet-option:has(input:checked){background:#414838;color:#f2f0e9}
+html[data-theme="dark"] .facet-option:has(input:checked) .facet-check{background:#d3d7bb;border-color:#d3d7bb;color:#252920}
+html[data-theme="dark"] .facet-check{border-color:#929984}
+html[data-theme="dark"] :is(.facet-search input,.metadata-search input)::placeholder{color:#afb5a4}
+html[data-theme="dark"] :is(.photo-detail-actions,.photo-position,.edit-photos,.photo-kind,.enlarge-hint,.photo-arrow,.presentation-context){color:#c4c6b9}
+html[data-theme="dark"] .metadata-options>button:hover{background:#414838}
+html[data-theme="dark"] .wardrobe :is(.identity-meta,.photo-detail-actions small,.photo-navigation small,.item-photos small){color:#c4c6b9}

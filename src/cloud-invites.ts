@@ -643,7 +643,7 @@ export async function deleteFluentCloudPendingAccount(
     throw new Error(`Unknown Fluent tenant ${input.tenantId}.`);
   }
   if (tenant.status === 'active') {
-    throw new Error(`Tenant ${input.tenantId} is already active and cannot be deleted through the early-access cleanup path.`);
+    throw new Error(`Tenant ${input.tenantId} is already active and cannot be deleted through the pre-activation cleanup path.`);
   }
 
   const metadata = asRecord(safeParse(tenant.metadata_json));

@@ -1,5 +1,5 @@
 export type StyleOnboardingPath = 'seeded' | 'fresh' | null;
-export type StyleClosetCoverage = 'current' | 'partial' | null;
+export type StyleClosetCoverage = 'representative' | 'partial' | 'out_of_date' | 'unknown';
 export type StylePhotoKind = 'product' | 'fit' | 'detail' | 'unknown';
 export type StylePhotoSource = 'imported' | 'user_upload' | 'generated_metadata' | 'legacy_reference';
 export type StyleItemStatus = 'active' | 'archived' | 'retired';
@@ -140,11 +140,54 @@ export interface StyleCalibrationPromptRecord {
   toolName: string | null;
 }
 
+export type StyleInventoryOrigin = 'imported' | 'current' | 'unknown';
+
+export type StylePresentationReadinessState =
+  | 'presentation_ready'
+  | 'needs_normalization'
+  | 'recoverable_source'
+  | 'photo_unavailable'
+  | 'no_photo';
+
+export type StylePresentationMediaSource =
+  | 'owned_artifact'
+  | 'generated_catalog_reference'
+  | 'retained_remote'
+  | 'legacy_unavailable'
+  | 'none';
+
+export interface StylePresentationRepairQueueEntry {
+  inventoryOrigin: StyleInventoryOrigin;
+  itemId: string;
+  itemName: string | null;
+  nextAction: 'normalize_source' | 'attach_replacement_photo' | 'attach_photo';
+  state: Exclude<StylePresentationReadinessState, 'presentation_ready'>;
+}
+
+export interface StylePresentationReadinessRecord {
+  automaticWrites: false;
+  itemCount: number;
+  noPhotoCount: number;
+  photoUnavailableCount: number;
+  presentationReadyCount: number;
+  recoverableSourceCount: number;
+  repairInventoryScope: StyleInventoryOrigin | 'mixed';
+  repairQueue: StylePresentationRepairQueueEntry[];
+  repairQueueIncludedCount: number;
+  repairQueueLimit: number;
+  repairQueueOmittedCount: number;
+  repairRequiredCount: number;
+  repairPreservesSourceEvidence: true;
+}
+
 export interface StyleOnboardingCalibrationRecord {
   activeItemCount: number;
   calibrationPrompts: StyleCalibrationPromptRecord[];
   categoryCoverage: Array<{ category: string; count: number }>;
   closetStatus: {
+    claimBoundary: 'closet_wide_saved_state' | 'qualified_saved_items_only';
+    coverage: StyleClosetCoverage;
+    coverageConfirmedAt: string | null;
     hasImportedCloset: boolean;
     importedClosetConfirmed: boolean;
     state: StyleSetupState;
@@ -160,6 +203,7 @@ export interface StyleOnboardingCalibrationRecord {
     itemCountWithPhoto: number;
     photoCoverage: number;
   };
+  presentationReadiness: StylePresentationReadinessRecord;
   purchaseAnalysisReadiness: StyleCalibrationReadiness;
   suggestedNextAction: {
     label: string;
@@ -238,6 +282,7 @@ export interface StyleProfileDocument {
   budgetProfile: StyleBudgetProfileRecord | null;
   calibrationSignals: StyleCalibrationSignalRecord[];
   closetCoverage: StyleClosetCoverage;
+  closetCoverageConfirmedAt: string | null;
   colorPreferences: StyleWeightedPreferenceRecord[];
   colorDirections: string[];
   contextRules: string[];
@@ -268,6 +313,9 @@ export interface StyleProfileRecord {
 }
 
 export interface StylePhotoRecord {
+  // `artifactId` preserves a stored provenance reference even when a legacy row is dangling.
+  // This flag is true only when the tenant-scoped artifacts row actually exists.
+  artifactAvailable?: boolean;
   artifactId: string | null;
   bgRemoved: boolean;
   capturedAt: string | null;
@@ -311,6 +359,8 @@ export interface StyleItemSummaryRecord {
 }
 
 export type StyleFitVerdict = 'true_to_size' | 'runs_small' | 'runs_large';
+export type StyleWearUnderstanding = 'recently_worn' | 'rarely_worn' | 'unknown';
+export type StyleItemFeedbackSignal = 'comfortable' | 'hard_to_style' | 'too_formal';
 
 export interface StyleItemProfileDocument {
   avoidOccasions: string[];
@@ -322,6 +372,9 @@ export interface StyleItemProfileDocument {
     min: number | null;
   } | null;
   fabricHand: string | null;
+  feedbackNote: string | null;
+  feedbackSignals: StyleItemFeedbackSignal[];
+  feedbackUpdatedAt: string | null;
   fitObservations: string[];
   fitVerdict: StyleFitVerdict | null;
   itemType: string | null;
@@ -341,6 +394,9 @@ export interface StyleItemProfileDocument {
   useCases: string[];
   avoidUseCases: string[];
   visualWeight: string | null;
+  wearUnderstanding: StyleWearUnderstanding;
+  worksFor: string[];
+  avoidFor: string[];
 }
 
 export interface StyleItemProfileRecord {
@@ -353,6 +409,7 @@ export interface StyleItemProfileRecord {
 }
 
 export interface StyleItemRecord {
+  productReference?: import('./product-reference').ProductReferenceState;
   brand: string | null;
   category: string | null;
   comparatorKey: StyleComparatorKey;

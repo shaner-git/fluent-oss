@@ -141,6 +141,7 @@ export function summarizeCurrentGroceryList(list: CurrentGroceryListRecord | nul
     stale: list.stale,
     staleReasons: list.staleReasons,
     counts: list.counts,
+    ...(list.mealCoverage ? { mealCoverage: list.mealCoverage } : {}),
     sourceProvenance: list.sourceProvenance,
     toBuyPreview: (list.preparedOrder?.remainingToBuy ?? []).slice(0, 10).map((item) => ({
       displayName: item.displayName,

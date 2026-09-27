@@ -262,7 +262,7 @@ async function maybeMarkSelfServeAccountActive(
     metadata: {
       accessSource: 'self_serve',
     },
-    note: 'Self-serve early-access account activated after hosted provisioning.',
+    note: 'Self-serve Fluent account activated after hosted provisioning.',
   });
 }
 

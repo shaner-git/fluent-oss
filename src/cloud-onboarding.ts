@@ -1,6 +1,6 @@
 import { getFluentAuthProps } from './auth';
 import { issueFluentCloudInviteFromApprovedWaitlist, type FluentCloudInviteActor } from './cloud-invites';
-import type { FluentDatabase } from './storage';
+import type { FluentDatabase, FluentPreparedStatement } from './storage';
 
 export const FLUENT_CLOUD_ONBOARDING_STATES = [
   'waitlisted',
@@ -223,7 +223,7 @@ export function fluentCloudOnboardingDescriptor(): FluentCloudOnboardingDescript
         trigger: 'automatic_or_operator',
       },
       {
-        notes: ['Operator confirms early-access admission and invite delivery readiness.'],
+        notes: ['Operator confirms access and invite delivery readiness.'],
         requiredTimestamps: ['waitlisted_at', 'invited_at'],
         state: 'invited',
         trigger: 'operator_only',
@@ -247,13 +247,13 @@ export function fluentCloudOnboardingDescriptor(): FluentCloudOnboardingDescript
         trigger: 'operator_only',
       },
       {
-        notes: ['Early-access trial state. Stripe ids may be present in operator views only.'],
+        notes: ['Legacy trial state. Stripe ids may be present in operator views only.'],
         requiredTimestamps: ['account_created_at', 'trialing_at'],
         state: 'trialing',
         trigger: 'automatic_or_operator',
       },
       {
-        notes: ['Represents a usable early-access account after account provisioning or an operator activation.'],
+        notes: ['Represents a usable Fluent account after account provisioning or an operator activation.'],
         requiredTimestamps: ['account_created_at', 'active_at'],
         state: 'active',
         trigger: 'automatic_or_operator',
@@ -557,30 +557,81 @@ export async function markFluentCloudClientConnected(
     userId?: string | null;
   },
 ): Promise<FluentCloudOnboardingRecord | null> {
-  const before = await ensureOnboardingRowFromLookup(db, input);
+  let before = await ensureOnboardingRowFromLookup(db, input);
   if (!before) {
     return null;
   }
 
-  const updates = {
-    current_state: '',
-    first_client_connected_at:
-      before.first_client_connected_at ?? firstTimestamp(before.email_verified_at, before.account_created_at, before.waitlisted_at),
-    first_connected_client_id: before.first_connected_client_id ?? normalizeNullableText(input.clientId),
-    first_connected_client_name: before.first_connected_client_name ?? normalizeNullableText(input.clientName),
-    last_connected_client_id: normalizeNullableText(input.clientId),
-    last_connected_client_name: normalizeNullableText(input.clientName),
-  } as Record<string, unknown>;
-  if (before.failure_stage === 'client_connection') {
-    clearFailureFields(updates);
+  const clientId = normalizeNullableText(input.clientId);
+  const clientName = normalizeNullableText(input.clientName);
+  const actorLabel = clientName ?? 'hosted-client';
+
+  // first_client_connected is a once-per-account milestone recorded at the real
+  // connection time. The claim, the row fields, and the milestone event commit
+  // in one transaction, so concurrent first requests produce exactly one event
+  // and a failed event insert leaves the milestone unclaimed for a retry.
+  if (!before.first_client_connected_at) {
+    const updates = {
+      first_connected_client_id: before.first_connected_client_id ?? clientId,
+      first_connected_client_name: before.first_connected_client_name ?? clientName,
+      last_connected_client_id: clientId,
+      last_connected_client_name: clientName,
+    } as Record<string, unknown>;
+    if (before.failure_stage === 'client_connection') {
+      clearFailureFields(updates);
+    }
+    const claimed = await claimOnboardingMilestone(db, before, {
+      at: new Date().toISOString(),
+      column: 'first_client_connected_at',
+      event: {
+        actorId: clientId,
+        actorLabel,
+        actorType: 'system',
+        eventType: 'cloud_onboarding.first_client_connected',
+        note: input.note ?? 'Hosted client reached Fluent successfully.',
+      },
+      setOnceKeys: ['first_connected_client_id', 'first_connected_client_name'],
+      updates,
+    });
+    if (claimed) {
+      return claimed;
+    }
+    // Lost the race: the winner's transaction has already committed, so record
+    // this request as a repeat connection against the current row. A different
+    // client is therefore never discarded, and the winner cannot overwrite it.
+    before = (await findOnboardingRow(db, { email: before.email_normalized })) ?? before;
   }
 
+  // Repeat connection. Every authenticated MCP request lands here, so only write
+  // when there is something new to record: a different client, a failure to
+  // clear, or the first sighting of this account in the last day.
+  const clientChanged =
+    clientId !== normalizeNullableText(before.last_connected_client_id) ||
+    clientName !== normalizeNullableText(before.last_connected_client_name);
+  const clearsFailure = before.failure_stage === 'client_connection';
+  if (!clientChanged && !clearsFailure && (await hasRecentOnboardingEvent(db, before.email_normalized, REPEAT_CLIENT_EVENT_TYPES))) {
+    return hydrateOnboardingRecord(before);
+  }
+
+  const updates = {
+    current_state: '',
+    last_connected_client_id: clientId,
+    last_connected_client_name: clientName,
+  } as Record<string, unknown>;
+  if (clearsFailure) {
+    clearFailureFields(updates);
+  }
   return finalizeOnboardingChange(db, before, {
-    actorId: normalizeNullableText(input.clientId),
-    actorLabel: normalizeNullableText(input.clientName) ?? 'hosted-client',
+    actorId: clientId,
+    actorLabel,
     actorType: 'system',
-    eventType: 'cloud_onboarding.first_client_connected',
-    note: input.note ?? 'Hosted client reached Fluent successfully.',
+    eventType: 'cloud_onboarding.client_connected',
+    metadata: {
+      clientChanged,
+      firstClientConnectedAt: normalizeNullableText(before.first_client_connected_at),
+      repeat: true,
+    },
+    note: input.note ?? 'Hosted client reconnected to Fluent.',
     updates,
   });
 }
@@ -599,49 +650,80 @@ export async function markFluentCloudSuccessfulToolCallFromCurrentRequest(
     tenantId: normalizeNullableText(authProps.tenantId),
     userId: normalizeNullableText(authProps.userId),
   };
-  const before = await ensureOnboardingRowFromLookup(db, lookup);
+  let before = await ensureOnboardingRowFromLookup(db, lookup);
   if (!before) {
     return null;
   }
 
+  // Real timestamps only: every milestone set here is stamped with the time of
+  // this call, never backfilled from earlier lifecycle timestamps.
+  const now = new Date().toISOString();
   const resolvedDomainId = domainFromToolCall(input.toolName, input.args);
-  const profileStarted = input.toolName === 'fluent_update_profile';
-  const hadActivationPrerequisite =
-    Boolean(before.first_successful_tool_call_at) || Boolean(before.profile_started_at) || Boolean(before.first_domain_selected_at);
-  const updates = {
-    active_at:
-      hadActivationPrerequisite || profileStarted || Boolean(resolvedDomainId)
-        ? before.active_at ?? firstTimestamp(before.first_successful_tool_call_at, before.first_client_connected_at, before.account_created_at)
-        : before.active_at,
-    current_state: '',
-    first_domain_id: before.first_domain_id ?? resolvedDomainId,
-    first_domain_selected_at:
-      resolvedDomainId ? before.first_domain_selected_at ?? firstTimestamp(before.email_verified_at, before.account_created_at) : before.first_domain_selected_at,
-    first_successful_tool_call_at:
-      before.first_successful_tool_call_at ?? firstTimestamp(before.first_client_connected_at, before.account_created_at, before.waitlisted_at),
-    profile_started_at:
-      profileStarted ? before.profile_started_at ?? firstTimestamp(before.email_verified_at, before.account_created_at) : before.profile_started_at,
-  } as Record<string, unknown>;
-  if (before.failure_stage === 'profile_start' && profileStarted) {
-    clearFailureFields(updates);
-  }
-  if (before.failure_stage === 'domain_selection' && resolvedDomainId) {
-    clearFailureFields(updates);
-  }
-  if (before.failure_stage === 'tool_call') {
-    clearFailureFields(updates);
+  const profileStarted = PROFILE_START_TOOL_NAMES.has(input.toolName);
+  const actorId = normalizeNullableText(authProps.oauthClientId);
+  const actorLabel = normalizeNullableText(authProps.oauthClientName) ?? input.toolName;
+  const setOnceKeys = ['active_at', 'first_domain_id', 'first_domain_selected_at', 'profile_started_at'];
+  const buildUpdates = (row: FluentCloudOnboardingRow, isFirst: boolean) => {
+    const hadActivationPrerequisite =
+      (!isFirst && Boolean(row.first_successful_tool_call_at)) ||
+      Boolean(row.profile_started_at) ||
+      Boolean(row.first_domain_selected_at);
+    const updates = {
+      active_at:
+        hadActivationPrerequisite || profileStarted || Boolean(resolvedDomainId)
+          ? row.active_at ?? now
+          : row.active_at,
+      first_domain_id: row.first_domain_id ?? resolvedDomainId,
+      first_domain_selected_at:
+        resolvedDomainId ? row.first_domain_selected_at ?? now : row.first_domain_selected_at,
+      profile_started_at:
+        profileStarted ? row.profile_started_at ?? now : row.profile_started_at,
+    } as Record<string, unknown>;
+    if (row.failure_stage === 'profile_start' && profileStarted) {
+      clearFailureFields(updates);
+    }
+    if (row.failure_stage === 'domain_selection' && resolvedDomainId) {
+      clearFailureFields(updates);
+    }
+    if (row.failure_stage === 'tool_call') {
+      clearFailureFields(updates);
+    }
+    return updates;
+  };
+  const metadata = (isFirst: boolean) => ({ domainId: resolvedDomainId, repeat: !isFirst, toolName: input.toolName });
+
+  if (!before.first_successful_tool_call_at) {
+    // Claim, activation fields, and the milestone event commit atomically.
+    const claimed = await claimOnboardingMilestone(db, before, {
+      at: now,
+      column: 'first_successful_tool_call_at',
+      event: {
+        actorId,
+        actorLabel,
+        actorType: 'system',
+        eventType: 'cloud_onboarding.first_successful_tool_call',
+        metadata: metadata(true),
+        note: `First successful hosted tool call: ${input.toolName}.`,
+      },
+      setOnceKeys,
+      updates: buildUpdates(before, true),
+    });
+    if (claimed) {
+      return claimed;
+    }
+    before = (await findOnboardingRow(db, { email: before.email_normalized })) ?? before;
   }
 
+  const updates = buildUpdates(before, false);
+  updates.current_state = '';
   return finalizeOnboardingChange(db, before, {
-    actorId: normalizeNullableText(authProps.oauthClientId),
-    actorLabel: normalizeNullableText(authProps.oauthClientName) ?? input.toolName,
+    actorId,
+    actorLabel,
     actorType: 'system',
-    eventType: 'cloud_onboarding.first_successful_tool_call',
-    metadata: {
-      domainId: resolvedDomainId,
-      toolName: input.toolName,
-    },
+    eventType: 'cloud_onboarding.successful_tool_call',
+    metadata: metadata(false),
     note: `Successful hosted tool call: ${input.toolName}.`,
+    setOnceKeys,
     updates,
   });
 }
@@ -793,7 +875,7 @@ export async function applyFluentCloudOperatorAction(
         ...actor,
         eventType: 'cloud_onboarding.reviewer_demo_invited',
         metadata: input.metadata,
-        note: input.note ?? 'Reviewer/demo account path provisioned with an early-access invite.',
+        note: input.note ?? 'Reviewer/demo account path provisioned with an invite.',
         updates: {
           account_kind: normalizeNullableText(input.accountKind) ?? 'reviewer_demo',
           current_state: '',
@@ -1032,8 +1114,8 @@ export function renderFluentCloudOnboardingOpsPage(input: {
 </head>
 <body>
   <main>
-    <h1>Fluent Early-Access Onboarding</h1>
-    <p>Inspectable hosted onboarding state machine for operator use. This route is internal and reflects early-access status only.</p>
+    <h1>Fluent Onboarding</h1>
+    <p>Inspectable hosted onboarding state machine for operator use. This route is internal and reflects hosted account status only.</p>
     <table>
       <thead><tr><th>State</th><th>Trigger</th><th>Required timestamps</th><th>Notes</th></tr></thead>
       <tbody>${stateRows}</tbody>
@@ -1069,7 +1151,7 @@ export function renderFluentCloudOnboardingStatusPage(input: {
 </head>
 <body>
   <main>
-    <p class="eyebrow">Fluent · Early Access</p>
+    <p class="eyebrow">Fluent</p>
     <h1>${escapeHtml(input.heading ?? humanizeState(input.state))}</h1>
     <p>${escapeHtml(input.message)}</p>
     <p><strong>Lifecycle state:</strong> <code>${escapeHtml(input.state)}</code></p>
@@ -1187,12 +1269,13 @@ async function finalizeOnboardingChange(
     eventType: string;
     metadata?: unknown;
     note?: string | null;
+    setOnceKeys?: readonly string[];
     updates: Record<string, unknown>;
   },
 ): Promise<FluentCloudOnboardingRecord> {
   const postUpdateState = deriveCurrentState({ ...before, ...coerceRowPatch(input.updates) });
   input.updates.current_state = postUpdateState;
-  await updateOnboardingRow(db, before.email_normalized, input.updates);
+  await updateOnboardingRow(db, before.email_normalized, input.updates, input.setOnceKeys);
   const after = await findOnboardingRow(db, { email: before.email_normalized });
   if (!after) {
     throw new Error(`Missing Fluent onboarding row for ${before.email_normalized} after update.`);
@@ -1214,19 +1297,35 @@ async function updateOnboardingRow(
   db: FluentDatabase,
   emailNormalized: string,
   updates: Record<string, unknown>,
+  setOnceKeys: readonly string[] = [],
 ): Promise<void> {
+  const statement = buildOnboardingRowUpdate(db, emailNormalized, updates, setOnceKeys);
+  if (statement) {
+    await statement.run();
+  }
+}
+
+function buildOnboardingRowUpdate(
+  db: FluentDatabase,
+  emailNormalized: string,
+  updates: Record<string, unknown>,
+  setOnceKeys: readonly string[] = [],
+  onlyIfNullColumn?: OnboardingMilestoneColumn,
+): FluentPreparedStatement | null {
   const entries = Object.entries(updates).filter(([, value]) => value !== undefined);
   if (entries.length === 0) {
-    return;
+    return null;
   }
 
+  // Set-once columns keep whatever value is already stored, so a concurrent
+  // request that read a stale row cannot overwrite an earlier real timestamp.
+  const setOnce = new Set(setOnceKeys);
+  const assignment = (key: string) =>
+    setOnce.has(key) ? `${key} = CASE WHEN ${key} IS NULL THEN ? ELSE ${key} END` : `${key} = ?`;
   const sql = `UPDATE fluent_cloud_onboarding
-    SET ${entries.map(([key]) => `${key} = ?`).join(', ')}, updated_at = CURRENT_TIMESTAMP
-    WHERE email_normalized = ?`;
-  await db
-    .prepare(sql)
-    .bind(...entries.map(([, value]) => value), emailNormalized)
-    .run();
+    SET ${entries.map(([key]) => assignment(key)).join(', ')}, updated_at = CURRENT_TIMESTAMP
+    WHERE email_normalized = ?${onlyIfNullColumn ? ` AND ${onlyIfNullColumn} IS NULL` : ''}`;
+  return db.prepare(sql).bind(...entries.map(([, value]) => value), emailNormalized);
 }
 
 async function insertOnboardingEvent(
@@ -1410,9 +1509,9 @@ function buildStateSummary(state: FluentCloudOnboardingState, row: FluentCloudOn
   const base = (() => {
     switch (state) {
       case 'waitlisted':
-        return 'This account has requested Fluent early access and is not invited yet.';
+        return 'This account has requested Fluent access and is not invited yet.';
       case 'invited':
-        return 'This account is invited to Fluent early access and can finish sign-in with the approved email.';
+        return 'This account is invited to Fluent and can finish sign-in with the approved email.';
       case 'invite_accepted':
         return 'The invite has been accepted and hosted account provisioning is ready to complete.';
       case 'account_created':
@@ -1420,9 +1519,9 @@ function buildStateSummary(state: FluentCloudOnboardingState, row: FluentCloudOn
       case 'checkout_required':
         return 'This account is waiting for the managed checkout step outside ChatGPT.';
       case 'trialing':
-        return 'This Fluent early-access account is trialing.';
+        return 'This Fluent account is trialing.';
       case 'active':
-        return 'This Fluent early-access account is active.';
+        return 'This Fluent account is active.';
       case 'past_due_grace':
         return 'This account has a payment failure and remains in full access during the 7-day grace period.';
       case 'limited_access':
@@ -1430,11 +1529,11 @@ function buildStateSummary(state: FluentCloudOnboardingState, row: FluentCloudOn
       case 'canceled_retention':
         return 'This account is canceled or lapsed and remains exportable during the 90-day retention window before Fluent domain/account data cleanup.';
       case 'suspended':
-        return 'This Fluent early-access account is suspended until an operator resumes it.';
+        return 'This Fluent account is suspended until an operator resumes it.';
       case 'deletion_requested':
         return 'Deletion has been requested for this account and access should remain blocked until the request is resolved.';
       case 'deleted':
-        return 'This Fluent early-access account has been deleted.';
+        return 'This Fluent account has been deleted.';
     }
   })();
 
@@ -1471,6 +1570,108 @@ function buildSupportNote(status: FluentCloudSupportStatus, ticketRef: string | 
   }
 }
 
+const REPEAT_CLIENT_EVENT_TYPES = ['cloud_onboarding.first_client_connected', 'cloud_onboarding.client_connected'] as const;
+const PROFILE_START_TOOL_NAMES = new Set(['fluent_update_profile', 'fluent_update_shared_profile_patch']);
+const MEALS_WRITE_TOOL_NAMES = new Set([
+  'fluent_save_recipe',
+  'fluent_update_recipe_patch',
+  'fluent_record_recipe_feedback',
+  'fluent_save_meal_plan',
+  'fluent_apply_grocery_list_change',
+  'fluent_apply_grocery_shopping_result',
+]);
+const STYLE_WRITE_TOOL_NAMES = new Set([
+  'fluent_update_style_item_patch',
+  'fluent_create_style_item',
+  'fluent_refresh_style_item_profile',
+  'fluent_set_style_item_image',
+]);
+
+type OnboardingMilestoneColumn = 'first_client_connected_at' | 'first_successful_tool_call_at';
+
+/**
+ * Atomically claims a once-per-account milestone: the conditional row update
+ * (only while the column is NULL) and the milestone event insert run in one
+ * batch transaction. The event id is derived from the account and event type,
+ * so the milestone event can exist at most once even across stale readers.
+ * Returns the updated record for the winner, or null when another request
+ * already claimed the milestone.
+ */
+async function claimOnboardingMilestone(
+  db: FluentDatabase,
+  before: FluentCloudOnboardingRow,
+  input: {
+    at: string;
+    column: OnboardingMilestoneColumn;
+    event: FluentCloudOnboardingEventInput;
+    setOnceKeys: readonly string[];
+    updates: Record<string, unknown>;
+  },
+): Promise<FluentCloudOnboardingRecord | null> {
+  const patch = { ...input.updates, [input.column]: input.at } as Record<string, unknown>;
+  patch.current_state = deriveCurrentState({ ...before, ...coerceRowPatch(patch) });
+  const update = buildOnboardingRowUpdate(db, before.email_normalized, patch, input.setOnceKeys, input.column);
+  if (!update) {
+    return null;
+  }
+  const eventId = `cloud-onboarding-event:${input.event.eventType}:${await sha256Hex(before.email_normalized)}`;
+  const insert = db
+    .prepare(
+      `INSERT INTO fluent_cloud_onboarding_events (
+        id, email_normalized, user_id, tenant_id, event_type, from_state, to_state, actor_type, actor_id, actor_label, note, metadata_json
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM fluent_cloud_onboarding WHERE email_normalized = ? AND ${input.column} = ?)
+        AND NOT EXISTS (SELECT 1 FROM fluent_cloud_onboarding_events WHERE id = ?)`,
+    )
+    .bind(
+      eventId,
+      before.email_normalized,
+      before.user_id,
+      before.tenant_id,
+      input.event.eventType,
+      normalizeState(before.current_state),
+      normalizeState(String(patch.current_state)),
+      input.event.actorType,
+      normalizeNullableText(input.event.actorId),
+      normalizeNullableText(input.event.actorLabel),
+      normalizeNullableText(input.event.note ?? null),
+      stringifyJson(input.event.metadata),
+      before.email_normalized,
+      input.at,
+      eventId,
+    );
+  const [updateResult] = await db.batch([update, insert]);
+  if (Number(updateResult?.meta?.changes ?? 0) === 0) {
+    return null;
+  }
+  const after = await findOnboardingRow(db, { email: before.email_normalized });
+  return after ? hydrateOnboardingRecord(after) : null;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function hasRecentOnboardingEvent(
+  db: FluentDatabase,
+  emailNormalized: string,
+  eventTypes: readonly string[],
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS seen
+       FROM fluent_cloud_onboarding_events
+       WHERE email_normalized = ?
+         AND event_type IN (${eventTypes.map(() => '?').join(', ')})
+         AND created_at >= datetime('now', '-1 day')
+       LIMIT 1`,
+    )
+    .bind(emailNormalized, ...eventTypes)
+    .first<{ seen: number }>();
+  return Boolean(row);
+}
+
 function domainFromToolCall(toolName: string, args?: Record<string, unknown>): string | null {
   if (toolName.startsWith('meals_')) {
     return 'meals';
@@ -1480,6 +1681,20 @@ function domainFromToolCall(toolName: string, args?: Record<string, unknown>): s
   }
   if (toolName.startsWith('health_')) {
     return 'health';
+  }
+  if (MEALS_WRITE_TOOL_NAMES.has(toolName)) {
+    return 'meals';
+  }
+  if (STYLE_WRITE_TOOL_NAMES.has(toolName)) {
+    return 'style';
+  }
+  if (toolName === 'fluent_archive_item') {
+    const domain = args?.domain;
+    return domain === 'meals' || domain === 'style' ? domain : null;
+  }
+  if (toolName === 'fluent_set_budget_envelope' || toolName === 'fluent_log_budget_spend') {
+    const category = args?.category;
+    return category === 'style-clothing' ? 'style' : category === 'meals-groceries' ? 'meals' : null;
   }
   if (
     toolName === 'fluent_enable_domain' ||

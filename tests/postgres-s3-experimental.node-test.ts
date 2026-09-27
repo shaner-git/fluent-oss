@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { ListBucketsCommand, S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Client } from 'pg';
 
 const docker = resolveDockerBinary();
@@ -14,9 +14,15 @@ if (!docker) {
 
 const suffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 const postgresContainer = `fluent-pg-${suffix}`;
-const minioContainer = `fluent-minio-${suffix}`;
+// S3-compatible store for the test. MinIO's images are no longer anonymously pullable (Docker Hub
+// and quay.io both deny pulls), so this uses SeaweedFS's S3 gateway, pinned for reproducibility.
+// With no identity config, SeaweedFS S3 accepts any credentials.
+const S3_IMAGE = 'chrislusf/seaweedfs:4.05';
+const S3_ACCESS_KEY_ID = 'fluent-test';
+const S3_SECRET_ACCESS_KEY = 'fluent-test-secret';
+const s3Container = `fluent-s3-${suffix}`;
 const postgresPort = String(25000 + Math.floor(Math.random() * 500));
-const minioPort = String(26000 + Math.floor(Math.random() * 500));
+const s3Port = String(26000 + Math.floor(Math.random() * 500));
 const appPort = String(27000 + Math.floor(Math.random() * 500));
 const rootDir = mkdtempSync(path.join(tmpdir(), 'fluent-oss-postgres-s3-'));
 
@@ -47,20 +53,17 @@ async function main() {
       'run',
       '-d',
       '--name',
-      minioContainer,
-      '-e',
-      'MINIO_ROOT_USER=minioadmin',
-      '-e',
-      'MINIO_ROOT_PASSWORD=minioadmin',
+      s3Container,
       '-p',
-      `${minioPort}:9000`,
-      'minio/minio',
+      `${s3Port}:8333`,
+      S3_IMAGE,
       'server',
-      '/data',
+      '-s3',
+      '-dir=/data',
     ]);
 
     await waitForPostgres();
-    await waitForHttp(`http://127.0.0.1:${minioPort}/minio/health/ready`);
+    await waitForS3();
 
     server = spawn(
       process.platform === 'win32' ? 'npx.cmd' : 'npx',
@@ -70,12 +73,12 @@ async function main() {
         env: {
           ...process.env,
           FLUENT_POSTGRES_URL: `postgres://fluent:fluent@127.0.0.1:${postgresPort}/fluent`,
-          FLUENT_S3_ACCESS_KEY_ID: 'minioadmin',
+          FLUENT_S3_ACCESS_KEY_ID: S3_ACCESS_KEY_ID,
           FLUENT_S3_BUCKET: 'fluent-oss',
-          FLUENT_S3_ENDPOINT: `http://127.0.0.1:${minioPort}`,
+          FLUENT_S3_ENDPOINT: `http://127.0.0.1:${s3Port}`,
           FLUENT_S3_FORCE_PATH_STYLE: 'true',
           FLUENT_S3_REGION: 'us-east-1',
-          FLUENT_S3_SECRET_ACCESS_KEY: 'minioadmin',
+          FLUENT_S3_SECRET_ACCESS_KEY: S3_SECRET_ACCESS_KEY,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
@@ -98,15 +101,7 @@ async function main() {
       token: string;
     };
     const objectKey = 'style/test-photo.png';
-    const s3 = new S3Client({
-      credentials: {
-        accessKeyId: 'minioadmin',
-        secretAccessKey: 'minioadmin',
-      },
-      endpoint: `http://127.0.0.1:${minioPort}`,
-      forcePathStyle: true,
-      region: 'us-east-1',
-    });
+    const s3 = s3Client();
     await s3.send(
       new PutObjectCommand({
         Body: new Uint8Array([137, 80, 78, 71]),
@@ -157,7 +152,7 @@ async function main() {
       server.kill('SIGTERM');
     }
     safeDocker(['rm', '-f', postgresContainer]);
-    safeDocker(['rm', '-f', minioContainer]);
+    safeDocker(['rm', '-f', s3Container]);
     rmSync(rootDir, { force: true, recursive: true });
   }
 
@@ -176,6 +171,35 @@ async function waitForPostgres(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   throw new Error('Timed out waiting for Postgres readiness.');
+}
+
+function s3Client(): S3Client {
+  return new S3Client({
+    credentials: {
+      accessKeyId: S3_ACCESS_KEY_ID,
+      secretAccessKey: S3_SECRET_ACCESS_KEY,
+    },
+    endpoint: `http://127.0.0.1:${s3Port}`,
+    forcePathStyle: true,
+    region: 'us-east-1',
+  });
+}
+
+// Ready when the S3 API itself answers, independent of any server-specific health URL.
+async function waitForS3(): Promise<void> {
+  const deadline = Date.now() + 90_000;
+  const client = s3Client();
+  let lastError: unknown = null;
+  while (Date.now() < deadline) {
+    try {
+      await client.send(new ListBucketsCommand({}));
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw lastError instanceof Error ? lastError : new Error('Timed out waiting for the S3 API.');
 }
 
 async function waitForHttp(url: string): Promise<void> {

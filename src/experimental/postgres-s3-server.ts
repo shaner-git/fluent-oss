@@ -65,6 +65,7 @@ async function main(): Promise<void> {
         method,
       }),
       runtime.env,
+      null, // Node server: no Workers execution lifetime; counts stay pending
     );
     if (styleImageResponse) {
       return writeFetchResponse(res, styleImageResponse);

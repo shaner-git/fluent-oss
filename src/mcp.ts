@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { markFluentCloudSuccessfulToolCallFromCurrentRequest } from './cloud-onboarding';
 import type { CoreRuntimeBindings } from './config';
 import {
+  FLUENT_CHATGPT_APP_DESTRUCTIVE_TOOL_NAMES,
   FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES,
   FLUENT_CONTRACT_VERSION,
   FLUENT_TOOL_NAMES,
@@ -12,7 +13,17 @@ import {
 import { FluentCoreService } from './fluent-core';
 import { registerCoreMcpSurface } from './mcp-core';
 import { registerMealsMcpSurface } from './mcp-meals';
-import { registerStyleMcpSurface } from './mcp-style';
+import { createStyleClosetSurfaceBuilder, registerStyleMcpSurface } from './mcp-style';
+import {
+  MEALS_GROCERY_LIST_V81_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_LEGACY_SUBMITTED_SNAPSHOT_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_PREVIOUS_PUBLIC_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_SECOND_PREVIOUS_PUBLIC_TEMPLATE_URI,
+  MEALS_GROCERY_LIST_SUBMITTED_SNAPSHOT_TEMPLATE_URI,
+} from './domains/meals/grocery-list';
+import { STYLE_CLOSET_TEMPLATE_URI, STYLE_CLOSET_V34_TEMPLATE_URI } from './domains/style/closet-manager';
+import { BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI, BUDGETS_ENVELOPE_SETUP_V1_TEMPLATE_URI } from './domains/budgets/envelope-setup';
 import { getFluentAuthProps } from './auth';
 import { assertCurrentUserToolAllowedForSubscriptionLifecycle } from './subscription-lifecycle';
 import { BudgetsService } from './domains/budgets/service';
@@ -21,6 +32,16 @@ import { MealsService } from './domains/meals/service';
 import { StyleService } from './domains/style/service';
 
 export type FluentMcpRuntimeProfile = 'assistant_app' | 'chatgpt_app';
+
+export const FLUENT_CHATGPT_APP_INSTRUCTIONS = [
+  'Use Fluent whenever the user asks about their current, existing, saved, or owned Fluent data.',
+  'For closet-grounded outfit or shoe advice, call fluent_get_context with domain="style" and intent="closet" before naming an owned item; do not answer from conversation memory or general fashion knowledge alone.',
+  'List the relevant active Style items with fluent_list_items and inspect shortlisted item photos with fluent_get_media_bundle when appearance affects the choice.',
+  'When the answer recommends one winning owned item, finish by calling fluent_render_style_closet_surface with filter.item_ids containing only that exact saved item ID, presentation.mode="recommendation", presentation.focused_item_id set to the same ID, and one concise presentation.recommendation_reason. Reserve mode="detail" for an explicit request to inspect or manage the full saved item.',
+  'Use collection filters only when the user explicitly asks to browse a collection; never replace an exact recommended-item detail payoff with a category-filtered closet.',
+  'When the user asks to review, compare, or resolve a possible duplicate between two saved closet records, call fluent_render_style_closet_surface with exactly those two saved IDs, filter.status="active", presentation.mode="comparison", and no focused_item_id. Never say the comparison is open unless that tool call actually returned.',
+  'For multi-garment intake, use one batch_id and a stable client_token per physical garment. A duplicate warning writes nothing: continue unrelated garments, collect warned items for one decision turn, and include only exact durable item IDs in the final review and added count.',
+].join(' ');
 
 const MCP_TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
 let fluentKnownToolNamesCache: Set<string> | null = null;
@@ -46,16 +67,19 @@ export function createFluentMcpServer(
     imageDeliverySecret: bindings.imageDeliverySecret ?? null,
     origin,
   });
-  const server = new McpServer({
-    icons: iconFor(origin),
-    name:
-      options.profile === 'chatgpt_app'
-        ? 'fluent-chatgpt-app'
-        : options.profile === 'assistant_app'
-          ? 'fluent-assistant-app'
-          : 'fluent-mcp',
-    version: FLUENT_CONTRACT_VERSION,
-  });
+  const server = new McpServer(
+    {
+      icons: iconFor(origin),
+      name:
+        options.profile === 'chatgpt_app'
+          ? 'fluent-chatgpt-app'
+          : options.profile === 'assistant_app'
+            ? 'fluent-assistant-app'
+            : 'fluent-mcp',
+      version: FLUENT_CONTRACT_VERSION,
+    },
+    options.profile === 'chatgpt_app' ? { instructions: FLUENT_CHATGPT_APP_INSTRUCTIONS } : undefined,
+  );
   const runtimeProfile = options.profile ?? 'assistant_app';
   applyMcpToolOutputSchemaDefaults(server, runtimeProfile);
   if (options.profile === 'chatgpt_app') {
@@ -80,7 +104,11 @@ export function createFluentMcpServer(
         });
         const result = await handler(...args);
         const firstArg = args[0];
-        await markFluentCloudSuccessfulToolCallFromCurrentRequest(bindings.db, {
+        // Read tools must not advance product onboarding state. Rejections and
+        // explicitly non-durable validation runs are not successful writes.
+        const toolResult = result as { isError?: boolean; structuredContent?: { durable?: boolean } } | null;
+        if (fluentAssistantAppProfile().writeTools.includes(name as never)
+          && toolResult?.isError !== true && toolResult?.structuredContent?.durable !== false) await markFluentCloudSuccessfulToolCallFromCurrentRequest(bindings.db, {
           args:
             firstArg && typeof firstArg === 'object' && !Array.isArray(firstArg)
               ? (firstArg as Record<string, unknown>)
@@ -93,15 +121,88 @@ export function createFluentMcpServer(
     }) as typeof server.registerTool;
   }
 
+  const styleClosetSurfaceBuilder = createStyleClosetSurfaceBuilder(style, origin, {
+    imageDeliverySecret: bindings.imageDeliverySecret ?? null,
+    thumbnailCapable: bindings.styleImageThumbnails === true,
+  });
+
   registerCoreMcpSurface(server, fluentCore, meals, style, budgets, origin, {
     publicWriteRateLimiter: bindings.publicWriteRateLimiter,
+    styleClosetSurfaceBuilder,
   });
   registerMealsMcpSurface(server, meals, fluentCore, origin, { budgets });
   registerStyleMcpSurface(server, style, origin, {
     imageDeliverySecret: bindings.imageDeliverySecret ?? null,
+    styleClosetSurfaceBuilder,
+    thumbnailCapable: bindings.styleImageThumbnails === true,
   });
-
+  registerHiddenResourceReadAlias(server, MEALS_GROCERY_LIST_V81_TEMPLATE_URI, MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI);
+  registerHiddenResourceReadAlias(server, STYLE_CLOSET_V34_TEMPLATE_URI, STYLE_CLOSET_TEMPLATE_URI);
+  registerHiddenResourceReadAlias(server, BUDGETS_ENVELOPE_SETUP_V1_TEMPLATE_URI, BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI);
+  registerHiddenResourceReadAlias(
+    server,
+    MEALS_GROCERY_LIST_PREVIOUS_PUBLIC_TEMPLATE_URI,
+    MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
+  );
+  registerHiddenResourceReadAlias(
+    server,
+    MEALS_GROCERY_LIST_SECOND_PREVIOUS_PUBLIC_TEMPLATE_URI,
+    MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
+  );
+  registerHiddenResourceReadAlias(
+    server,
+    MEALS_GROCERY_LIST_SUBMITTED_SNAPSHOT_TEMPLATE_URI,
+    MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
+  );
+  registerHiddenResourceReadAlias(
+    server,
+    MEALS_GROCERY_LIST_LEGACY_SUBMITTED_SNAPSHOT_TEMPLATE_URI,
+    MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
+  );
   return server;
+}
+
+type RegisteredResourceInternals = {
+  enabled: boolean;
+  name: string;
+  readCallback: (uri: URL, extra: unknown) => Promise<{
+    contents?: Array<Record<string, unknown>>;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+};
+
+function registerHiddenResourceReadAlias(server: McpServer, aliasUri: string, canonicalUri: string): void {
+  const internals = server as unknown as {
+    _registeredResources?: Record<string, RegisteredResourceInternals>;
+  };
+  const resources = internals._registeredResources;
+  const canonical = resources?.[canonicalUri];
+  if (!resources || !canonical || resources[aliasUri]) {
+    return;
+  }
+
+  const alias: RegisteredResourceInternals = {
+    ...canonical,
+    name: `${canonical.name}-submitted-snapshot-alias`,
+    async readCallback(_uri, extra) {
+      const result = await canonical.readCallback(new URL(canonicalUri), extra);
+      return {
+        ...result,
+        contents: result.contents?.map((content) => ({
+          ...content,
+          uri: content.uri === canonicalUri ? aliasUri : content.uri,
+        })),
+      };
+    },
+  };
+
+  Object.defineProperty(resources, aliasUri, {
+    configurable: false,
+    enumerable: false,
+    value: alias,
+    writable: false,
+  });
 }
 
 function applyMcpToolOutputSchemaDefaults(server: McpServer, profile: FluentMcpRuntimeProfile): void {
@@ -226,12 +327,19 @@ function normalizeMcpToolResult(value: unknown): unknown {
 
 function applyCuratedMcpProfileFilter(
   server: McpServer,
-  profile: { resources: readonly string[]; tools: readonly string[]; writeTools: readonly string[] },
+  profile: {
+    openWorldTools?: readonly string[];
+    resources: readonly string[];
+    tools: readonly string[];
+    writeTools: readonly string[];
+  },
 ): void {
   const allowedTools = new Set<string>(profile.tools);
   const allowedResources = new Set<string>(profile.resources);
   const writeTools = new Set<string>(profile.writeTools);
-  const openWorldTools = new Set<string>(FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES);
+  const openWorldTools = new Set<string>(
+    profile.openWorldTools ?? FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES,
+  );
   const originalRegisterTool = server.registerTool.bind(server);
   const originalRegisterResource = server.registerResource.bind(server);
 
@@ -285,7 +393,7 @@ function normalizeChatGptAppToolConfig(
     ...original,
     annotations: {
       ...originalAnnotations,
-      destructiveHint: false,
+      destructiveHint: (FLUENT_CHATGPT_APP_DESTRUCTIVE_TOOL_NAMES as readonly string[]).includes(name),
       idempotentHint: !isWrite,
       openWorldHint: options.openWorldTools.has(name),
       readOnlyHint: !isWrite,
@@ -335,8 +443,10 @@ export function sanitizeCuratedMcpResult(
       : value;
   return sanitizeChatGptAppValue(projectedValue, {
     allowedToolNames: new Set<string>(profile.tools),
+    registeredWidgetResource: surface.startsWith('ui://widget/') && Boolean(profile.resources?.includes(surface)),
     omitRootProfileId: surface === 'fluent_get_profile' || surface === 'fluent://core/profile',
     path: [],
+    surface,
   });
 }
 
@@ -344,8 +454,11 @@ function sanitizeChatGptAppValue(
   value: unknown,
   options: {
     allowedToolNames?: Set<string>;
+    registeredWidgetResource?: boolean;
+    executableResourceText?: boolean;
     omitRootProfileId: boolean;
     path: string[];
+    surface: string;
   },
 ): unknown {
   if (Array.isArray(value)) {
@@ -369,7 +482,14 @@ function sanitizeChatGptAppValue(
           .filter((toolName) => typeof toolName === 'string' && options.allowedToolNames?.has(toolName));
         continue;
       }
-      const sanitizedEntry = sanitizeChatGptAppValue(entry, { ...options, path: [...options.path, key] });
+      const resource = value as Record<string, unknown>;
+      const executableResourceText = options.registeredWidgetResource
+        && options.path.join('.') === 'contents.[]'
+        && resource.uri === options.surface
+        && typeof resource.mimeType === 'string'
+        && /^text\/html(?:;|$)/.test(resource.mimeType)
+        && key === 'text';
+      const sanitizedEntry = sanitizeChatGptAppValue(entry, { ...options, executableResourceText, path: [...options.path, key] });
       if (sanitizedEntry !== undefined) {
         result[key] = sanitizedEntry;
       }
@@ -382,7 +502,7 @@ function sanitizeChatGptAppValue(
       return JSON.stringify(sanitizeChatGptAppValue(parsed, options));
     }
     if (options.allowedToolNames) {
-      return sanitizeCuratedToolReferenceString(value, options.allowedToolNames, options.path.at(-1));
+      return sanitizeCuratedToolReferenceString(value, options.allowedToolNames, options.path.at(-1), options.executableResourceText);
     }
   }
   return value;
@@ -395,6 +515,7 @@ function shouldOmitChatGptAppKey(
     allowedToolNames?: Set<string>;
     omitRootProfileId: boolean;
     path: string[];
+    surface: string;
   },
 ) {
   if (CHATGPT_APP_FORBIDDEN_KEYS.has(key)) {
@@ -406,7 +527,31 @@ function shouldOmitChatGptAppKey(
   if (key === 'id' && typeof value === 'string' && /^purchase-analysis:/.test(value)) {
     return true;
   }
+  if (
+    options.surface === 'fluent_create_style_item'
+    && isUrlBearingKey(key)
+    && isTemporaryOpenAiAttachmentUrl(value)
+  ) {
+    return true;
+  }
   return options.omitRootProfileId && key === 'id' && isRootProfileObjectPath(options.path);
+}
+
+function isUrlBearingKey(key: string): boolean {
+  return key.toLowerCase().endsWith('url');
+}
+
+function isTemporaryOpenAiAttachmentUrl(value: unknown): boolean {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:'
+      && (url.hostname === 'files.oaiusercontent.com' || url.hostname.endsWith('.files.oaiusercontent.com'));
+  } catch {
+    return false;
+  }
 }
 
 function isToolNameListKey(key: string): boolean {
@@ -464,6 +609,9 @@ function projectCuratedCapabilitiesResult(
           `Enabled domains: ${enabledDomains.length ? enabledDomains.join(', ') : 'none'}.`,
           `Ready domains: ${readyDomains.length ? readyDomains.join(', ') : 'none'}.`,
           'Use MCP tools/list as the authoritative tool directory and start domain work with fluent_get_context.',
+          ...(readyDomains.includes('style')
+            ? ['Style photo import is reconciliation first. Search with discriminating brand, graphic-text, garment, color, and category queries; if nextCursor is returned, continue relevant pages until a confident match or relevant-result exhaustion, then inspect plausible matches with fluent_get_media_bundle. Existing complete: preserve Catalog and attach source/on-you media. Existing incomplete: repair Catalog and attach source/on-you media to the same item. New after sufficient search: create. Ambiguous: do not create. Missing Catalog media is incomplete presentation state, not evidence that the garment is new.']
+            : []),
         ].join('\n'),
       },
     ],
@@ -521,6 +669,22 @@ function projectCuratedCapabilitiesPayload(
     routing: {
       accountStatusTool: publicTools.includes('fluent_get_account_status') ? 'fluent_get_account_status' : null,
       startDomainWorkWith: publicTools.includes('fluent_get_context') ? 'fluent_get_context' : null,
+      stylePhotoImport: publicReadyDomains.includes('style')
+        ? {
+            principle: 'reconciliation_first',
+            candidateSearch: {
+              queries: ['brand_or_graphic_text', 'garment_description', 'category_and_color'],
+              pagination: 'continue_relevant_pages_while_nextCursor_until_confident_match_or_exhaustion',
+              inspect: 'fluent_get_media_bundle',
+            },
+            outcomes: {
+              existingComplete: ['attach_source_media', 'fluent_set_style_item_image', 'fluent_render_style_closet_surface:detail'],
+              existingIncomplete: ['generate_catalog_media', 'fluent_set_style_item_image', 'attach_source_media', 'fluent_render_style_closet_surface:detail'],
+              genuinelyNew: ['catalog_image_generation', 'fluent_create_style_item', 'fluent_render_style_closet_surface:ingestion_review'],
+              ambiguous: ['do_not_create', 'ask_user_to_choose_or_provide_clearer_evidence'],
+            },
+          }
+        : null,
       note: 'MCP tools/list is authoritative for the connected public Fluent profile.',
     },
   };
@@ -530,8 +694,9 @@ function sanitizeCuratedToolReferenceString(
   value: string,
   allowedToolNames: Set<string>,
   key: string | undefined,
+  executableResourceText = false,
 ): string | undefined {
-  const references = fluentToolReferences(value, key);
+  const references = fluentToolReferences(value, key, executableResourceText);
   const disallowedReferences = references.filter((toolName) => !allowedToolNames.has(toolName));
   const trimmed = value.trim();
 
@@ -555,11 +720,21 @@ function sanitizeCuratedToolReferenceString(
   );
 }
 
-function fluentToolReferences(value: string, key: string | undefined): string[] {
+function fluentToolReferences(value: string, key: string | undefined, executableResourceText = false): string[] {
   const knownToolNames = fluentKnownToolNamesCache ??= new Set<string>(FLUENT_TOOL_NAMES);
   const explicitToolProse = /\b(?:call|invoke|route|run|tool|use)\b/i.test(value);
   return [...value.matchAll(/\b(?:fluent|meals|style|health)_[a-z0-9]+_[a-z0-9_]+\b/g)]
     .map((match) => match[0])
+    // These are public result discriminators, never callable tools. Preserve
+    // their comparisons only in registered widget HTML; all other identifiers
+    // and assistant-facing prose retain the existing tool-reference policy.
+    .filter((identifier) => !executableResourceText
+      || !['style_closet_create_outcome', 'style_create_outcome', 'style_item_image_set', 'style_item_patch'].includes(identifier)
+      || knownToolNames.has(identifier)
+      || Boolean(key && isToolReferenceFieldKey(key)))
+    // This is the public render tool's enum value, not a tool name. HTML also
+    // contains words such as "call", so the prose heuristic must not rewrite it.
+    .filter((identifier) => identifier !== 'meals_grocery_list' || knownToolNames.has(identifier) || Boolean(key && isToolReferenceFieldKey(key)))
     .filter((toolName) => knownToolNames.has(toolName) || Boolean(key && isToolReferenceFieldKey(key)) || explicitToolProse);
 }
 

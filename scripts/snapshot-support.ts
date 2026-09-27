@@ -13,6 +13,7 @@ export const SNAPSHOT_TABLES = [
   'style_item_photos',
   'style_item_profiles',
   'style_item_provenance',
+  'style_product_references',
   'meal_recipes',
   'meal_preferences',
   'meal_plans',
