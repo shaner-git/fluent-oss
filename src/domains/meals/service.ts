@@ -1,3 +1,10 @@
+import {
+  buildMealGroceryCoverage,
+  mealCountLabel,
+  savedMealCoverageEntries,
+  type MealGroceryCoverageMeal,
+  type MealGroceryCoverageRecord,
+} from './grocery-coverage';
 import type { MutationProvenance } from '../../auth';
 import { resolveHostFamily } from '../../fluent-core';
 import { getFluentIdentityContext } from '../../fluent-identity';
@@ -46,6 +53,7 @@ import {
 import { buildRecipeBookOnboarding } from './recipe-book';
 import { summarizeRecipeCatalog } from './recipe-catalog';
 import { MealsRepository } from './repository';
+import { commitGroceryCheckbox, readCheckboxReceipt, type CheckboxChange, type CheckboxReceipt, type GroceryCheckboxInput } from './grocery-checkbox';
 import { canonicalizeInventoryItem, normalizeUnit } from './units';
 import type {
   ConfirmedOrderSyncRecord,
@@ -108,6 +116,8 @@ import type {
   ApplyGroceryPlanActionResult,
   ApplyGroceryShoppingResultInput,
   ApplyGroceryShoppingResultRecord,
+  GroceryShoppingReconciliationRecord,
+  GroceryShoppingReceiptRow,
   GroceryShoppingResultItemStatus,
 } from './types-extra';
 import { deriveExecutionSupportSummary } from './summaries';
@@ -147,7 +157,6 @@ export type PersonFactsReader = (input: { consumerDomain: PcDomain; host: PcHost
 
 export class MealsService {
   private readonly repository: MealsRepository;
-  private mealRecipesTenantColumnExistsPromise: Promise<boolean> | null = null;
 
   constructor(
     private readonly db: FluentDatabase,
@@ -479,14 +488,15 @@ export class MealsService {
     const status = normalized.status ?? 'approved';
     const approvedAt = status === 'approved' || status === 'active' ? normalized.approvedAt ?? now : normalized.approvedAt;
 
-    await this.db
+    // The ON CONFLICT branch is guarded by tenant, so a caller-supplied id that collides
+    // with another tenant's plan is a no-op here (0 changes) and must stop before entries.
+    const planWrite = await this.db
       .prepare(
         `INSERT INTO meal_plans (
           id, tenant_id, profile_id, week_start, week_end, status, generated_at, approved_at, profile_owner,
           requirements_json, summary_json, source_snapshot_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
         ON CONFLICT(id) DO UPDATE SET
-          tenant_id = excluded.tenant_id,
           profile_id = excluded.profile_id,
           week_start = excluded.week_start,
           week_end = excluded.week_end,
@@ -497,7 +507,8 @@ export class MealsService {
           requirements_json = excluded.requirements_json,
           summary_json = excluded.summary_json,
           source_snapshot_json = excluded.source_snapshot_json,
-          updated_at = excluded.updated_at`,
+          updated_at = excluded.updated_at
+        WHERE meal_plans.tenant_id = excluded.tenant_id`,
       )
       .bind(
         planId,
@@ -516,6 +527,9 @@ export class MealsService {
         now,
       )
       .run();
+    if (planWrite.meta.changes !== 1) {
+      throw new Error(`Meal plan ${planId} could not be saved in this account. Omit id to create a new plan.`);
+    }
 
     await this.db
       .prepare(`DELETE FROM meal_plan_entries WHERE tenant_id = ? AND meal_plan_id = ?`)
@@ -643,18 +657,13 @@ export class MealsService {
   }
 
   async getRecipe(recipeId: string): Promise<MealRecipeRecord | null> {
-    const tenantScopedRecipes = await this.mealRecipesHaveTenantId();
     const row = await this.db
       .prepare(
-        tenantScopedRecipes
-          ? `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
-             FROM meal_recipes
-             WHERE tenant_id = ? AND id = ?`
-          : `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
-             FROM meal_recipes
-             WHERE id = ?`,
+        `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
+         FROM meal_recipes
+         WHERE tenant_id = ? AND id = ?`,
       )
-      .bind(...(tenantScopedRecipes ? [this.tenantId, recipeId] : [recipeId]))
+      .bind(this.tenantId, recipeId)
       .first<{
         id: string;
         slug: string | null;
@@ -697,19 +706,11 @@ export class MealsService {
 
     const derived = deriveRecipeColumns(recipe);
     const now = new Date().toISOString();
-    const tenantScopedRecipes = await this.mealRecipesHaveTenantId();
-
-    const insertSql = tenantScopedRecipes
-      ? `INSERT INTO meal_recipes (
+    const insertSql = `INSERT INTO meal_recipes (
           tenant_id, id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, macros_json,
           cost_per_serving_cad, kid_friendly, instructions_json, mise_en_place_json, prep_notes,
           reheat_guidance, serving_notes, status, raw_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      : `INSERT INTO meal_recipes (
-          id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, macros_json,
-          cost_per_serving_cad, kid_friendly, instructions_json, mise_en_place_json, prep_notes,
-          reheat_guidance, serving_notes, status, raw_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     const insertBindings = [
         recipe.id,
         derived.slug,
@@ -734,7 +735,7 @@ export class MealsService {
 
     await this.db
       .prepare(insertSql)
-      .bind(...(tenantScopedRecipes ? [this.tenantId, ...insertBindings] : insertBindings))
+      .bind(this.tenantId, ...insertBindings)
       .run();
 
     const created = await this.getRecipe(recipe.id);
@@ -759,62 +760,25 @@ export class MealsService {
   }
 
   async listRecipes(mealType?: string, status = 'active'): Promise<MealRecipeRecord[]> {
-    const tenantScopedRecipes = await this.mealRecipesHaveTenantId();
     const includeAnyStatus = status === 'any';
-    const statement = mealType
-      ? includeAnyStatus
-        ? this.db
-            .prepare(
-              tenantScopedRecipes
-                 ? `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
-                    FROM meal_recipes
-                    WHERE tenant_id = ? AND meal_type = ?
-                    ORDER BY name ASC`
-                 : `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
-                    FROM meal_recipes
-                    WHERE meal_type = ?
-                    ORDER BY name ASC`,
-            )
-            .bind(...(tenantScopedRecipes ? [this.tenantId, mealType] : [mealType]))
-        : this.db
-            .prepare(
-              tenantScopedRecipes
-                 ? `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
-                    FROM meal_recipes
-                    WHERE tenant_id = ? AND meal_type = ? AND status = ?
-                    ORDER BY name ASC`
-                 : `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
-                    FROM meal_recipes
-                    WHERE meal_type = ? AND status = ?
-                    ORDER BY name ASC`,
-            )
-            .bind(...(tenantScopedRecipes ? [this.tenantId, mealType, status] : [mealType, status]))
-      : includeAnyStatus
-        ? this.db
-            .prepare(
-              tenantScopedRecipes
-                 ? `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
-                    FROM meal_recipes
-                    WHERE tenant_id = ?
-                    ORDER BY meal_type ASC, name ASC`
-                 : `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
-                    FROM meal_recipes
-                    ORDER BY meal_type ASC, name ASC`,
-            )
-            .bind(...(tenantScopedRecipes ? [this.tenantId] : []))
-        : this.db
-            .prepare(
-              tenantScopedRecipes
-                 ? `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
-                    FROM meal_recipes
-                    WHERE tenant_id = ? AND status = ?
-                    ORDER BY meal_type ASC, name ASC`
-                 : `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
-                    FROM meal_recipes
-                    WHERE status = ?
-                    ORDER BY meal_type ASC, name ASC`,
-            )
-            .bind(...(tenantScopedRecipes ? [this.tenantId, status] : [status]));
+    const conditions = ['tenant_id = ?'];
+    const bindings: string[] = [this.tenantId];
+    if (mealType) {
+      conditions.push('meal_type = ?');
+      bindings.push(mealType);
+    }
+    if (!includeAnyStatus) {
+      conditions.push('status = ?');
+      bindings.push(status);
+    }
+    const statement = this.db
+      .prepare(
+        `SELECT id, slug, name, meal_type, servings, total_time_minutes, active_time_minutes, status, raw_json
+         FROM meal_recipes
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY ${mealType ? 'name ASC' : 'meal_type ASC, name ASC'}`,
+      )
+      .bind(...bindings);
 
     const result = await statement.all<{
       id: string;
@@ -1544,6 +1508,106 @@ export class MealsService {
     return after;
   }
 
+  async archiveMealPlan(input: {
+    planId: string;
+    provenance: MutationProvenance;
+  }): Promise<{
+    activeLinkedGroceryIntentCount: number;
+    archivedGroceryIntentIds: string[];
+    archivedPlan: MealPlanRecord;
+    derivedGroceryPlanCount: number;
+    linkedGroceryActionCount: number;
+  } | null> {
+    const existing = await this.getPlanById(input.planId);
+    if (!existing || existing.status === 'archived') {
+      return null;
+    }
+
+    const linkedIntents = await this.db
+      .prepare(
+        `SELECT id
+         FROM grocery_intents
+         WHERE tenant_id = ? AND meal_plan_id = ? AND status NOT IN ('deleted', 'archived')
+         ORDER BY id ASC`,
+      )
+      .bind(this.tenantId, input.planId)
+      .all<{ id: string }>();
+    const derivedPlanCount = await this.db
+      .prepare(`SELECT COUNT(*) AS count FROM meal_grocery_plans WHERE tenant_id = ? AND meal_plan_id = ?`)
+      .bind(this.tenantId, input.planId)
+      .first<{ count: number }>();
+    const linkedActionCount = await this.db
+      .prepare(`SELECT COUNT(*) AS count FROM meal_grocery_plan_actions WHERE tenant_id = ? AND meal_plan_id = ?`)
+      .bind(this.tenantId, input.planId)
+      .first<{ count: number }>();
+
+    await this.db.batch([
+      this.db
+        .prepare(`UPDATE meal_plans SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND id = ? AND status != 'archived'`)
+        .bind(this.tenantId, input.planId),
+      this.db
+        .prepare(`UPDATE grocery_intents SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND meal_plan_id = ? AND status NOT IN ('deleted', 'archived')`)
+        .bind(this.tenantId, input.planId),
+      this.db
+        .prepare(`DELETE FROM meal_grocery_plan_actions WHERE tenant_id = ? AND meal_plan_id = ?`)
+        .bind(this.tenantId, input.planId),
+      this.db
+        .prepare(`DELETE FROM meal_grocery_plans WHERE tenant_id = ? AND meal_plan_id = ?`)
+        .bind(this.tenantId, input.planId),
+    ]);
+
+    const archivedPlan = await this.getPlanById(input.planId);
+    if (!archivedPlan || archivedPlan.status !== 'archived') {
+      throw new Error(`Meal plan archive failed for ${input.planId}.`);
+    }
+    const activeLinkedIntentCount = await this.db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM grocery_intents
+         WHERE tenant_id = ? AND meal_plan_id = ? AND status NOT IN ('deleted', 'archived')`,
+      )
+      .bind(this.tenantId, input.planId)
+      .first<{ count: number }>();
+    const remainingDerivedPlanCount = await this.db
+      .prepare(`SELECT COUNT(*) AS count FROM meal_grocery_plans WHERE tenant_id = ? AND meal_plan_id = ?`)
+      .bind(this.tenantId, input.planId)
+      .first<{ count: number }>();
+    const remainingLinkedActionCount = await this.db
+      .prepare(`SELECT COUNT(*) AS count FROM meal_grocery_plan_actions WHERE tenant_id = ? AND meal_plan_id = ?`)
+      .bind(this.tenantId, input.planId)
+      .first<{ count: number }>();
+    if (
+      Number(activeLinkedIntentCount?.count ?? 0) !== 0 ||
+      Number(remainingDerivedPlanCount?.count ?? 0) !== 0 ||
+      Number(remainingLinkedActionCount?.count ?? 0) !== 0
+    ) {
+      throw new Error(`Meal plan archive left active linked grocery state for ${input.planId}.`);
+    }
+
+    await this.recordDomainEvent({
+      entityType: 'meal_plan',
+      entityId: input.planId,
+      eventType: 'meal_plan.archived',
+      before: existing,
+      after: archivedPlan,
+      patch: {
+        archived_grocery_intent_ids: linkedIntents.results.map((row) => row.id),
+        removed_derived_grocery_plan_count: Number(derivedPlanCount?.count ?? 0),
+        removed_linked_grocery_action_count: Number(linkedActionCount?.count ?? 0),
+        status: 'archived',
+      },
+      provenance: input.provenance,
+    });
+
+    return {
+      activeLinkedGroceryIntentCount: 0,
+      archivedGroceryIntentIds: linkedIntents.results.map((row) => row.id),
+      archivedPlan,
+      derivedGroceryPlanCount: 0,
+      linkedGroceryActionCount: 0,
+    };
+  }
+
   async updateInventoryBatch(input: UpdateInventoryBatchInput): Promise<{
     createdCount: number;
     updatedCount: number;
@@ -1681,23 +1745,14 @@ export class MealsService {
 
     const derived = deriveRecipeColumns({ ...nextRecipe, id: input.recipeId });
     const updatedAt = new Date().toISOString();
-    const tenantScopedRecipes = await this.mealRecipesHaveTenantId();
-
     await this.db
       .prepare(
-        tenantScopedRecipes
-          ? `UPDATE meal_recipes
+        `UPDATE meal_recipes
              SET slug = ?, name = ?, meal_type = ?, status = ?, servings = ?, total_time_minutes = ?,
                  active_time_minutes = ?, macros_json = ?, cost_per_serving_cad = ?, kid_friendly = ?,
                  instructions_json = ?, mise_en_place_json = ?, prep_notes = ?, reheat_guidance = ?,
                  serving_notes = ?, raw_json = ?, updated_at = ?
-             WHERE tenant_id = ? AND id = ?`
-          : `UPDATE meal_recipes
-             SET slug = ?, name = ?, meal_type = ?, status = ?, servings = ?, total_time_minutes = ?,
-                 active_time_minutes = ?, macros_json = ?, cost_per_serving_cad = ?, kid_friendly = ?,
-                 instructions_json = ?, mise_en_place_json = ?, prep_notes = ?, reheat_guidance = ?,
-                 serving_notes = ?, raw_json = ?, updated_at = ?
-             WHERE id = ?`,
+             WHERE tenant_id = ? AND id = ?`,
       )
       .bind(
         derived.slug,
@@ -1717,7 +1772,8 @@ export class MealsService {
         derived.servingNotes,
         derived.rawJson,
         updatedAt,
-        ...(tenantScopedRecipes ? [this.tenantId, input.recipeId] : [input.recipeId]),
+        this.tenantId,
+        input.recipeId,
       )
       .run();
 
@@ -1790,8 +1846,10 @@ export class MealsService {
       `SELECT id, domain, entity_type, entity_id, event_type, before_json, after_json, patch_json,
               source_agent, source_skill, session_id, confidence, source_type, actor_email, actor_name, created_at
        FROM domain_events`;
-    const conditions: string[] = [];
-    const values: Array<string | number> = [];
+    // Always tenant-scoped: domain_events rows without a tenant (pre-0031 rows that
+    // could not be attributed) are intentionally invisible to every caller.
+    const conditions: string[] = ['tenant_id = ?'];
+    const values: Array<string | number> = [this.tenantId];
 
     if (filters.domain) {
       conditions.push('domain = ?');
@@ -2013,8 +2071,13 @@ export class MealsService {
       staleReasons.push('This list is based on a draft meal plan.');
     }
 
+    const mealCoverage = buildMealGroceryCoverage(
+      selectedPlan,
+      groceryPlan ? actions : await this.listGroceryPlanActions(weekStart),
+    );
     const trustState = this.resolveCurrentGroceryListTrustState({
       groceryPlan,
+      mealCoverage,
       preparedOrder,
       staleReasons,
     });
@@ -2043,11 +2106,13 @@ export class MealsService {
       stale: staleReasons.length > 0,
       staleReasons,
       subtitle: this.buildCurrentGroceryListSubtitle({
+        mealCoverage,
         relevantIntents,
         selectedPlan,
         trustLabel,
         weekRelation,
       }),
+      ...(mealCoverage ? { mealCoverage } : {}),
       title: 'Grocery list',
       trustLabel,
       trustState,
@@ -2074,6 +2139,7 @@ export class MealsService {
       calibrationContext,
       groceryPlanGeneratedAt: groceryPlan?.generatedAt ?? null,
       intents: relevantIntents.map((intent) => [intent.id, intent.status, intent.updatedAt]),
+      ...(mealCoverage ? { mealCoverage: mealCoverage.uncoveredMeals.map((meal) => meal.itemKey) } : {}),
       trustState,
       weekRelation,
       weekStart,
@@ -2302,11 +2368,17 @@ export class MealsService {
     if (substitutionDecisions.length > 0) {
       notes.push('Resolved substitutions from grocery-plan actions were carried into order preflight.');
     }
+    const mealCoverage = groceryPlan.mealPlanId
+      ? buildMealGroceryCoverage(await this.getPlanById(groceryPlan.mealPlanId), Array.from(actionMap.values()))
+      : null;
+    if (mealCoverage?.status === 'incomplete') {
+      notes.push(`Not safe to order yet. ${mealCoverage.summary}`);
+    }
 
     return {
       weekStart: groceryPlan.weekStart,
       retailer,
-      safeToOrder: unresolvedItems.length === 0,
+      safeToOrder: unresolvedItems.length === 0 && mealCoverage?.status !== 'incomplete',
       remainingToBuy,
       alreadyCoveredByInventory,
       alreadyInRetailerCart,
@@ -2326,7 +2398,10 @@ export class MealsService {
       throw new Error('Cannot generate a grocery plan without a canonical meal plan.');
     }
 
-    const preferences = await this.getPreferences();
+    // A fully specified, explicitly approved plan can produce its grocery list
+    // before onboarding. Defaults are read-only here: preference capture remains
+    // optional and this path must not silently create a profile preference row.
+    const preferences = await this.getPreferencesOrDefault();
     const inventory = await this.getInventory();
     const brandPreferences = await this.getBrandPreferences();
     const groceryIntents = (await this.listGroceryIntents('pending')).filter(
@@ -2484,6 +2559,99 @@ export class MealsService {
       }>();
 
     return (result.results ?? []).map(mapGroceryPlanActionRow);
+  }
+
+  /**
+   * Record the user's explicit confirmation that one unverified meal's groceries are handled. The
+   * key must be an uncovered entry recorded when the current plan was saved; the confirmation is
+   * scoped to that plan, so a re-saved plan starts unverified again. The save-time record is kept.
+   */
+  async confirmMealGroceryCoverage(input: {
+    itemKey: string;
+    notes?: string | null;
+    provenance: MutationProvenance;
+    weekStart: string;
+  }): Promise<{ confirmedMeal: MealGroceryCoverageMeal; mealCoverage: MealGroceryCoverageRecord }> {
+    const groceryPlan = await this.getGroceryPlan(input.weekStart);
+    const plan =
+      (groceryPlan?.mealPlanId ? await this.getPlanById(groceryPlan.mealPlanId) : null) ??
+      (await this.getPlanByWeek(input.weekStart));
+    // Keys embed the plan's current coverage revision and the meal identity, so a key issued for an
+    // earlier save (same or different plan id) cannot match here.
+    const saved = savedMealCoverageEntries(plan);
+    const entry = saved?.entries.find((candidate) => candidate.itemKey === input.itemKey);
+    if (!plan || !saved || !entry) {
+      throw new Error(
+        `Meal grocery-coverage key ${input.itemKey} does not match the current meal plan for ${input.weekStart} (the plan was saved again or replaced). Nothing was confirmed. Read the current grocery list again and use a meal-coverage item_key from that readback.`,
+      );
+    }
+    if (!entry.confirmable) {
+      throw new Error(
+        'This meal plan’s grocery-coverage record is from an older format or could not be read, so this meal cannot be confirmed. Nothing was confirmed. Save the meal plan again to refresh grocery coverage (fluent_save_meal_plan), then confirm meals from the new readback.',
+      );
+    }
+    const before = buildMealGroceryCoverage(plan, await this.listGroceryPlanActions(input.weekStart));
+    const existing = await this.getGroceryPlanAction(input.weekStart, input.itemKey);
+    const now = new Date().toISOString();
+    const id = existing?.id ?? `grocery-plan-action:${this.tenantId}:${input.weekStart}:${input.itemKey}`;
+    await this.db
+      .prepare(
+        `INSERT INTO meal_grocery_plan_actions (
+          id, tenant_id, week_start, meal_plan_id, item_key, action_status, substitute_item_key, substitute_display_name,
+          notes, metadata_json, source_agent, source_skill, session_id, confidence, source_type, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'confirmed', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          meal_plan_id = excluded.meal_plan_id,
+          action_status = excluded.action_status,
+          substitute_item_key = NULL,
+          substitute_display_name = NULL,
+          notes = excluded.notes,
+          metadata_json = excluded.metadata_json,
+          source_agent = excluded.source_agent,
+          source_skill = excluded.source_skill,
+          session_id = excluded.session_id,
+          confidence = excluded.confidence,
+          source_type = excluded.source_type,
+          updated_at = excluded.updated_at`,
+      )
+      .bind(
+        id,
+        this.tenantId,
+        input.weekStart,
+        plan.id,
+        input.itemKey,
+        input.notes ?? null,
+        stringifyJson({
+          coverageRevision: saved.revision,
+          date: entry.date,
+          kind: 'meal_grocery_coverage_confirmed',
+          mealType: entry.mealType,
+          recipeName: entry.recipeName,
+        }),
+        input.provenance.sourceAgent,
+        input.provenance.sourceSkill,
+        input.provenance.sessionId,
+        input.provenance.confidence,
+        input.provenance.sourceType,
+        existing?.createdAt ?? now,
+        now,
+      )
+      .run();
+    const mealCoverage = buildMealGroceryCoverage(plan, await this.listGroceryPlanActions(input.weekStart));
+    const confirmedMeal = mealCoverage?.confirmedMeals.find((meal) => meal.itemKey === input.itemKey);
+    if (!mealCoverage || !confirmedMeal) {
+      throw new Error(`Failed to confirm grocery coverage for ${entry.recipeName}.`);
+    }
+    await this.recordDomainEvent({
+      entityType: 'meal_plan',
+      entityId: plan.id,
+      eventType: 'meal_plan.grocery_coverage_confirmed',
+      before,
+      after: mealCoverage,
+      patch: { itemKey: input.itemKey, notes: input.notes ?? null, recipeName: entry.recipeName },
+      provenance: input.provenance,
+    });
+    return { confirmedMeal, mealCoverage };
   }
 
   async upsertGroceryPlanAction(input: UpsertGroceryPlanActionInput): Promise<ApplyGroceryPlanActionResult> {
@@ -2692,9 +2860,10 @@ export class MealsService {
     const existing = input.id
       ? await this.getGroceryIntentById(input.id)
       : await this.getLatestOpenIntentByName(normalizedName, input.mealPlanId ?? null);
-    const recordId = existing?.id ?? input.id ?? `grocery-intent:${crypto.randomUUID()}`;
+    const recordId = existing?.id ?? input.id ?? input.creationId ?? `grocery-intent:${crypto.randomUUID()}`;
 
-    await this.db
+    // Tenant-guarded ON CONFLICT: a supplied id owned by another tenant is a no-op (0 changes).
+    const intentWrite = await this.db
       .prepare(
         `INSERT INTO grocery_intents (
           id, tenant_id, normalized_name, display_name, quantity, unit, notes, status, target_window,
@@ -2702,7 +2871,6 @@ export class MealsService {
           source_type, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-          tenant_id = excluded.tenant_id,
           normalized_name = excluded.normalized_name,
           display_name = excluded.display_name,
           quantity = excluded.quantity,
@@ -2717,7 +2885,8 @@ export class MealsService {
           session_id = excluded.session_id,
           confidence = excluded.confidence,
           source_type = excluded.source_type,
-          updated_at = excluded.updated_at`,
+          updated_at = excluded.updated_at
+        WHERE grocery_intents.tenant_id = excluded.tenant_id`,
       )
       .bind(
         recordId,
@@ -2740,6 +2909,9 @@ export class MealsService {
         now,
       )
       .run();
+    if (intentWrite.meta.changes !== 1) {
+      throw new Error(`Grocery item ${recordId} could not be saved in this account. Omit id to add a new item.`);
+    }
 
     const record = await this.getGroceryIntentById(recordId);
     if (!record) {
@@ -2774,10 +2946,18 @@ export class MealsService {
   async applyGroceryShoppingResult(
     input: ApplyGroceryShoppingResultInput,
   ): Promise<ApplyGroceryShoppingResultRecord> {
+    if (input.checkbox) return this.applyGroceryCheckbox(input);
     const hasExplicit = Array.isArray(input.boughtItems) && input.boughtItems.length > 0;
+    const requestedIdempotencyKey = input.idempotencyKey?.trim() || null;
     if (!hasExplicit && input.markAllToBuyBought !== true) {
       throw new Error(
         'applyGroceryShoppingResult requires bought_items (non-empty) or mark_all_to_buy_bought=true.',
+      );
+    }
+    const markAllRequest = !hasExplicit && input.markAllToBuyBought === true;
+    if (markAllRequest && !requestedIdempotencyKey) {
+      throw new Error(
+        'applyGroceryShoppingResult requires idempotency_key for mark_all_to_buy_bought so Retry cannot widen beyond the original approval.',
       );
     }
 
@@ -2786,9 +2966,12 @@ export class MealsService {
       skipCalibrationContext: true,
     });
     const weekStart = currentList.weekStart;
+    const listId = input.listId ?? currentList.listId;
+    const listVersion = input.listVersion ?? currentList.version;
     // raw.items (the current to-buy bucket) and raw.resolvedItems (settled or already-have items)
-    // are DISJOINT sets. mark_all_to_buy_bought reconciles the to-buy bucket only; an explicit
-    // item_key may name an item from either bucket, so resolution uses the deduped union.
+    // are DISJOINT sets. mark_all_to_buy_bought resolves the to-buy bucket exactly once before the
+    // durable receipt is established. Every retry then uses the receipt's frozen approvedItems
+    // rather than widening to rows that became eligible later.
     const toBuyPlanItems = currentList.groceryPlan ? currentList.groceryPlan.raw.items : [];
     const allPlanItems: GroceryPlanItemRecord[] = [];
     if (currentList.groceryPlan) {
@@ -2807,7 +2990,24 @@ export class MealsService {
     const intentById = new Map(intents.map((intent) => [intent.id, intent]));
     const totalItems = allPlanItems.length + intents.length;
 
-    let targets: Array<{ itemKey: string; status: GroceryShoppingResultItemStatus }>;
+    const normalizedRequestedSubset = (input.boughtItems ?? [])
+      .map((entry) => ({ itemKey: entry.itemKey, status: entry.status ?? 'bought' as const }))
+      .sort((left, right) => left.itemKey.localeCompare(right.itemKey));
+    if (hasExplicit) {
+      const seenRequestedItemKeys = new Set<string>();
+      for (const entry of normalizedRequestedSubset) {
+        if (seenRequestedItemKeys.has(entry.itemKey)) {
+          throw new Error(
+            `applyGroceryShoppingResult received duplicate bought_items item_key ${entry.itemKey}.`,
+          );
+        }
+        seenRequestedItemKeys.add(entry.itemKey);
+      }
+    }
+    let initiallyApprovedItems: Array<{
+      itemKey: string;
+      status: GroceryShoppingResultItemStatus;
+    }>;
     if (hasExplicit) {
       const boughtItems = input.boughtItems ?? [];
       if (boughtItems.length > totalItems) {
@@ -2822,7 +3022,10 @@ export class MealsService {
           );
         }
       }
-      targets = boughtItems.map((entry) => ({ itemKey: entry.itemKey, status: entry.status ?? 'bought' }));
+      initiallyApprovedItems = boughtItems.map((entry) => ({
+        itemKey: entry.itemKey,
+        status: entry.status ?? 'bought',
+      }));
     } else {
       const planTargets = toBuyPlanItems
         .filter((item) => this.isGroceryPlanItemToBuy(item))
@@ -2830,13 +3033,127 @@ export class MealsService {
       const intentTargets = intents
         .filter((intent) => this.isGroceryIntentToBuy(intent))
         .map((intent) => ({ itemKey: intent.id, status: 'bought' as const }));
-      targets = [...planTargets, ...intentTargets];
-      if (targets.length === 0) {
+      initiallyApprovedItems = [...planTargets, ...intentTargets];
+    }
+    const subsetRecord = {
+      approvedItems: initiallyApprovedItems,
+      boughtItems: normalizedRequestedSubset,
+      markAllToBuyBought: markAllRequest,
+    };
+    const requestFingerprint = await hashStableJson({
+      listId,
+      listVersion,
+      ...subsetRecord,
+      tenantId: this.tenantId,
+      weekStart,
+    });
+    const idempotencyKey = requestedIdempotencyKey || `grocery-shopping:${requestFingerprint}`;
+    const receiptId = `grocery-shopping-receipt:${this.tenantId}:${idempotencyKey}`;
+    const executionToken = crypto.randomUUID();
+    let receipt = await this.getGroceryShoppingReceiptRow(idempotencyKey);
+    if (receipt) {
+      await this.assertGroceryShoppingReceiptBinding(receipt, {
+        listId,
+        subsetRecord,
+        weekStart,
+      });
+      if (receipt.status === 'confirmed' && receipt.result_json) {
+        const replay = safeParse(receipt.result_json) as ApplyGroceryShoppingResultRecord;
+        return { ...replay, replayed: true };
+      }
+      if (receipt.status === 'in_progress') {
+        const settled = await this.waitForGroceryShoppingReceipt(idempotencyKey);
+        if (settled?.result_json && settled.status !== 'in_progress') {
+          const replay = safeParse(settled.result_json) as ApplyGroceryShoppingResultRecord;
+          return { ...replay, replayed: true };
+        }
+      }
+      if (
+        input.listVersion
+        && input.listVersion !== currentList.version
+        && input.listVersion !== receipt.list_version
+      ) {
+        throw new Error(
+          `Grocery shopping version conflict: list_version ${input.listVersion} does not match authoritative ${currentList.version}.`,
+        );
+      }
+      const claimed = await this.claimGroceryShoppingReceipt(receipt.id, executionToken);
+      if (!claimed) {
+        const settled = await this.waitForGroceryShoppingReceipt(idempotencyKey);
+        if (settled?.result_json && settled.status !== 'in_progress') {
+          const replay = safeParse(settled.result_json) as ApplyGroceryShoppingResultRecord;
+          return { ...replay, replayed: true };
+        }
+        throw new Error(
+          'Grocery shopping result is still in progress. Reconcile the durable receipt before retrying.',
+        );
+      }
+      receipt = await this.getGroceryShoppingReceiptRow(idempotencyKey);
+    } else {
+      if (!hasExplicit && initiallyApprovedItems.length === 0) {
         throw new Error(
           'applyGroceryShoppingResult found no to-buy items on the current list to mark bought.',
         );
       }
+      if (input.listId && input.listId !== currentList.listId) {
+        throw new Error(
+          `Grocery shopping version conflict: list_id ${input.listId} does not match authoritative ${currentList.listId}.`,
+        );
+      }
+      if (input.listVersion && input.listVersion !== currentList.version) {
+        throw new Error(
+          `Grocery shopping version conflict: list_version ${input.listVersion} does not match authoritative ${currentList.version}.`,
+        );
+      }
+      const now = new Date().toISOString();
+      const leaseExpiresAt = new Date(Date.now() + 30_000).toISOString();
+      await this.db
+        .prepare(
+          `INSERT INTO meal_grocery_shopping_receipts (
+            id, tenant_id, idempotency_key, request_fingerprint, list_id, list_version, week_start,
+            subset_json, status, execution_token, lease_expires_at, result_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, NULL, ?, ?)
+          ON CONFLICT(tenant_id, idempotency_key) DO NOTHING`,
+        )
+        .bind(
+          receiptId,
+          this.tenantId,
+          idempotencyKey,
+          requestFingerprint,
+          listId,
+          listVersion,
+          weekStart,
+          stringifyJson(subsetRecord),
+          executionToken,
+          leaseExpiresAt,
+          now,
+          now,
+        )
+        .run();
+      receipt = await this.getGroceryShoppingReceiptRow(idempotencyKey);
+      if (!receipt) {
+        throw new Error('Failed to establish a durable grocery shopping idempotency receipt.');
+      }
+      await this.assertGroceryShoppingReceiptBinding(receipt, {
+        listId,
+        subsetRecord,
+        weekStart,
+      });
+      if (receipt.execution_token !== executionToken) {
+        const settled = await this.waitForGroceryShoppingReceipt(idempotencyKey);
+        if (settled?.result_json && settled.status !== 'in_progress') {
+          const replay = safeParse(settled.result_json) as ApplyGroceryShoppingResultRecord;
+          return { ...replay, replayed: true };
+        }
+        throw new Error(
+          'Grocery shopping result is still in progress. Reconcile the durable receipt before retrying.',
+        );
+      }
     }
+    if (!receipt) {
+      throw new Error('Failed to load the durable grocery shopping receipt.');
+    }
+    const targets = this.parseGroceryShoppingApprovedItems(receipt.subset_json);
 
     const reconcileMetadata = {
       fluentLifecycle: {
@@ -2850,67 +3167,541 @@ export class MealsService {
     const intentResults: ApplyGroceryShoppingResultRecord['manualIntents'] = [];
     const inventoryRefreshed: ApplyGroceryShoppingResultRecord['inventoryRefreshed'] = [];
     const skipped: ApplyGroceryShoppingResultRecord['skipped'] = [];
-
-    for (const target of targets) {
-      const planItem = planByKey.get(target.itemKey);
-      if (planItem) {
-        const actionStatus = target.status === 'skipped' ? 'skipped' : 'purchased';
-        await this.upsertGroceryPlanAction({
-          weekStart,
-          itemKey: planItem.itemKey,
-          actionStatus,
-          mealPlanId: currentList.groceryPlan?.mealPlanId ?? null,
-          metadata: reconcileMetadata,
-          provenance: input.provenance,
+    const rowsByItemKey = new Map(
+      (await this.listGroceryShoppingReceiptRows(receiptId)).map((row) => [row.itemKey, row]),
+    );
+    const appendConfirmedResult = (row: GroceryShoppingReceiptRow): void => {
+      const result = asRecord(row.result);
+      if (!result) return;
+      if (result.kind === 'plan_item') {
+        planResults.push({
+          actionStatus: String(result.actionStatus ?? ''),
+          itemKey: row.itemKey,
+          name: String(result.name ?? row.itemKey),
         });
-        planResults.push({ itemKey: planItem.itemKey, name: planItem.name, actionStatus });
-        if (actionStatus === 'purchased') {
-          // upsertGroceryPlanAction('purchased') auto-refreshes inventory presence (service.ts).
-          inventoryRefreshed.push({ name: planItem.name });
-        }
-        continue;
-      }
-
-      const intent = intentById.get(target.itemKey);
-      if (intent) {
-        const intentStatus = target.status === 'skipped' ? 'skipped' : 'purchased';
-        const baseMeta =
-          intent.metadata && typeof intent.metadata === 'object' && !Array.isArray(intent.metadata)
-            ? (intent.metadata as Record<string, unknown>)
-            : {};
-        await this.upsertGroceryIntent({
-          id: intent.id,
-          displayName: intent.displayName,
-          quantity: intent.quantity,
-          unit: intent.unit,
-          notes: intent.notes,
-          status: intentStatus,
-          targetWindow: intent.targetWindow,
-          mealPlanId: intent.mealPlanId,
-          metadata: { ...baseMeta, ...reconcileMetadata },
-          regenerateGroceryPlan: false,
-          provenance: input.provenance,
+      } else if (result.kind === 'manual_intent') {
+        intentResults.push({
+          displayName: String(result.displayName ?? row.itemKey),
+          id: row.itemKey,
+          status: String(result.status ?? ''),
         });
-        intentResults.push({ id: intent.id, displayName: intent.displayName, status: intentStatus });
-        if (intentStatus === 'purchased') {
-          // Manual intents have no auto-inventory path — refresh presence explicitly.
-          await this.refreshInventoryEvidenceFromPurchasedIntent({ intent, provenance: input.provenance });
-          inventoryRefreshed.push({ name: intent.displayName });
-        }
-        continue;
       }
-
-      skipped.push({ itemKey: target.itemKey, reason: 'not_on_current_list' });
+      if (result.inventoryRefreshed === true) {
+        inventoryRefreshed.push({ name: String(result.name ?? result.displayName ?? row.itemKey) });
+      }
+    };
+    for (const row of rowsByItemKey.values()) {
+      if (row.outcome === 'confirmed') appendConfirmedResult(row);
     }
 
-    return {
+    for (const target of targets) {
+      const existingRow = rowsByItemKey.get(target.itemKey);
+      if (existingRow?.outcome === 'confirmed') {
+        continue;
+      }
+      const planItem = planByKey.get(target.itemKey);
+      try {
+        const confirmedResult = await this.runWithGroceryShoppingReceiptLease(
+          receiptId,
+          executionToken,
+          async () => {
+            if (planItem) {
+              const actionStatus = target.status === 'skipped' ? 'skipped' : 'purchased';
+              await this.upsertGroceryPlanAction({
+                weekStart,
+                itemKey: planItem.itemKey,
+                actionStatus,
+                mealPlanId: currentList.groceryPlan?.mealPlanId ?? null,
+                metadata: reconcileMetadata,
+                provenance: input.provenance,
+              });
+              return {
+                actionStatus,
+                inventoryRefreshed: actionStatus === 'purchased',
+                kind: 'plan_item',
+                name: planItem.name,
+              };
+            }
+            const intent = intentById.get(target.itemKey);
+            if (!intent) {
+              throw new Error('not_on_current_list');
+            }
+            const intentStatus = target.status === 'skipped' ? 'skipped' : 'purchased';
+            const baseMeta =
+              intent.metadata && typeof intent.metadata === 'object' && !Array.isArray(intent.metadata)
+                ? (intent.metadata as Record<string, unknown>)
+                : {};
+            await this.upsertGroceryIntent({
+              id: intent.id,
+              displayName: intent.displayName,
+              quantity: intent.quantity,
+              unit: intent.unit,
+              notes: intent.notes,
+              status: intentStatus,
+              targetWindow: intent.targetWindow,
+              mealPlanId: intent.mealPlanId,
+              metadata: { ...baseMeta, ...reconcileMetadata },
+              regenerateGroceryPlan: false,
+              provenance: input.provenance,
+            });
+            if (intentStatus === 'purchased') {
+              await this.refreshInventoryEvidenceFromPurchasedIntent({ intent, provenance: input.provenance });
+            }
+            return {
+              displayName: intent.displayName,
+              inventoryRefreshed: intentStatus === 'purchased',
+              kind: 'manual_intent',
+              name: intent.displayName,
+              status: intentStatus,
+            };
+          },
+        );
+        const confirmedRow: GroceryShoppingReceiptRow = {
+          error: null,
+          itemKey: target.itemKey,
+          outcome: 'confirmed',
+          requestedStatus: target.status,
+          result: confirmedResult,
+        };
+        await this.upsertGroceryShoppingReceiptRow(receiptId, executionToken, confirmedRow);
+        rowsByItemKey.set(target.itemKey, confirmedRow);
+        appendConfirmedResult(confirmedRow);
+      } catch (error) {
+        const failedRow: GroceryShoppingReceiptRow = {
+          error: String(error instanceof Error ? error.message : error).slice(0, 300),
+          itemKey: target.itemKey,
+          outcome: 'needs_attention',
+          requestedStatus: target.status,
+          result: null,
+        };
+        await this.upsertGroceryShoppingReceiptRow(receiptId, executionToken, failedRow);
+        rowsByItemKey.set(target.itemKey, failedRow);
+      }
+    }
+
+    const rows = targets.map((target) => rowsByItemKey.get(target.itemKey)).filter(
+      (row): row is GroceryShoppingReceiptRow => Boolean(row),
+    );
+    const outcome = rows.every((row) => row.outcome === 'confirmed') ? 'confirmed' : 'needs_attention';
+    const record: ApplyGroceryShoppingResultRecord = {
+      idempotencyKey,
+      listId,
+      listVersion,
+      outcome,
+      replayed: false,
       weekStart,
       appliedCount: planResults.length + intentResults.length,
       planItems: planResults,
       manualIntents: intentResults,
       inventoryRefreshed,
+      rows,
       skipped,
     };
+    const finalized = await this.db
+      .prepare(
+        `UPDATE meal_grocery_shopping_receipts
+         SET status = ?, result_json = ?, updated_at = ?
+         WHERE tenant_id = ? AND id = ? AND execution_token = ?`,
+      )
+      .bind(outcome, stringifyJson(record), new Date().toISOString(), this.tenantId, receiptId, executionToken)
+      .run();
+    if (finalized.meta.changes !== 1) {
+      throw new Error('Grocery shopping receipt lease was lost before the result could be finalized.');
+    }
+    return record;
+  }
+
+  async getGroceryShoppingReconciliation(input: {
+    idempotencyKey?: string | null;
+    weekStart?: string | null;
+  } = {}): Promise<GroceryShoppingReconciliationRecord> {
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    const [groceryList, inventory, receiptRow] = await Promise.all([
+      this.getCurrentGroceryList({
+        skipCalibrationContext: true,
+        weekStart: input.weekStart ?? undefined,
+      }),
+      this.getInventory(),
+      idempotencyKey ? this.getGroceryShoppingReceiptRow(idempotencyKey) : Promise.resolve(null),
+    ]);
+    let receipt = receiptRow?.result_json
+      ? safeParse(receiptRow.result_json) as ApplyGroceryShoppingResultRecord
+      : null;
+    if (receiptRow && !receipt) {
+      const rows = await this.listGroceryShoppingReceiptRows(receiptRow.id);
+      receipt = {
+        idempotencyKey: receiptRow.idempotency_key,
+        listId: receiptRow.list_id,
+        listVersion: receiptRow.list_version,
+        outcome: 'needs_attention',
+        replayed: false,
+        weekStart: receiptRow.week_start,
+        appliedCount: rows.filter((row) => row.outcome === 'confirmed').length,
+        planItems: [],
+        manualIntents: [],
+        inventoryRefreshed: [],
+        rows,
+        skipped: [],
+      };
+    }
+    return {
+      groceryList,
+      inventory,
+      receipt,
+    };
+  }
+
+  async getGroceryWidgetReconciliation(groceryList: CurrentGroceryListRecord) {
+    // Existing published render tools can carry this read-only evidence in _meta.
+    // A bounded window is never evidence of absence unless it is complete.
+    const [inventory, receiptPage] = await Promise.all([
+      this.getInventory(),
+      this.db.prepare(`SELECT id, idempotency_key, list_id, list_version, week_start, result_json
+        FROM meal_grocery_shopping_receipts
+        WHERE tenant_id = ? AND list_id = ? AND week_start = ?
+        ORDER BY updated_at DESC, id DESC LIMIT 21`)
+        .bind(this.tenantId, groceryList.listId, groceryList.weekStart)
+        .all<{ id: string; idempotency_key: string; list_id: string; list_version: string; week_start: string; result_json: string | null }>(),
+    ]);
+    const rows = receiptPage.results ?? [];
+    const receipts = await Promise.all(rows.slice(0, 20).map(async (row): Promise<ApplyGroceryShoppingResultRecord> => {
+      const result = row.result_json ? safeParse(row.result_json) as ApplyGroceryShoppingResultRecord | null : null;
+      if (result?.idempotencyKey === row.idempotency_key && result.listId === row.list_id) return result;
+      const items = await this.listGroceryShoppingReceiptRows(row.id);
+      return { idempotencyKey: row.idempotency_key, listId: row.list_id, listVersion: row.list_version,
+        weekStart: row.week_start, outcome: 'needs_attention', replayed: false,
+        appliedCount: items.filter((item) => item.outcome === 'confirmed').length,
+        planItems: [], manualIntents: [], inventoryRefreshed: [], rows: items, skipped: [] };
+    }));
+    const checked = await this.db.prepare(`SELECT result_json FROM meal_grocery_shopping_receipts
+      WHERE tenant_id = ? AND list_id = ? AND week_start = ? AND status = 'checkbox_checked' ORDER BY created_at`)
+      .bind(this.tenantId, groceryList.listId, groceryList.weekStart).all<{ result_json: string }>();
+    return { groceryList, inventory, receipts, receiptsComplete: rows.length <= 20,
+      checkboxPurchases: checked.results.map(row => (JSON.parse(row.result_json) as CheckboxReceipt).checkbox) };
+  }
+
+  private async applyGroceryCheckbox(input: ApplyGroceryShoppingResultInput): Promise<CheckboxReceipt> {
+    const checkbox = input.checkbox!, key = input.idempotencyKey?.trim();
+    if (!key || !input.listId || !input.listVersion || !input.weekStart) throw new Error('Checkbox changes require a current list and stable retry identity.');
+    if (!checkbox.checked && !checkbox.purchaseId) throw new Error('Unchecking requires the saved purchase identity.');
+    const fingerprint = JSON.stringify({ checkbox, listId: input.listId, listVersion: input.listVersion, weekStart: input.weekStart });
+    const replay = await readCheckboxReceipt(this.db, this.tenantId, key, fingerprint);
+    if (replay) return replay;
+    const list = await this.getCurrentGroceryList({ weekStart: input.weekStart, skipCalibrationContext: true });
+    if (list.listId !== input.listId || list.version !== input.listVersion) throw new Error('The grocery list changed. Refresh before trying again.');
+    let changes: CheckboxChange[], name: string;
+    if (!checkbox.checked) {
+      const original = await this.db.prepare(`SELECT subset_json, result_json FROM meal_grocery_shopping_receipts
+        WHERE tenant_id = ? AND idempotency_key = ? AND list_id = ? AND week_start = ? AND status = 'checkbox_checked'`)
+        .bind(this.tenantId, checkbox.purchaseId, input.listId, input.weekStart)
+        .first<{ subset_json: string; result_json: string }>();
+      const receipt = original && JSON.parse(original.result_json) as CheckboxReceipt | null;
+      if (!original || !receipt?.checkbox?.checked || receipt.checkbox.itemKey !== checkbox.itemKey) throw new Error('This purchase is no longer available to undo. Refresh the list.');
+      changes = (JSON.parse(original.subset_json) as CheckboxChange[]).map(change => ({ ...change, before: change.after, after: change.before }));
+      name = receipt.checkbox.name;
+    } else {
+      const plan = list.groceryPlan?.raw.items.find(item => item.itemKey === checkbox.itemKey && this.isGroceryPlanItemToBuy(item));
+      const intent = list.intents.find(item => item.id === checkbox.itemKey && this.isGroceryIntentToBuy(item));
+      if (!plan && !intent) throw new Error('This item is no longer on the to-buy list.');
+      name = plan?.name ?? intent!.displayName;
+      const now = new Date().toISOString();
+      const table = plan ? 'meal_grocery_plan_actions' : 'grocery_intents';
+      const existing = plan ? await this.getGroceryPlanAction(input.weekStart, checkbox.itemKey) : intent;
+      if (plan && existing && (existing as GroceryPlanActionRecord).actionStatus === 'purchased') throw new Error('This item was already purchased. Refresh the list.');
+      const id = existing?.id ?? `grocery-plan-action:${this.tenantId}:${input.weekStart}:${checkbox.itemKey}`;
+      type Raw = NonNullable<CheckboxChange['before']>;
+      const before = await this.db.prepare(`SELECT * FROM ${table} WHERE tenant_id = ? AND id = ?`).bind(this.tenantId, id).first<Raw>();
+      const after: Raw = { ...(before || { id, tenant_id: this.tenantId, week_start: input.weekStart,
+        meal_plan_id: list.groceryPlan?.mealPlanId ?? null, item_key: checkbox.itemKey,
+        substitute_item_key: null, substitute_display_name: null, notes: null, metadata_json: null, created_at: now }),
+        [plan ? 'action_status' : 'status']: 'purchased', updated_at: now,
+        source_agent: input.provenance.sourceAgent, source_skill: input.provenance.sourceSkill,
+        session_id: input.provenance.sessionId, confidence: input.provenance.confidence, source_type: input.provenance.sourceType };
+      const inventory = await this.getInventory();
+      const match = plan ? this.findInventoryRecordForGroceryItem(plan, inventory) : inventory.find(i => i.normalizedName === intent!.normalizedName);
+      const normalizedName = match?.normalizedName ?? normalizeText(name);
+      const inventoryBefore = await this.db.prepare('SELECT * FROM meal_inventory_items WHERE tenant_id = ? AND normalized_name = ?')
+        .bind(this.tenantId, normalizedName).first<Raw>();
+      const canonical = canonicalizeInventoryItem({ name, quantity: null, unit: null });
+      const inferred = plan ? this.inferPurchasedInventoryDefaults(plan, null) : { longLifeDefault: false, perishability: null };
+      const inventoryAfter: Raw = { ...(inventoryBefore || {
+        id: `inventory:${this.tenantId}:${normalizedName}`, tenant_id: this.tenantId, name,
+        normalized_name: normalizedName, source: plan ? 'grocery_plan_action' : 'grocery_intent',
+        confirmed_at: null, estimated_expiry: null, perishability: inferred.perishability,
+        long_life_default: inferred.longLifeDefault ? 1 : 0, canonical_item_key: canonical.canonicalItemKey,
+        canonical_quantity: canonical.canonicalQuantity, canonical_unit: canonical.canonicalUnit,
+        canonical_confidence: canonical.canonicalConfidence, quantity: null, unit: null,
+        location: null, brand: null, cost_cad: null, metadata_json: null, created_at: now }),
+        status: 'present', purchased_at: now, updated_at: now };
+      changes = [{ table, before, after }, { table: 'meal_inventory_items', before: inventoryBefore, after: inventoryAfter }];
+    }
+    const result = await commitGroceryCheckbox(this.db, { tenantId: this.tenantId, idempotencyKey: key,
+      fingerprint, listId: input.listId, listVersion: input.listVersion, weekStart: input.weekStart,
+      checkbox, changes, name, undoPurchaseId: checkbox.checked ? undefined : checkbox.purchaseId });
+    return result;
+  }
+
+  private async getGroceryShoppingReceiptRow(idempotencyKey: string): Promise<{
+    execution_token: string;
+    id: string;
+    idempotency_key: string;
+    lease_expires_at: string;
+    list_id: string;
+    list_version: string;
+    request_fingerprint: string;
+    result_json: string | null;
+    status: string;
+    subset_json: string;
+    updated_at: string;
+    week_start: string;
+  } | null> {
+    return this.db
+      .prepare(
+        `SELECT id, idempotency_key, request_fingerprint, list_id, list_version, week_start,
+                subset_json, status, execution_token, lease_expires_at, result_json, updated_at
+         FROM meal_grocery_shopping_receipts
+         WHERE tenant_id = ? AND idempotency_key = ?
+         LIMIT 1`,
+      )
+      .bind(this.tenantId, idempotencyKey)
+      .first();
+  }
+
+  private async assertGroceryShoppingReceiptBinding(
+    receipt: {
+      list_id: string;
+      list_version: string;
+      request_fingerprint: string;
+      subset_json: string;
+      week_start: string;
+    },
+    requested: {
+      listId: string;
+      subsetRecord: {
+        approvedItems: Array<{ itemKey: string; status: GroceryShoppingResultItemStatus }>;
+        boughtItems: Array<{ itemKey: string; status: GroceryShoppingResultItemStatus }>;
+        markAllToBuyBought: boolean;
+      };
+      weekStart: string;
+    },
+  ): Promise<void> {
+    const storedSubset = asRecord(safeParse(receipt.subset_json)) ?? {};
+    const approvedItems = this.parseGroceryShoppingApprovedItems(receipt.subset_json);
+    const storedBoughtItems = this.parseGroceryShoppingSubsetItems(
+      storedSubset.boughtItems,
+      'boughtItems',
+      true,
+    );
+    const storedMarkAll = storedSubset.markAllToBuyBought === true;
+    const storedFingerprint = await hashStableJson({
+      listId: receipt.list_id,
+      listVersion: receipt.list_version,
+      approvedItems,
+      boughtItems: storedBoughtItems,
+      markAllToBuyBought: storedMarkAll,
+      tenantId: this.tenantId,
+      weekStart: receipt.week_start,
+    });
+    if (storedFingerprint !== receipt.request_fingerprint) {
+      throw new Error(
+        'Grocery shopping receipt integrity conflict: the durable approved subset does not match its original identity.',
+      );
+    }
+
+    const sameListAndMode =
+      receipt.list_id === requested.listId
+      && receipt.week_start === requested.weekStart
+      && storedMarkAll === requested.subsetRecord.markAllToBuyBought;
+    const sameExplicitSubset = storedMarkAll
+      || await hashStableJson(storedBoughtItems)
+        === await hashStableJson(requested.subsetRecord.boughtItems);
+    if (!sameListAndMode || !sameExplicitSubset) {
+      throw new Error(
+        'Grocery shopping idempotency conflict: this idempotency_key is already bound to a different list/week/subset.',
+      );
+    }
+  }
+
+  private parseGroceryShoppingApprovedItems(
+    subsetJson: string,
+  ): Array<{ itemKey: string; status: GroceryShoppingResultItemStatus }> {
+    const subset = asRecord(safeParse(subsetJson));
+    return this.parseGroceryShoppingSubsetItems(subset?.approvedItems, 'approvedItems', false);
+  }
+
+  private parseGroceryShoppingSubsetItems(
+    value: unknown,
+    fieldName: string,
+    allowEmpty: boolean,
+  ): Array<{ itemKey: string; status: GroceryShoppingResultItemStatus }> {
+    if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
+      throw new Error(`Grocery shopping receipt is missing its durable ${fieldName} subset.`);
+    }
+    const seen = new Set<string>();
+    return value.map((entry) => {
+      const item = asRecord(entry);
+      const itemKey = typeof item?.itemKey === 'string' ? item.itemKey : '';
+      const status = item?.status;
+      if (!itemKey || (status !== 'bought' && status !== 'skipped') || seen.has(itemKey)) {
+        throw new Error(`Grocery shopping receipt has an invalid durable ${fieldName} subset.`);
+      }
+      seen.add(itemKey);
+      return { itemKey, status };
+    });
+  }
+
+  private async claimGroceryShoppingReceipt(receiptId: string, executionToken: string): Promise<boolean> {
+    const now = new Date();
+    const result = await this.db
+      .prepare(
+        `UPDATE meal_grocery_shopping_receipts
+         SET status = 'in_progress', execution_token = ?, lease_expires_at = ?, updated_at = ?
+         WHERE tenant_id = ? AND id = ?
+           AND (
+             status = 'needs_attention'
+             OR (status = 'in_progress' AND lease_expires_at <= ?)
+           )`,
+      )
+      .bind(
+        executionToken,
+        new Date(now.getTime() + 30_000).toISOString(),
+        now.toISOString(),
+        this.tenantId,
+        receiptId,
+        now.toISOString(),
+      )
+      .run();
+    return result.meta.changes === 1;
+  }
+
+  private async renewGroceryShoppingReceiptLease(receiptId: string, executionToken: string): Promise<void> {
+    const now = new Date();
+    const result = await this.db
+      .prepare(
+        `UPDATE meal_grocery_shopping_receipts
+         SET lease_expires_at = ?, updated_at = ?
+         WHERE tenant_id = ? AND id = ? AND status = 'in_progress' AND execution_token = ?`,
+      )
+      .bind(
+        new Date(now.getTime() + 30_000).toISOString(),
+        now.toISOString(),
+        this.tenantId,
+        receiptId,
+        executionToken,
+      )
+      .run();
+    if (result.meta.changes !== 1) {
+      throw new Error('Grocery shopping receipt lease is no longer owned by this request.');
+    }
+  }
+
+  private async runWithGroceryShoppingReceiptLease<T>(
+    receiptId: string,
+    executionToken: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    let leaseFailure: unknown = null;
+    let heartbeat = Promise.resolve();
+    const heartbeatTimer = setInterval(() => {
+      heartbeat = heartbeat
+        .then(() => this.renewGroceryShoppingReceiptLease(receiptId, executionToken))
+        .catch((error) => {
+          leaseFailure = error;
+        });
+    }, 250);
+    try {
+      await this.renewGroceryShoppingReceiptLease(receiptId, executionToken);
+      const result = await operation();
+      await heartbeat;
+      if (leaseFailure) {
+        throw leaseFailure;
+      }
+      // Verify ownership after the domain effect and immediately before the durable row receipt.
+      await this.renewGroceryShoppingReceiptLease(receiptId, executionToken);
+      return result;
+    } finally {
+      clearInterval(heartbeatTimer);
+      await heartbeat;
+    }
+  }
+
+  private async waitForGroceryShoppingReceipt(
+    idempotencyKey: string,
+  ): Promise<Awaited<ReturnType<MealsService['getGroceryShoppingReceiptRow']>>> {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const receipt = await this.getGroceryShoppingReceiptRow(idempotencyKey);
+      if (!receipt || receipt.status !== 'in_progress') {
+        return receipt;
+      }
+    }
+    return this.getGroceryShoppingReceiptRow(idempotencyKey);
+  }
+
+  private async listGroceryShoppingReceiptRows(receiptId: string): Promise<GroceryShoppingReceiptRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT item_key, requested_status, outcome, result_json, error_text
+         FROM meal_grocery_shopping_receipt_rows
+         WHERE tenant_id = ? AND receipt_id = ?
+         ORDER BY item_key ASC`,
+      )
+      .bind(this.tenantId, receiptId)
+      .all<{
+        error_text: string | null;
+        item_key: string;
+        outcome: GroceryShoppingReceiptRow['outcome'];
+        requested_status: GroceryShoppingResultItemStatus;
+        result_json: string | null;
+      }>();
+    return (result.results ?? []).map((row) => ({
+      error: row.error_text,
+      itemKey: row.item_key,
+      outcome: row.outcome,
+      requestedStatus: row.requested_status,
+      result: safeParse(row.result_json),
+    }));
+  }
+
+  private async upsertGroceryShoppingReceiptRow(
+    receiptId: string,
+    executionToken: string,
+    row: GroceryShoppingReceiptRow,
+  ): Promise<void> {
+    // Fenced by the execution token, like lease renewal: a worker whose lease was taken
+    // over by a newer execution must not be able to overwrite that execution's evidence.
+    const result = await this.db
+      .prepare(
+        `INSERT INTO meal_grocery_shopping_receipt_rows (
+          receipt_id, tenant_id, item_key, requested_status, outcome, result_json, error_text, updated_at
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?
+        FROM meal_grocery_shopping_receipts owner
+        WHERE owner.tenant_id = ? AND owner.id = ? AND owner.status = 'in_progress' AND owner.execution_token = ?
+        ON CONFLICT(receipt_id, item_key) DO UPDATE SET
+          requested_status = excluded.requested_status,
+          outcome = excluded.outcome,
+          result_json = excluded.result_json,
+          error_text = excluded.error_text,
+          updated_at = excluded.updated_at`,
+      )
+      .bind(
+        receiptId,
+        this.tenantId,
+        row.itemKey,
+        row.requestedStatus,
+        row.outcome,
+        stringifyJson(row.result),
+        row.error,
+        new Date().toISOString(),
+        this.tenantId,
+        receiptId,
+        executionToken,
+      )
+      .run();
+    if (result.meta.changes !== 1) {
+      throw new Error('Grocery shopping receipt lease is no longer owned by this request.');
+    }
   }
 
   private isGroceryPlanItemToBuy(item: GroceryPlanItemRecord): boolean {
@@ -3405,6 +4196,7 @@ export class MealsService {
 
   private resolveCurrentGroceryListTrustState(input: {
     groceryPlan: GroceryPlanRecord | null;
+    mealCoverage: MealGroceryCoverageRecord | null;
     preparedOrder: PreparedOrderRecord | null;
     staleReasons: string[];
   }): CurrentGroceryListRecord['trustState'] {
@@ -3412,6 +4204,9 @@ export class MealsService {
       return 'list_may_be_out_of_date';
     }
     if (!input.groceryPlan) {
+      return 'review_before_shopping';
+    }
+    if (input.mealCoverage?.status === 'incomplete') {
       return 'review_before_shopping';
     }
     if ((input.preparedOrder?.unresolvedItems.length ?? 0) > 0) {
@@ -3437,6 +4232,7 @@ export class MealsService {
   }
 
   private buildCurrentGroceryListSubtitle(input: {
+    mealCoverage: MealGroceryCoverageRecord | null;
     relevantIntents: GroceryIntentRecord[];
     selectedPlan: MealPlanRecord | null;
     trustLabel: CurrentGroceryListRecord['trustLabel'];
@@ -3452,6 +4248,9 @@ export class MealsService {
     }
     if (input.relevantIntents.length > 0) {
       parts.push(`${input.relevantIntents.length} added item${input.relevantIntents.length === 1 ? '' : 's'}`);
+    }
+    if (input.mealCoverage?.status === 'incomplete') {
+      parts.push(`groceries not verified for ${mealCountLabel(input.mealCoverage.uncoveredMeals.length)}`);
     }
     return parts.join(' · ');
   }
@@ -4538,14 +5337,6 @@ export class MealsService {
     return this.repository.dateToWeekday(date);
   }
 
-  private async mealRecipesHaveTenantId(): Promise<boolean> {
-    this.mealRecipesTenantColumnExistsPromise ??= this.db
-      .prepare(`SELECT COUNT(*) AS count FROM pragma_table_info('meal_recipes') WHERE name = 'tenant_id'`)
-      .first<{ count: number | string | null }>()
-      .then((row) => Number(row?.count ?? 0) > 0)
-      .catch(() => false);
-    return this.mealRecipesTenantColumnExistsPromise;
-  }
 }
 
 function sqliteIntegerOrNull(value: number | null | undefined): number | null {

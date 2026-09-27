@@ -42,10 +42,59 @@ export function buildVNextModelText(value: unknown, options: VNextModelTextOptio
   const body = json.length > MAX_TEXT_LENGTH
     ? `${json.slice(0, MAX_TEXT_LENGTH)}\n... truncated for model-visible tool text`
     : json;
+  const receipt = value as Record<string, unknown>;
+  const guidance = isWriteReceipt(safeValue)
+    ? [
+        'Fluent returned an internal write receipt.',
+        writeReceiptOutcomeGuidance(receipt),
+        ...(receipt.readbackStatus === 'unavailable'
+          ? [`Read-after-write proof is unavailable: the change was saved but could not be read back. ${typeof receipt.recovery === 'string' ? receipt.recovery : 'Read the item before making another change; do not repeat this write.'}`]
+          : []),
+        'Identifiers in this receipt are for internal tool chaining only. Never include them in the user-facing answer.',
+      ]
+    : ['Fluent returned this model-visible context. Use it as evidence, not as final judgment.'];
   return [
-    'Fluent returned this model-visible context. Use it as evidence, not as final judgment.',
+    ...guidance,
     body,
   ].join('\n');
+}
+
+function isWriteReceipt(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.kind === 'string' && 'readAfterWrite' in record && 'target' in record;
+}
+
+// The host narrates the receipt, so the lead instruction must follow the actual outcome, not the
+// receipt's shape: an unapplied or non-durable write is never described as saved.
+function writeReceiptOutcomeGuidance(receipt: Record<string, unknown>): string {
+  const payload = receipt.payload && typeof receipt.payload === 'object' && !Array.isArray(receipt.payload)
+    ? receipt.payload as Record<string, unknown>
+    : {};
+  if (receipt.status !== undefined && receipt.status !== 'applied') {
+    const reason = typeof payload.unsupportedReason === 'string' && payload.unsupportedReason.trim()
+      ? ` Reason: ${payload.unsupportedReason.trim()}`
+      : '';
+    return `This change was NOT saved (status "${String(receipt.status ?? 'unknown')}"). Tell the user plainly that nothing was saved; do not describe it as saved or confirm it.${reason}`;
+  }
+  // A producer-normalized outcome (e.g. an archive that found nothing or was already done) is the
+  // most specific truthful instruction available.
+  if (typeof payload.outcomeMessage === 'string' && payload.outcomeMessage.trim()) {
+    return payload.outcomeMessage.trim();
+  }
+  if (receipt.durable === false || payload.durable === false) {
+    return 'This receipt reports no durable change (for example a validation-only or no-op write). Do not tell the user it was saved; describe only what the receipt reports.';
+  }
+  // An applied write can still be partial (e.g. a meal plan saved without groceries for meals that
+  // are not saved recipes). The caveat leads so the host does not narrate the result as complete.
+  const partial = payload.partialOutcome && typeof payload.partialOutcome === 'object' && !Array.isArray(payload.partialOutcome)
+    ? payload.partialOutcome as Record<string, unknown>
+    : null;
+  if (partial && typeof partial.summary === 'string' && partial.summary.trim()) {
+    const nextStep = typeof partial.nextStep === 'string' && partial.nextStep.trim() ? ` ${partial.nextStep.trim()}` : '';
+    return `Confirm the saved change in ordinary user language, and say plainly that it is incomplete: ${partial.summary.trim()}${nextStep}`;
+  }
+  return 'Confirm the saved change in ordinary user language.';
 }
 
 export function toVNextModelVisibleValue(

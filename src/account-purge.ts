@@ -15,9 +15,13 @@ export const TENANT_SCOPED_TABLES = [
   'health_workout_logs',
   'budget_spend_events',
   'budget_envelopes',
+  'meal_grocery_shopping_receipt_rows',
+  'meal_grocery_shopping_receipts',
   'meal_confirmed_order_syncs',
   'meal_feedback',
   'meal_grocery_plan_actions',
+  'meal_grocery_shopping_receipt_rows',
+  'meal_grocery_shopping_receipts',
   'meal_plan_generations',
   'meal_grocery_plans',
   'grocery_intents',
@@ -34,6 +38,8 @@ export const TENANT_SCOPED_TABLES = [
   'style_item_photos',
   'style_item_profiles',
   'style_item_provenance',
+  'style_product_references',
+  'style_photo_libraries',
   'style_items',
   'style_profile',
   'person_facts',
@@ -133,9 +139,13 @@ export async function purgeCloudAccountData(
           .prepare(
             `DELETE FROM domain_events
              WHERE entity_type <> 'fluent_account_deletion_request'
-               AND ((? IS NOT NULL AND actor_email = ?) OR (? IS NOT NULL AND entity_id = ?))`,
+               AND (
+                 (? IS NOT NULL AND tenant_id = ?)
+                 OR (? IS NOT NULL AND actor_email = ?)
+                 OR (? IS NOT NULL AND entity_id = ?)
+               )`,
           )
-          .bind(domainEventActorEmail, domainEventActorEmail, tenantId, tenantId)
+          .bind(tenantId, tenantId, domainEventActorEmail, domainEventActorEmail, tenantId, tenantId)
       : null,
     userId ? bindings.db.prepare('DELETE FROM oauthAccessToken WHERE userId = ?').bind(userId) : null,
     userId ? bindings.db.prepare('DELETE FROM session WHERE userId = ?').bind(userId) : null,

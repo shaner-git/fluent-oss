@@ -485,11 +485,14 @@ export interface CurrentGroceryListRecord {
   };
   groceryPlan: GroceryPlanRecord | null;
   intents: GroceryIntentRecord[];
+  /** Present only for plans saved with meals Fluent could not derive groceries for. */
+  mealCoverage?: import('./grocery-coverage').MealGroceryCoverageRecord;
   preparedOrder: PreparedOrderRecord | null;
 }
 
 export interface CurrentGroceryListSummaryRecord {
   calibrationContext?: MealsCalibrationContextRecord;
+  mealCoverage?: import('./grocery-coverage').MealGroceryCoverageRecord;
   objectRole: CurrentGroceryListObjectRole;
   listId: string;
   version: string;

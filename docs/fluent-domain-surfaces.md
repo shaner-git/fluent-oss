@@ -56,6 +56,17 @@ Health and Wellbeing are not currently supported. Earlier Health tools and the o
 
 ## Resources
 
-- `ui://widget/fluent-grocery-list-v72.html`
-- `ui://widget/fluent-budgets-envelope-setup-v1.html`
+- `ui://widget/fluent-grocery-list.html`
+- `ui://widget/fluent-budgets-envelope-setup.html`
 - `ui://widget/fluent-style-closet-v7.html`
+- `ui://widget/fluent-style-closet-v8.html`
+- `ui://widget/fluent-style-closet-v20.html`
+- `ui://widget/fluent-style-closet-v21.html`
+- `ui://widget/fluent-style-closet-v22.html`
+- `ui://widget/fluent-style-closet-v23.html`
+- `ui://widget/fluent-style-closet-v24.html`
+- `ui://widget/fluent-style-closet-v25.html`
+- `ui://widget/fluent-style-closet-v26.html`
+- `ui://widget/fluent-style-closet-v27.html`
+- `ui://widget/fluent-style-closet-v33.html`
+- `ui://widget/fluent-style-closet.html`

@@ -47,6 +47,7 @@ import {
 } from './domains/meals/recipe-card';
 import {
   buildEmptyGroceryListViewModel,
+  applyMealCoverageToGroceryListViewModel,
   buildPublicGroceryListMetadata,
   buildGroceryListStructuredContent,
   getPublicGroceryListWidgetHtml,
@@ -175,7 +176,7 @@ const mealsCalibrationSignalStatusSchema = z.enum(['confirmed', 'corrected', 're
 const mealsPantryCalibrationStatusSchema = z.enum(['stale', 'accidental', 'not_representative', 'representative']);
 const vNextMealsPlanningFrontDoor =
   'For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, this is a detail follow-up, not a starter; do not use this as the first read. Start with fluent_get_context(domain="meals", intent="planning") when available, then use this tool only if the user asks for its specific detail or the context packet says that detail is required.';
-function buildWidgetMeta(description: string, origin: string) {
+function buildWidgetMeta(description: string, origin: string, prefersBorder = true) {
   return {
     'openai/widgetCSP': {
       connect_domains: [],
@@ -183,14 +184,14 @@ function buildWidgetMeta(description: string, origin: string) {
     },
     'openai/widgetDescription': description,
     'openai/widgetDomain': origin,
-    'openai/widgetPrefersBorder': true,
+    'openai/widgetPrefersBorder': prefersBorder,
     // MCP Apps `ui.domain` is host-provisioned (Claude rejects a server-supplied origin).
     ui: {
       csp: {
         connectDomains: [],
         resourceDomains: [],
       },
-      prefersBorder: true,
+      prefersBorder,
     },
   } as const;
 }
@@ -716,6 +717,7 @@ export function registerMealsMcpSurface(
   const groceryListWidgetMeta = buildWidgetMeta(
     'Fluent current shopping list with To buy, Check amount, Check at home, Done, and explicit save actions.',
     origin,
+    false,
   );
   const pantryDashboardWidgetMeta = buildWidgetMeta(
     'Legacy Fluent pantry dashboard retained for compatibility; use Meals setup, grocery-list, or inventory tools for new flows.',
@@ -1257,6 +1259,8 @@ export function registerMealsMcpSurface(
   const renderCurrentGroceryList = async ({ week_start, weekStart }: { week_start?: string; weekStart?: string }) => {
     requireScope(FLUENT_MEALS_READ_SCOPE);
     const currentList = await getCurrentGroceryListForRender(meals, week_start ?? weekStart);
+    const groceryShoppingEvidence = typeof meals.getGroceryWidgetReconciliation === 'function'
+      ? await meals.getGroceryWidgetReconciliation(currentList) : undefined;
     const viewModel = buildGroceryListViewModel({
       currentList,
       groceryPlan: currentList.groceryPlan,
@@ -1268,7 +1272,7 @@ export function registerMealsMcpSurface(
     if (!viewModel) {
       const emptyViewModel = applyCurrentListMetadataToViewModel(buildEmptyGroceryListViewModel(currentList.weekStart), currentList);
       return {
-        _meta: buildPublicGroceryListMetadata(emptyViewModel),
+        _meta: { ...buildPublicGroceryListMetadata(emptyViewModel), groceryShoppingEvidence },
         content: [
           {
             type: 'text' as const,
@@ -1284,7 +1288,7 @@ export function registerMealsMcpSurface(
 
     const structuredContent = buildGroceryListStructuredContent(viewModel);
     return {
-      _meta: buildPublicGroceryListMetadata(viewModel),
+      _meta: { ...buildPublicGroceryListMetadata(viewModel), groceryShoppingEvidence },
       content: [
         {
           type: 'text' as const,
@@ -3273,6 +3277,13 @@ function startOfWeekIso(date: Date): string {
   return clone.toISOString().slice(0, 10);
 }
 
+export function buildCurrentGroceryWidgetMetadata(currentList: CurrentGroceryListRecord) {
+  const viewModel = buildGroceryListViewModel({ currentList, groceryPlan: currentList.groceryPlan,
+    intents: currentList.intents, prepared: currentList.preparedOrder, weekStart: currentList.weekStart });
+  return buildPublicGroceryListMetadata(viewModel ??
+    applyCurrentListMetadataToViewModel(buildEmptyGroceryListViewModel(currentList.weekStart), currentList));
+}
+
 function buildGroceryListViewModel(input: {
   currentList?: CurrentGroceryListRecord | null;
   groceryPlan: GroceryPlanRecord | null;
@@ -3282,6 +3293,7 @@ function buildGroceryListViewModel(input: {
 }): GroceryListViewModel | null {
   const currentPlanId = input.groceryPlan?.mealPlanId ?? null;
   const itemsByKey = new Map<string, GroceryListItemAccumulator>();
+  const projectedIntentIds = groceryPlanSourceIntentIds(input.groceryPlan?.sourceSnapshot);
 
   const preparedNeedNames = new Set((input.prepared?.remainingToBuy ?? []).map((entry) => normalizeGroceryListText(entry.displayName)));
   const preparedVerifyNames = new Set((input.prepared?.unresolvedItems ?? []).map((entry) => normalizeGroceryListText(entry.displayName)));
@@ -3321,6 +3333,12 @@ function buildGroceryListViewModel(input: {
 
   for (const intent of input.intents) {
     if (!shouldIncludeIntent(intent, input.weekStart, currentPlanId)) {
+      continue;
+    }
+    // Generated plan items already include these source intents. Rendering the
+    // same intent again would double its measurement and replace plan
+    // provenance with a misleading "Manual list item" label.
+    if (projectedIntentIds.has(intent.id)) {
       continue;
     }
 
@@ -3397,6 +3415,14 @@ function buildGroceryListViewModel(input: {
   }, input.currentList ?? null);
 }
 
+function groceryPlanSourceIntentIds(sourceSnapshot: unknown): Set<string> {
+  if (!sourceSnapshot || typeof sourceSnapshot !== 'object' || Array.isArray(sourceSnapshot)) {
+    return new Set();
+  }
+  const values = (sourceSnapshot as Record<string, unknown>).groceryIntents;
+  return new Set(Array.isArray(values) ? values.filter((value): value is string => typeof value === 'string') : []);
+}
+
 function applyCurrentListMetadataToViewModel(
   viewModel: GroceryListViewModel,
   currentList: CurrentGroceryListRecord | null,
@@ -3405,7 +3431,7 @@ function applyCurrentListMetadataToViewModel(
     return viewModel;
   }
 
-  return {
+  return applyMealCoverageToGroceryListViewModel({
     ...viewModel,
     listId: currentList.listId,
     objectRole: currentList.objectRole,
@@ -3424,7 +3450,7 @@ function applyCurrentListMetadataToViewModel(
     version: currentList.version,
     weekRelation: currentList.weekRelation,
     weekStart: currentList.weekStart,
-  };
+  }, currentList);
 }
 
 type GroceryListItemAccumulator = {

@@ -16,7 +16,15 @@ interface D1ExecResult {
 }
 
 type HeadersInit = Headers | Array<[string, string]> | Record<string, string>;
-type BodyInit = string | ArrayBuffer | ArrayBufferView | Blob | FormData | URLSearchParams | ReadableStream<Uint8Array>;
+type BodyInit = import('undici-types').BodyInit;
+
+interface ImagesBinding {
+  input(stream: ReadableStream<Uint8Array>): {
+    transform(options: { fit: string; height: number; width: number }): {
+      output(options: { format: string; quality: number }): Promise<{ response(): Response }>;
+    };
+  };
+}
 
 interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
@@ -70,7 +78,7 @@ interface R2ObjectBody extends R2Object {
 interface R2Bucket {
   get(key: string): Promise<R2ObjectBody | null>;
   head(key: string): Promise<R2Object | null>;
-  put(key: string, body: BodyInit | null, options?: R2PutOptions): Promise<void>;
+  put(key: string, body: BodyInit | ArrayBufferView | null, options?: R2PutOptions): Promise<void>;
   delete(key: string): Promise<void>;
 }
 

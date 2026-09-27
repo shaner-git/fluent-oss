@@ -28,7 +28,7 @@ export type FluentVNextReadIntent =
   | 'budget_signal'
   | 'unknown';
 export type FluentVNextItemType = 'meal_plan' | 'recipe' | 'grocery_list' | 'inventory_item' | 'style_item' | 'goal' | 'budget_signal';
-export type FluentVNextMediaBundlePurpose = 'saved_item_review' | 'style_purchase_advice' | 'visual_evidence_check';
+export type FluentVNextMediaBundlePurpose = 'saved_item_review' | 'style_purchase_advice' | 'visual_evidence_check' | 'catalog_repair_source';
 export type FluentVNextMediaBundleDeliveryMode = 'authenticated_only' | 'authenticated_with_signed_fallback';
 type FluentVNextStyleVisualBundleDeliveryMode = 'authenticated_only' | 'authenticated_with_signed_fallback';
 type FluentVNextStyleEvidenceGapPriorityFilter = 'actionable' | 'all' | 'high' | 'medium' | 'low';
@@ -50,6 +50,10 @@ export interface FluentVNextReadServices {
       weekStart?: string | null;
     }) => Promise<unknown>;
     getInventory?: () => Promise<unknown[]>;
+    getGroceryShoppingReconciliation?: (input?: {
+      idempotencyKey?: string | null;
+      weekStart?: string | null;
+    }) => Promise<unknown>;
     getMealMemory?: (recipeId?: string) => Promise<unknown[]>;
     getOnboardingCalibration?: (input?: { includeCurrentGroceryList?: boolean }) => Promise<unknown>;
     getPreferences?: () => Promise<unknown>;
@@ -72,16 +76,54 @@ export interface FluentVNextReadServices {
       itemIds?: string[] | null;
       maxImages?: number | null;
       photoPreference?: 'product' | 'fit' | null;
+      sourceEvidenceOnly?: boolean | null;
     }) => Promise<unknown>;
     listEvidenceGaps?: (input?: { priorityFilter?: FluentVNextStyleEvidenceGapPriorityFilter | null }) => Promise<unknown>;
     listItems?: () => Promise<unknown[]>;
   };
 }
 
+export async function getFluentVNextGroceryShoppingReconciliation(
+  services: FluentVNextReadServices,
+  input: { idempotencyKey?: string | null; weekStart?: string | null } = {},
+): Promise<{
+  object: 'GroceryShoppingReconciliation';
+  groceryList: unknown;
+  inventory: unknown[];
+  receipt: unknown | null;
+  source: string;
+}> {
+  if (services.meals?.getGroceryShoppingReconciliation) {
+    const result = objectRecord(await services.meals.getGroceryShoppingReconciliation(input)) ?? {};
+    return {
+      object: 'GroceryShoppingReconciliation',
+      groceryList: result.groceryList ?? null,
+      inventory: Array.isArray(result.inventory) ? result.inventory : [],
+      receipt: result.receipt ?? null,
+      source: 'meals.getGroceryShoppingReconciliation',
+    };
+  }
+  return {
+    object: 'GroceryShoppingReconciliation',
+    groceryList: services.meals?.getCurrentGroceryList
+      ? await services.meals.getCurrentGroceryList({
+          skipCalibrationContext: true,
+          weekStart: input.weekStart ?? undefined,
+        })
+      : null,
+    inventory: (await services.meals?.getInventory?.()) ?? [],
+    receipt: null,
+    source: 'meals.groceryShoppingReconciliation.fallback',
+  };
+}
+
 export interface FluentVNextSharedProfile {
   object: 'SharedProfile';
   source: 'fluent_read_layer';
-  profile: unknown;
+  profile: {
+    displayName: string | null;
+    timezone: string | null;
+  };
   capabilities: unknown;
   facts: FluentVNextSharedFact[];
   boundaries: {
@@ -257,13 +299,20 @@ export async function getFluentVNextSharedProfile(
   return {
     object: 'SharedProfile',
     source: 'fluent_read_layer',
-    profile,
+    profile: publicSharedProfileCore(profile),
     capabilities,
     facts,
     boundaries: {
       domainProfilesStayTyped: true,
       writesRequireExplicitIntent: true,
     },
+  };
+}
+
+function publicSharedProfileCore(profile: unknown): { displayName: string | null; timezone: string | null } {
+  return {
+    displayName: stringField(profile, 'displayName') || null,
+    timezone: stringField(profile, 'timezone') || null,
   };
 }
 
@@ -431,9 +480,15 @@ async function getStylePurchaseContextPacket(
   const personFactsPromise = services.core.listPersonFacts
     ? services.core.listPersonFacts({ consumerDomain: 'style', host: input.host })
     : Promise.resolve([]);
-  const [items, personFacts] = await Promise.all([
+  const styleContextPromise = services.style.getContext
+    ? services.style.getContext()
+    : services.style.getProfile
+      ? services.style.getProfile().then((profile) => ({ profile }))
+      : Promise.resolve(null);
+  const [items, personFacts, styleContext] = await Promise.all([
     services.style.listItems?.() ?? [],
     personFactsPromise,
+    styleContextPromise,
   ]);
   const sharedPersonFacts = buildPersonFactsCompactFact(personFacts, 'style');
   const blockingGaps: unknown[] = [];
@@ -443,6 +498,7 @@ async function getStylePurchaseContextPacket(
   ].filter(Boolean);
   const sourceReads = [
     'style.listItems',
+    ...(services.style.getContext ? ['style.getContext'] : services.style.getProfile ? ['style.getProfile'] : []),
     ...(services.core.listPersonFacts ? ['core.listPersonFacts'] : []),
   ];
 
@@ -531,7 +587,7 @@ async function getStylePurchaseContextPacket(
     evidenceGaps: blockingGaps,
     intent: input.intent,
     sourceReads,
-    responseGuidance: styleResponseGuidance(input.intent),
+    responseGuidance: styleResponseGuidance(input.intent, styleContext),
   });
 }
 
@@ -716,9 +772,15 @@ function compactStyleListItem(payload: unknown): unknown {
       ? {
           method: profile.method ?? null,
           itemType: raw?.itemType ?? null,
+          feedbackNote: raw?.feedbackNote ?? null,
+          feedbackSignals: Array.isArray(raw?.feedbackSignals) ? raw.feedbackSignals : [],
+          feedbackUpdatedAt: raw?.feedbackUpdatedAt ?? null,
           reanalyzePending: raw?.reanalyzePending === true,
           styleRole: raw?.styleRole ?? null,
           tagCount: Array.isArray(raw?.tags) ? (raw!.tags as unknown[]).length : 0,
+          wearUnderstanding: raw?.wearUnderstanding ?? 'unknown',
+          worksFor: Array.isArray(raw?.worksFor) ? raw.worksFor : [],
+          avoidFor: Array.isArray(raw?.avoidFor) ? raw.avoidFor : [],
         }
       : null,
     reanalyzePending: raw?.reanalyzePending === true,
@@ -1420,8 +1482,9 @@ export async function getFluentVNextMediaBundle(
   const bundle = await services.style.getVisualBundle({
     candidate: input.candidate,
     deliveryMode: toStyleVisualBundleDeliveryMode(input.deliveryMode),
-    includeComparators: true,
+    includeComparators: purpose === 'catalog_repair_source' ? false : true,
     itemIds: input.itemIds ?? (input.subject ? [input.subject] : null),
+    sourceEvidenceOnly: purpose === 'catalog_repair_source',
   });
   return {
     object: 'MediaBundle',
@@ -1434,6 +1497,9 @@ export async function getFluentVNextMediaBundle(
     constraints: [
       'Host model must inspect media before making visual claims.',
       'Fluent stores media provenance; it does not own pixel judgment.',
+      ...(purpose === 'catalog_repair_source'
+        ? ['Catalog repair returns retained source evidence only; generated Catalog media is excluded so the host can derive a new presentation from the original evidence.']
+        : []),
       ...(mediaAssetCount(bundle) === 0
         ? ['No saved media was available in this bundle; ask for an upload or visual description before visual judgment.']
         : []),
@@ -1551,6 +1617,7 @@ function compactCurrentGroceryListPayload(value: unknown): unknown {
     'stale',
     'freshness',
     'counts',
+    'mealCoverage',
   ]) {
     if (record[key] !== undefined) {
       summary[key] = compactContextSummaryValue(record[key]);
@@ -2302,7 +2369,15 @@ export async function getFluentVNextCurrentGroceryListItem(
     skipCalibrationContext: true,
     weekStart: input.weekStart ?? undefined,
   });
-  return grocery ? domainItem('meals', 'current_grocery_list', 'grocery_list', grocery, 'meals.getCurrentGroceryList') : null;
+  return projectFluentVNextCurrentGroceryListItem(grocery);
+}
+
+export function projectFluentVNextCurrentGroceryListItem(
+  grocery: unknown,
+): FluentVNextDomainItem | null {
+  return grocery
+    ? domainItem('meals', 'current_grocery_list', 'grocery_list', grocery, 'meals.getCurrentGroceryList')
+    : null;
 }
 
 async function findMealsRecipeEvidence(
@@ -3221,8 +3296,71 @@ function mealsKnowledgeSummary(calibration: unknown, grocery: unknown, intent: F
   };
 }
 
+function styleCoverageGuidance(context?: unknown): {
+  claimBoundary: string;
+  confirmedAt: string | null;
+  status: 'representative' | 'partial' | 'out_of_date' | 'unknown';
+} {
+  const profile = objectRecord(objectRecord(context)?.profile);
+  const raw = objectRecord(profile?.raw);
+  const value = raw?.closetCoverage;
+  const status = value === 'representative' || value === 'partial' || value === 'out_of_date' || value === 'unknown'
+    ? value
+    : 'unknown';
+  return {
+    claimBoundary: status === 'representative'
+      ? 'The user explicitly confirmed that the current saved Fluent closet is representative. Closet-wide claims may describe that saved collection, while remaining scoped to Fluent rather than unsupported real-world ownership outside it.'
+      : 'Qualify every gap or negative claim: say "among the items you have added" or "I do not see this in your current Fluent closet." Never say the user does not own an item when coverage is partial, out of date, or unknown.',
+    confirmedAt: typeof raw?.closetCoverageConfirmedAt === 'string' ? raw.closetCoverageConfirmedAt : null,
+    status,
+  };
+}
+
+function styleFreshnessGuidance(
+  context: unknown,
+  coverage: ReturnType<typeof styleCoverageGuidance>,
+): {
+  archivedItemBoundary: string;
+  evidenceGapCount: number;
+  lastCoverageConfirmationAt: string | null;
+  mediaAttentionCount: number;
+  promptPolicy: string;
+  reviewAction: 'confirm_when_relevant' | 'none' | 'review_saved_closet';
+  status: 'current' | 'item_attention' | 'out_of_date' | 'unknown';
+} {
+  const record = objectRecord(context);
+  const mediaAttentionCount = typeof record?.pendingReanalyzeCount === 'number'
+    ? Math.max(0, Math.floor(record.pendingReanalyzeCount))
+    : 0;
+  const evidenceGapCount = typeof record?.evidenceGapCount === 'number'
+    ? Math.max(0, Math.floor(record.evidenceGapCount))
+    : 0;
+  const status = coverage.status === 'out_of_date'
+    ? 'out_of_date'
+    : coverage.status === 'unknown' || coverage.status === 'partial'
+      ? 'unknown'
+      : mediaAttentionCount > 0 || evidenceGapCount > 0
+        ? 'item_attention'
+        : 'current';
+  return {
+    archivedItemBoundary: 'Recommendations must use the current active-item read. Never recommend an archived item from memory; restore it only after an explicit user request.',
+    evidenceGapCount,
+    lastCoverageConfirmationAt: coverage.confirmedAt,
+    mediaAttentionCount,
+    promptPolicy: 'Do not nag, schedule background work, or declare the closet stale merely because time passed. Mention upkeep only when the user asks about closet health, when an exact affected item is already relevant, or when out-of-date coverage would materially weaken the current answer.',
+    reviewAction: coverage.status === 'out_of_date'
+      ? 'review_saved_closet'
+      : coverage.status === 'partial' || coverage.status === 'unknown'
+        ? 'confirm_when_relevant'
+        : 'none',
+    status,
+  };
+}
+
 function styleResponseGuidance(intent: FluentVNextReadIntent, context?: unknown): unknown {
   const pendingReanalyze = passiveStyleReanalyzeSummary(context);
+  const closetCoverage = styleCoverageGuidance(context);
+  const closetFreshness = styleFreshnessGuidance(context, closetCoverage);
   const baseGuidance = {
     object: 'ResponseGuidance',
     domain: 'style',
@@ -3234,6 +3372,8 @@ function styleResponseGuidance(intent: FluentVNextReadIntent, context?: unknown)
       'Before making visual claims, the host model must inspect user-provided images or media returned by fluent_get_media_bundle. If no inspectable image is available, ask for an upload, direct image URL, or description instead of presenting a final style judgment.',
     attributionBoundary:
       'Attribute only facts returned by Fluent reads to Fluent. Keep prior chat memory, model assumptions, browser context, and user-supplied candidate details separate unless Fluent returned that evidence.',
+    closetCoverage,
+    closetFreshness,
     allowedPublicReads: [
       'fluent_get_context(domain="style", intent="closet")',
       'fluent_get_context(domain="style", intent="purchase")',
@@ -3247,9 +3387,26 @@ function styleResponseGuidance(intent: FluentVNextReadIntent, context?: unknown)
       'Do not say Fluent completed, staged, or can complete a purchase.',
       'Do not expose old Style purchase-analysis, setup-widget, product-page extraction, or render-tool names as public behavior.',
       'Do not write arbitrary Style memory through the public profile; only the typed closet detail, photo, and no-longer-owned flows are public.',
+      ...(closetCoverage.status === 'representative'
+        ? []
+        : ['Do not say the user does not own an item; qualify negative claims to the items currently saved in Fluent.']),
     ],
     ...(pendingReanalyze ? { pendingReanalyze } : {}),
-    writeBoundary: 'The public profile exposes only typed Style closet-management writes. Ask for explicit confirmation and provenance before changing closet details, saving a host-inspected image URL, or marking an item no longer owned.',
+    writeBoundary: 'The public profile exposes only typed Style closet-management writes and explicit closet_coverage confirmation. Ask for explicit confirmation and provenance before changing closet details, coverage, a host-inspected image URL, or ownership state.',
+    ownedOutfitFlow: {
+      scope: 'For an outfit from what the user owns, enumerate the complete active Style closet by following fluent_list_items nextCursor until it is null. Do not treat the first page as the whole closet.',
+      selection: 'Choose 3 to 5 exact saved item IDs that form one coherent outfit. Inspect each shortlisted item through a separate focused fluent_get_media_bundle call before making visual claims. Respect occasion, weather, fit, formality, the current turn, confirmed Style preferences, and closet coverage.',
+      presentation: 'Render only the selected exact IDs with fluent_render_style_closet_surface, presentation.mode="comparison", and focused_item_id omitted. Keep the ordered explanation concise and name each exact saved item.',
+      alternative: 'Offer at most one bounded alternative by naming one exact saved replacement ID and the exact selected item it would replace. Do not render or invent generic products.',
+      exactIdentityBoundary: 'Every named garment must be an active item returned by the current Fluent read. Never substitute a category, retailer product, generic garment, archived record, or remembered item that was not read.',
+      feedbackBoundary: 'Use exact-item user feedback such as feedbackNote, wearUnderstanding, feedbackSignals, worksFor, and avoidFor as ranking evidence. User-stated evidence outranks model inference. Never infer that an item is rarely worn or unworn merely because Fluent has no wear report.',
+    },
+    visualLookbookFlow: {
+      firstStep: 'Use the existing exact-ID comparison presentation as the outfit board: render only the selected active saved IDs so their Catalog cutouts appear together. A modeled image is never required for outfit selection.',
+      generatedImageBoundary: 'Modeled generation is optional and host-owned. Begin it only after an explicit user request and explicit approval of the identity reference; preserve the person and garment construction, and keep the generated result separate from Original ownership evidence and Catalog media.',
+      mutationBoundary: 'Never attach a generated lookbook image to a Style item, replace Catalog or Original media, or rewrite item metadata. This contract has no durable look-save capability; keep the generated look in the host conversation unless a future typed capability is explicitly introduced.',
+      identityBoundary: 'Every garment in the board or modeled prompt must be one of the exact active saved IDs selected by the current owned-outfit flow. Never add a generic, retailer, archived, or remembered garment.',
+    },
   };
   if (intent !== 'purchase') {
     return baseGuidance;
@@ -3326,9 +3483,9 @@ function mealsResponseGuidance(intent: FluentVNextReadIntent): unknown {
     tentativePlanningBoundary:
       'When grocery state is stale, missing, or incomplete, suggest a lightweight meal framework from confirmed/inferred Meals facts when available, but must not present it as based on current groceries or as a finalized shopping plan. If only Meals context was read, say exactly: "I did not read outside meals or cross-domain Fluent context for this turn." Also say exactly: "Nothing has been saved" unless a public write returned success and read-after-write evidence.',
     weeklyMealPlanningBoundary:
-      'For weekly meal planning, the host model may draft a 2-4 dinner plan from returned Meals facts and user turn context, but Fluent does not persist that plan. Before proposing grocery-list deltas, resolve named recipes with fluent_list_items/fluent_get_item/fluent_list_evidence and check current grocery-list evidence so duplicate or already-covered items are not proposed. When the user explicitly approves a drafted plan, proactively offer to save it with fluent_save_meal_plan (the exact approved plan), then cite read-after-write before claiming it was saved. If you offered to save a plan and the user did not answer, ask once more before ending the task or moving past planning; an unanswered offer is not a decline, but never save without an answer.',
+      'For weekly meal planning, the host model may draft a 2-4 dinner plan from returned Meals facts and user turn context. Resolve named recipes with fluent_list_items/fluent_get_item/fluent_list_evidence. When the user explicitly approves the exact drafted plan, call fluent_save_meal_plan once: it saves that plan, derives the grocery plan from the referenced saved recipes, and returns read-after-write for both the saved meal plan and living grocery list. Cite both readbacks before claiming the plan and groceries are ready. Do not require a second item-by-item approval for those derived groceries. If you offered to save a plan and the user did not answer, ask once more before ending the task or moving past planning; an unanswered offer is not a decline, but never save without an answer.',
     approvedGroceryDeltaBoundary:
-      'Apply grocery changes only one explicit user-approved item at a time through fluent_apply_grocery_list_change, then cite the WriteAck readAfterWrite before saying anything changed. Do not batch hidden deltas, infer pantry/fridge quantity truth, browse retailers, mutate carts, place orders, or save the draft plan as memory. When the user confirms they bought or already have a single item for the current week, proactively offer it and on their explicit yes call fluent_apply_grocery_list_change (approval="explicit_user_approved", currentness_confirmed=true), then cite read-after-write. When the user says they finished a whole shop ("I went shopping", "got everything"), proactively offer the post-shopping reconcile and on their explicit yes call fluent_apply_grocery_shopping_result (mark_all_to_buy_bought=true, or the specific bought_items, currentness_confirmed=true): it marks the current list bought items purchased and refreshes inventory presence in one approved action (presence only, never inventing quantities), then cite read-after-write before claiming anything changed.',
+      'Apply grocery changes only one explicit user-approved item at a time through fluent_apply_grocery_list_change, then cite the WriteAck readAfterWrite before saying anything changed. Do not batch hidden deltas, infer pantry/fridge quantity truth, browse retailers, mutate carts, place orders, or save the draft plan as memory. When the user confirms they bought or already have a single item for the current week, proactively offer it and on their explicit yes call fluent_apply_grocery_list_change (approval="explicit_user_approved", currentness_confirmed=true), then cite read-after-write. When the user says they finished a whole shop ("I went shopping", "got everything"), proactively offer the post-shopping reconcile and on their explicit yes call fluent_apply_grocery_shopping_result (mark_all_to_buy_bought=true with a stable idempotency_key, or the specific bought_items, currentness_confirmed=true): it marks the original approved current-list set bought and refreshes inventory presence in one approved action (presence only, never inventing quantities). Reuse the same idempotency_key for mark-all readback or Retry, then cite read-after-write before claiming anything changed.',
     outcomeLearningBoundary:
       'Recipe outcomes belong on fluent_record_recipe_feedback for one saved recipe. Do not turn one meal outcome into broad preferences, grocery state, inventory, or durable routine memory. When the user says they cooked, ate, or tried a saved recipe, make a brief explicit offer in the same reply to record it (for example: "Want me to log that to Fluent — tasted great, would repeat?") and do not end the turn without offering; you may also ask one quick clarifying detail. Only on the user\'s yes, call fluent_record_recipe_feedback (approval="explicit_user_approved", with taste/difficulty/repeat from the conversation), then cite read-after-write before claiming it was recorded.',
     routineLearningBoundary:
@@ -3767,7 +3924,9 @@ function mealsGroceryListReadiness(record: Record<string, unknown> | null): 'rea
       ? record.checkAtHomeCount
       : 0;
   const trustState = typeof record.trustState === 'string' ? record.trustState : '';
-  if (checkAtHomeCount > 0 || trustState.includes('check_at_home') || trustState.includes('needs_at_home')) {
+  // Meals that are not saved recipes leave grocery coverage unverified until the user confirms them.
+  const mealCoverageIncomplete = objectRecord(record.mealCoverage)?.status === 'incomplete';
+  if (checkAtHomeCount > 0 || mealCoverageIncomplete || trustState.includes('check_at_home') || trustState.includes('needs_at_home')) {
     return 'needs_at_home_checks';
   }
   return 'ready';

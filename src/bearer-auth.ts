@@ -1,4 +1,5 @@
 import type { FluentAuthProps } from './auth';
+import type { HostedRequestLifetime } from './auth-rejection-telemetry';
 import { authenticateBetterAuthBearerRequest } from './better-auth';
 import { hasBetterAuthConfig, type AppEnv, type CloudRuntimeEnv, type OAuthAppEnv } from './config';
 import { escapeHeaderQuotedString } from './http-header';
@@ -9,6 +10,8 @@ export interface BearerAuthSuccess {
 }
 
 export interface BearerAuthOptions {
+  /** Required: hosted rejection telemetry flushes are registered with this lifetime. */
+  lifetime: HostedRequestLifetime | null;
   localBearerToken?: string | null;
   localScopes?: string[];
   realm?: string;
@@ -27,7 +30,12 @@ export async function authenticateBearerRequest(
   }
 
   if ('DB' in env && hasBetterAuthConfig(env)) {
-    const betterAuthProps = await authenticateBetterAuthBearerRequest(env, options.request, new URL(options.request.url).origin);
+    const betterAuthProps = await authenticateBetterAuthBearerRequest(
+      env,
+      options.request,
+      new URL(options.request.url).origin,
+      options.lifetime ?? null,
+    );
     if (betterAuthProps instanceof Response) {
       return betterAuthProps;
     }

@@ -2,6 +2,17 @@
 
 All notable Fluent open-source runtime release-facing changes are documented here.
 
+## Unreleased
+
+### Tenant isolation hardening
+
+- `domain_events` gains a `tenant_id` column (migration `0031`, expand-only with backfill); every writer sets it and every reader, including `fluent_list_evidence`, filters on it. Rows that cannot be attributed stay `NULL` and are never returned.
+- Upserts for meal plans, grocery items, and Style artifacts no longer reassign `tenant_id` on conflict. A caller-supplied id that belongs to another tenant is a no-op that surfaces as a save error instead of taking the row over.
+- Recipe reads and writes always scope by tenant; the runtime probe that fell back to unscoped legacy queries when the column check failed is removed.
+- Grocery shopping receipt row writes are fenced by the execution token, so a worker whose lease was taken over cannot overwrite the newer execution's evidence.
+- Account purge deletes `domain_events` by `tenant_id` and explicitly deletes shopping receipt tables instead of relying on foreign-key cascade.
+- Apply migration `0031` before deploying this code: the new writers require the column.
+
 ## v0.2.0 - 2026-07-09
 
 Fluent 2.0 removes the pre-launch compatibility surface and makes one small, explicit contract the Cloud and OSS baseline.
@@ -28,7 +39,7 @@ First public Fluent open-source runtime release.
 
 - publishes the supported single-user Fluent open-source runtime
 - ships Docker-first and direct Node.js 22.x setup paths
-- supports the shared Fluent MCP contract used by Fluent managed early access
+- supports the shared Fluent MCP contract used by Fluent's hosted service
 - includes Codex, Claude, and OpenClaw scaffold generation for OSS
 - includes snapshot export and import support for OSS operators
 

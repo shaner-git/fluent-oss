@@ -4,6 +4,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { runWithFluentAuthProps, type FluentAuthProps } from '../src/auth';
 import { decryptStyleImageOwnerToken } from '../src/domains/style/media';
+import { normalizeStyleProfile } from '../src/domains/style/helpers';
 import { buildPurchaseAnalysisViewModel } from '../src/domains/style/purchase-analysis';
 import { StyleService } from '../src/domains/style/service';
 import { createLocalRuntime } from '../src/local/runtime';
@@ -29,6 +30,7 @@ main()
 
 async function main() {
   await preservesProfileMerges();
+  await preservesUserWearFeedbackOverInference();
   await preservesRichStyleProfilePreferences();
   await ignoresAcceptanceTestCalibrationSignals();
   await projectsCalibrationSignalsIntoStructuredProfileFields();
@@ -36,6 +38,7 @@ async function main() {
   await storesProvenanceOutsideCanonicalItemReads();
   await preservesPartialItemUpdatesWithoutDroppingExistingFields();
   await summarizesOnboardingReadyState();
+  await migratesClosetCoverageConservatively();
   await treatsThreeStarterItemsAsProvisionalPurchaseReady();
   await treatsMatureSeededClosetAsPurchaseReadyFromConfirmedSignals();
   await tracksEvidenceGapCoverage();
@@ -401,10 +404,129 @@ async function summarizesOnboardingReadyState() {
     context = await service.getContext();
     assert.equal(context.purchaseEvalReady, true);
     assert.equal(context.profile.raw.importedClosetConfirmed, true);
-    assert.equal(context.profile.raw.closetCoverage, 'current');
+    assert.equal(context.profile.raw.closetCoverage, 'representative');
+    assert.match(String(context.profile.raw.closetCoverageConfirmedAt), /^\d{4}-\d{2}-\d{2}T/);
     assert.equal(context.profile.raw.onboardingPath, 'seeded');
     assert.equal(context.profile.raw.practicalCalibrationConfirmed, true);
     assert.equal(context.profile.raw.tasteCalibrationConfirmed, true);
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function preservesUserWearFeedbackOverInference() {
+  const runtime = createTempRuntime();
+  try {
+    const service = new StyleService(runtime.env.db);
+    const provenance = testProvenance();
+    await service.upsertItem({
+      item: {
+        id: 'style-item:feedback-tee',
+        category: 'TOP',
+        name: 'Feedback Tee',
+        status: 'active',
+        subcategory: 'Tee',
+      },
+      provenance,
+    });
+    await service.upsertItemProfile({
+      itemId: 'style-item:feedback-tee',
+      profile: { wearUnderstanding: 'unknown' },
+      provenance,
+      source: 'user_correction',
+    });
+    await assert.rejects(
+      service.upsertItemProfile({
+        itemId: 'style-item:feedback-tee',
+        profile: { wearUnderstanding: 'recently_worn' },
+        provenance,
+        source: 'inferred',
+      }),
+      /requires explicit user evidence/,
+    );
+    await service.upsertItemProfile({
+      fieldEvidence: {
+        feedbackSignals: { source: 'user', value: ['comfortable'] },
+        wearUnderstanding: { source: 'user', value: 'recently_worn' },
+        worksFor: { source: 'user', value: ['travel'] },
+      },
+      itemId: 'style-item:feedback-tee',
+      profile: {
+        feedbackSignals: ['comfortable'],
+        wearUnderstanding: 'recently_worn',
+        worksFor: ['travel'],
+      },
+      provenance,
+      source: 'user',
+    });
+    await assert.rejects(
+      service.upsertItemProfile({
+        fieldEvidence: { wearUnderstanding: { source: 'inferred', value: 'rarely_worn' } },
+        itemId: 'style-item:feedback-tee',
+        profile: { wearUnderstanding: 'rarely_worn' },
+        provenance,
+        source: 'user',
+      }),
+      /requires explicit user evidence/,
+    );
+    await assert.rejects(
+      service.upsertItemProfile({
+        itemId: 'style-item:feedback-tee',
+        profile: { wearUnderstanding: 'rarely_worn' },
+        provenance,
+        source: 'host_vision',
+      }),
+      /requires explicit user evidence/,
+    );
+    const item = await service.getItem('style-item:feedback-tee');
+    assert.deepEqual(item?.profile?.raw.feedbackSignals, ['comfortable']);
+    assert.equal(item?.profile?.raw.wearUnderstanding, 'recently_worn');
+    assert.deepEqual(item?.profile?.raw.worksFor, ['travel']);
+    const evidence = await service.getItemProvenance('style-item:feedback-tee');
+    assert.equal((evidence?.fieldEvidence?.wearUnderstanding as { source?: string } | undefined)?.source, 'user');
+  } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+async function migratesClosetCoverageConservatively() {
+  assert.equal(normalizeStyleProfile({
+    activeItemCount: 108,
+    closetCoverage: 'current',
+    importedClosetConfirmed: false,
+  }).closetCoverage, 'unknown');
+  assert.equal(normalizeStyleProfile({
+    activeItemCount: 108,
+    closetCoverage: null,
+    importedClosetConfirmed: true,
+  }).closetCoverage, 'unknown');
+  assert.equal(normalizeStyleProfile({
+    activeItemCount: 108,
+    closetCoverage: 'complete',
+    importedClosetConfirmed: true,
+  }).closetCoverage, 'unknown');
+
+  const runtime = createTempRuntime();
+  try {
+    const service = createStyleService(runtime);
+    const updated = await service.updateProfile({
+      profile: {
+        closetCoverage: 'partial',
+        closetCoverageConfirmedAt: '2000-01-01T00:00:00.000Z',
+      },
+      provenance: testProvenance(),
+    });
+    assert.equal(updated.raw.closetCoverage, 'partial');
+    assert.match(String(updated.raw.closetCoverageConfirmedAt), /^\d{4}-\d{2}-\d{2}T/);
+    assert.notEqual(updated.raw.closetCoverageConfirmedAt, '2000-01-01T00:00:00.000Z');
+
+    const timestamp = updated.raw.closetCoverageConfirmedAt;
+    const spoofOnly = await service.updateProfile({
+      profile: { closetCoverageConfirmedAt: '1999-01-01T00:00:00.000Z' },
+      provenance: testProvenance(),
+    });
+    assert.equal(spoofOnly.raw.closetCoverage, 'partial');
+    assert.equal(spoofOnly.raw.closetCoverageConfirmedAt, timestamp);
   } finally {
     runtime.sqliteDb.close();
   }
@@ -1247,6 +1369,12 @@ async function surfacesInactiveItemsAcrossContextEvidenceAndProvenanceReads() {
     assert.equal(gaps.items.some((entry) => entry.itemId === 'style-item:inactive-surface-trouser'), true);
     assert.equal(gaps.items.some((entry) => entry.itemId === 'style-item:inactive-surface-boot'), true);
     assert.equal(gaps.items.some((entry) => entry.itemId === 'style-item:inactive-surface-loafer'), true);
+    const actionableGaps = await service.listEvidenceGaps({ priorityFilter: 'actionable' });
+    assert.equal(
+      context.evidenceGapCount,
+      actionableGaps.items.filter((entry) => entry.itemId === 'style-item:inactive-surface-trouser').length,
+      'closet context freshness counts actionable gaps from active items only',
+    );
 
     const retiredProvenance = await service.getItemProvenance('style-item:inactive-surface-boot');
     assert.deepEqual(retiredProvenance?.technicalMetadata, { season: 'fall' });

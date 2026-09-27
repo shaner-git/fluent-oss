@@ -4,6 +4,7 @@ import {
   oauthProviderAuthServerMetadata,
   oauthProviderOpenIdConfigMetadata,
 } from '@better-auth/oauth-provider';
+import { APIError } from 'better-call';
 import { betterAuth } from 'better-auth';
 import { hashPassword } from 'better-auth/crypto';
 import { getMigrations } from 'better-auth/db/migration';
@@ -57,8 +58,20 @@ import {
   type FluentCloudOnboardingState,
   type FluentCloudOnboardingRecord,
 } from './cloud-onboarding';
-import { hasHostedEmailDelivery, sendHostedMagicLinkEmail } from './hosted-email';
+import {
+  buildHostedMagicLinkConfirmationUrl,
+  hasHostedEmailDelivery,
+  HOSTED_MAGIC_LINK_TTL_LABEL,
+  HOSTED_MAGIC_LINK_TTL_SECONDS,
+  sendHostedMagicLinkEmail,
+} from './hosted-email';
 import { resolveHostedCloudAccess, resolveHostedCloudClientDecision } from './hosted-access-state';
+import {
+  recordHostedAuthRejection,
+  type HostedAuthRejectionReason,
+  hostedRequestLifetime,
+  type HostedRequestLifetime,
+} from './auth-rejection-telemetry';
 import { escapeHeaderQuotedString } from './http-header';
 import {
   assertSelfServeProvisioningAllowed,
@@ -114,6 +127,11 @@ const OAUTH_COMPATIBILITY_CORS_ORIGINS = [
 
 const OAUTH_COMPATIBILITY_CORS_METHODS = 'GET, HEAD, POST, DELETE, OPTIONS';
 const OAUTH_COMPATIBILITY_CORS_HEADERS = 'authorization, content-type, mcp-protocol-version';
+const MAGIC_LINK_CONFIRM_PATH = '/api/auth/magic-link/confirm';
+const MAGIC_LINK_VERIFY_PATH = '/api/auth/magic-link/verify';
+const MAGIC_LINK_CONFIRM_MAX_BODY_BYTES = 8_192;
+const MAGIC_LINK_CONFIRM_MAX_CALLBACK_LENGTH = 4_096;
+const MAGIC_LINK_CONFIRM_TOKEN_PATTERN = /^[A-Za-z0-9_-]{16,256}$/;
 
 export async function maybeHandleBetterAuthRequest(
   request: Request,
@@ -140,6 +158,14 @@ export async function maybeHandleBetterAuthRequest(
 
   if (url.pathname === '/api/auth/.well-known/oauth-authorization-server') {
     return handleBetterAuthWellKnownMetadata(request, env, 'authorization_server');
+  }
+
+  if (url.pathname === MAGIC_LINK_CONFIRM_PATH) {
+    return handleMagicLinkConfirmationRequest(request, env);
+  }
+
+  if (url.pathname === MAGIC_LINK_VERIFY_PATH) {
+    return handleLegacyMagicLinkVerificationRequest(request);
   }
 
   if (url.pathname === '/api/auth' || url.pathname.startsWith('/api/auth/')) {
@@ -291,6 +317,427 @@ async function handleBetterAuthApiRequest(request: Request, env: CloudRuntimeEnv
   } catch (error) {
     return betterAuthRuntimeErrorResponse(request, error);
   }
+}
+
+async function handleMagicLinkConfirmationRequest(
+  request: Request,
+  env: CloudRuntimeEnv,
+): Promise<Response> {
+  if (request.method === 'HEAD') {
+    return magicLinkConfirmationHtml(null);
+  }
+  if (request.method === 'GET') {
+    const nonce = createConfirmationNonce();
+    return magicLinkConfirmationHtml(renderMagicLinkConfirmationPage(nonce), 200, nonce);
+  }
+  if (request.method !== 'POST') {
+    return magicLinkConfirmationJson(
+      {
+        message: 'Authentication did not complete. No product change occurred.',
+        status: 'invalid_request',
+      },
+      405,
+      { allow: 'GET, HEAD, POST' },
+    );
+  }
+
+  const requestUrl = new URL(request.url);
+  const origin = request.headers.get('origin');
+  const fetchSite = request.headers.get('sec-fetch-site');
+  if (origin !== requestUrl.origin || fetchSite !== 'same-origin') {
+    return magicLinkConfirmationJson(
+      {
+        message: 'Authentication did not complete. No product change occurred.',
+        status: 'invalid_request',
+      },
+      403,
+    );
+  }
+  if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) {
+    return magicLinkConfirmationJson(
+      {
+        message: 'Authentication did not complete. No product change occurred.',
+        status: 'invalid_request',
+      },
+      415,
+    );
+  }
+
+  const declaredLength = Number(request.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declaredLength) && declaredLength > MAGIC_LINK_CONFIRM_MAX_BODY_BYTES) {
+    return magicLinkConfirmationJson(
+      {
+        message: 'Authentication did not complete. No product change occurred.',
+        status: 'invalid_request',
+      },
+      413,
+    );
+  }
+
+  const bodyText = await request.text();
+  if (new TextEncoder().encode(bodyText).byteLength > MAGIC_LINK_CONFIRM_MAX_BODY_BYTES) {
+    return magicLinkConfirmationJson(
+      {
+        message: 'Authentication did not complete. No product change occurred.',
+        status: 'invalid_request',
+      },
+      413,
+    );
+  }
+
+  let payload: { callbackURL?: unknown; token?: unknown };
+  try {
+    payload = JSON.parse(bodyText) as { callbackURL?: unknown; token?: unknown };
+  } catch {
+    return magicLinkConfirmationJson(
+      {
+        message: 'Authentication did not complete. No product change occurred.',
+        status: 'invalid_request',
+      },
+      400,
+    );
+  }
+
+  const token = typeof payload.token === 'string' ? payload.token : '';
+  const callbackUrl = typeof payload.callbackURL === 'string' ? payload.callbackURL : '';
+  const decodedCallbackUrl = decodeTrustedMagicLinkCallback(callbackUrl, requestUrl.origin);
+  if (
+    !MAGIC_LINK_CONFIRM_TOKEN_PATTERN.test(token) ||
+    callbackUrl.length > MAGIC_LINK_CONFIRM_MAX_CALLBACK_LENGTH ||
+    !decodedCallbackUrl
+  ) {
+    return magicLinkConfirmationJson(
+      {
+        message: 'Authentication did not complete. No product change occurred.',
+        status: 'invalid_request',
+      },
+      400,
+    );
+  }
+
+  let auth;
+  try {
+    auth = createBetterAuth(request, env);
+  } catch {
+    return magicLinkConfirmationJson(
+      {
+        message: 'Authentication is temporarily unavailable. No product change occurred.',
+        status: 'unavailable',
+      },
+      503,
+    );
+  }
+
+  const existingSession = await getBetterAuthSession(auth, request);
+  if (existingSession?.user) {
+    return magicLinkConfirmationJson(
+      {
+        message:
+          'You are already signed in. This link was not used, and no product change occurred. Return to the AI app that started this connection and start the connection again.',
+        status: 'already_signed_in',
+      },
+      409,
+    );
+  }
+
+  const verifyUrl = new URL(MAGIC_LINK_VERIFY_PATH, requestUrl.origin);
+  verifyUrl.searchParams.set('token', token);
+  verifyUrl.searchParams.set('callbackURL', callbackUrl);
+  const verifyHeaders = new Headers(request.headers);
+  verifyHeaders.delete('content-length');
+  verifyHeaders.delete('content-type');
+  verifyHeaders.set('accept', 'text/html,application/xhtml+xml');
+  const verificationResponse = await handleBetterAuthApiRequest(
+    new Request(verifyUrl, {
+      headers: verifyHeaders,
+      method: 'GET',
+      redirect: 'manual',
+    }),
+    env,
+  );
+
+  const location = verificationResponse.headers.get('location');
+  if (verificationResponse.status >= 300 && verificationResponse.status < 400 && location) {
+    const redirectUrl = new URL(location, requestUrl.origin);
+    const expectedUrl = new URL(decodedCallbackUrl, requestUrl.origin);
+    if (redirectUrl.toString() === expectedUrl.toString()) {
+      return magicLinkConfirmationJson(
+        {
+          message: 'Authentication completed. Returning to your Fluent connection.',
+          status: 'authenticated',
+        },
+        200,
+        { setCookiesFrom: verificationResponse.headers },
+      );
+    }
+    if (redirectUrl.origin === requestUrl.origin && redirectUrl.searchParams.get('error')) {
+      return magicLinkConfirmationJson(
+        {
+          message: 'Authentication did not complete. No product change occurred.',
+          status: 'invalid_or_expired',
+        },
+        410,
+      );
+    }
+  }
+  if (verificationResponse.status === 400 || verificationResponse.status === 403) {
+    return magicLinkConfirmationJson(
+      {
+        message: 'Authentication did not complete. No product change occurred.',
+        status: 'invalid_request',
+      },
+      400,
+    );
+  }
+
+  return magicLinkConfirmationJson(
+    {
+      message: 'Authentication did not complete. No product change occurred.',
+      status: 'unavailable',
+    },
+    503,
+  );
+}
+
+function handleLegacyMagicLinkVerificationRequest(request: Request): Response {
+  if (request.method === 'HEAD') {
+    return magicLinkConfirmationHtml(null, 410);
+  }
+  if (request.method === 'GET') {
+    const nonce = createConfirmationNonce();
+    return magicLinkConfirmationHtml(
+      renderMagicLinkRecoveryPage(
+        nonce,
+        'This sign-in link cannot be completed safely. Authentication did not complete, and no product change occurred.',
+      ),
+      410,
+      nonce,
+    );
+  }
+  return magicLinkConfirmationJson(
+    {
+      message: 'Authentication did not complete. No product change occurred.',
+      status: 'invalid_request',
+    },
+    405,
+    { allow: 'GET, HEAD' },
+  );
+}
+
+function decodeTrustedMagicLinkCallback(callbackUrl: string, origin: string): string | null {
+  if (!callbackUrl || callbackUrl.length > MAGIC_LINK_CONFIRM_MAX_CALLBACK_LENGTH) {
+    return null;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(callbackUrl);
+  } catch {
+    return null;
+  }
+  if (!decoded.startsWith('/') || decoded.startsWith('//') || decoded.includes('\\')) {
+    return null;
+  }
+  const resolved = new URL(decoded, origin);
+  if (
+    resolved.origin !== origin ||
+    resolved.username ||
+    resolved.password ||
+    resolved.pathname === MAGIC_LINK_CONFIRM_PATH ||
+    resolved.pathname === MAGIC_LINK_VERIFY_PATH
+  ) {
+    return null;
+  }
+  return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+}
+
+function createConfirmationNonce(): string {
+  return crypto.randomUUID().replaceAll('-', '');
+}
+
+function magicLinkConfirmationHtml(body: string | null, status = 200, nonce?: string): Response {
+  const headers = new Headers({
+    'cache-control': 'no-store, max-age=0',
+    'content-security-policy': nonce
+      ? `default-src 'none'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'`
+      : "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    'content-type': 'text/html; charset=utf-8',
+    expires: '0',
+    pragma: 'no-cache',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+  });
+  return new Response(body, { headers, status });
+}
+
+function magicLinkConfirmationJson(
+  payload: {
+    message: string;
+    status:
+      | 'already_signed_in'
+      | 'authenticated'
+      | 'invalid_or_expired'
+      | 'invalid_request'
+      | 'unavailable';
+  },
+  status = 200,
+  options?: { allow?: string; setCookiesFrom?: Headers },
+): Response {
+  const headers = new Headers({
+    'cache-control': 'no-store, max-age=0',
+    'content-type': 'application/json; charset=utf-8',
+    pragma: 'no-cache',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+  });
+  if (options?.allow) {
+    headers.set('allow', options.allow);
+  }
+  if (options?.setCookiesFrom) {
+    for (const cookie of readSetCookieHeaders(options.setCookiesFrom)) {
+      headers.append('set-cookie', cookie);
+    }
+  }
+  return new Response(JSON.stringify(payload), { headers, status });
+}
+
+function readSetCookieHeaders(headers: Headers): string[] {
+  const compatible = headers as Headers & { getSetCookie?: () => string[] };
+  if (typeof compatible.getSetCookie === 'function') {
+    return compatible.getSetCookie();
+  }
+  const combined = headers.get('set-cookie');
+  return combined ? [combined] : [];
+}
+
+function renderMagicLinkConfirmationPage(nonce: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light only" />
+    <title>Confirm sign-in | Fluent</title>
+    <style>
+      :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f5f1e8; color: #181613; }
+      main { width: min(100%, 520px); padding: 32px; border: 1px solid #e1d8c6; border-radius: 16px; background: #fffdf8; box-shadow: 0 16px 50px rgba(24, 22, 19, 0.08); }
+      .eyebrow { margin: 0 0 14px; color: #7a7164; font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .18em; text-transform: uppercase; }
+      h1 { margin: 0 0 16px; font: 400 34px/1.1 Georgia, serif; letter-spacing: -.02em; }
+      p { margin: 0 0 18px; color: #4a443d; font-size: 16px; line-height: 1.6; }
+      button, a { min-height: 44px; }
+      button { width: 100%; border: 0; border-radius: 10px; padding: 13px 18px; background: #d97757; color: #181613; font: 700 15px/1.2 inherit; cursor: pointer; }
+      button:disabled { cursor: wait; opacity: .62; }
+      a { display: inline-flex; align-items: center; color: #7a3f2e; font-weight: 650; }
+      .status { min-height: 26px; margin-top: 18px; color: #4a443d; }
+      .recovery[hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Fluent sign-in</p>
+      <h1>Confirm this sign-in</h1>
+      <p>Continue only if you asked Fluent to connect to your AI app in this browser. Opening or previewing this page does not sign you in.</p>
+      <button id="confirm" type="button">Continue to Fluent</button>
+      <p id="status" class="status" aria-live="polite"></p>
+      <p id="recovery" class="recovery" hidden><a href="/sign-in">Request a new sign-in link</a></p>
+    </main>
+    <script nonce="${nonce}">
+      (() => {
+        const button = document.getElementById('confirm');
+        const status = document.getElementById('status');
+        const recovery = document.getElementById('recovery');
+        let fragment = window.location.hash.slice(1);
+        window.history.replaceState(null, '', window.location.pathname);
+        const credential = new URLSearchParams(fragment);
+        fragment = '';
+        let token = credential.get('token') || '';
+        let callbackURL = credential.get('callbackURL') || '';
+        credential.delete('token');
+        credential.delete('callbackURL');
+
+        const fail = (message, showRecovery = true) => {
+          token = '';
+          callbackURL = '';
+          button.disabled = true;
+          status.textContent = message;
+          recovery.hidden = !showRecovery;
+        };
+
+        if (!token || !callbackURL) {
+          fail('Authentication did not complete. No product change occurred.');
+          return;
+        }
+
+        button.addEventListener('click', async () => {
+          if (button.disabled) return;
+          button.disabled = true;
+          status.textContent = 'Completing sign-in…';
+          const requestBody = JSON.stringify({ callbackURL, token });
+          try {
+            const response = await fetch('${MAGIC_LINK_CONFIRM_PATH}', {
+              body: requestBody,
+              credentials: 'include',
+              headers: { 'accept': 'application/json', 'content-type': 'application/json' },
+              method: 'POST',
+              redirect: 'manual',
+            });
+            const result = await response.json().catch(() => ({}));
+            if (response.ok && result.status === 'authenticated') {
+              const resume = decodeURIComponent(callbackURL);
+              token = '';
+              callbackURL = '';
+              status.textContent = result.message;
+              const resumeUrl = new URL(resume, window.location.origin);
+              if (resumeUrl.origin !== window.location.origin) {
+                throw new Error('Unsafe sign-in continuation.');
+              }
+              window.location.assign(resumeUrl.toString());
+              return;
+            }
+            fail(
+              typeof result.message === 'string'
+                ? result.message
+                : 'Authentication did not complete. No product change occurred.',
+              result.status !== 'already_signed_in',
+            );
+          } catch {
+            fail('Authentication did not complete. No product change occurred.');
+          }
+        }, { once: true });
+      })();
+    </script>
+  </body>
+</html>`;
+}
+
+function renderMagicLinkRecoveryPage(nonce: string, message: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light only" />
+    <title>Sign-in link unavailable | Fluent</title>
+    <style>
+      :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f5f1e8; color: #181613; }
+      main { width: min(100%, 520px); padding: 32px; border: 1px solid #e1d8c6; border-radius: 16px; background: #fffdf8; }
+      h1 { margin: 0 0 16px; font: 400 34px/1.1 Georgia, serif; }
+      p { color: #4a443d; font-size: 16px; line-height: 1.6; }
+      a { min-height: 44px; display: inline-flex; align-items: center; color: #7a3f2e; font-weight: 650; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Sign-in link unavailable</h1>
+      <p>${escapeHtml(message)}</p>
+      <a href="/sign-in">Request a new sign-in link</a>
+    </main>
+    <script nonce="${nonce}">window.history.replaceState(null, '', window.location.pathname);</script>
+  </body>
+</html>`;
 }
 
 async function handleBetterAuthMigration(request: Request, env: CloudRuntimeEnv): Promise<Response> {
@@ -687,8 +1134,12 @@ export function createBetterAuthConfig(request: Request, env: CloudRuntimeEnv) {
       disableSettingJwtHeader: true,
     }),
     magicLink({
+      expiresIn: HOSTED_MAGIC_LINK_TTL_SECONDS,
       sendMagicLink: async ({ email, url }) => {
-        await sendHostedMagicLinkEmail(env, { email, url });
+        await sendHostedMagicLinkEmail(env, {
+          email,
+          url: buildHostedMagicLinkConfirmationUrl(url),
+        });
       },
     }),
     oauthProvider({
@@ -726,6 +1177,17 @@ export function createBetterAuthConfig(request: Request, env: CloudRuntimeEnv) {
       disableSignUp: true,
       enabled: true,
       minPasswordLength: 16,
+    },
+    logger: {
+      disableColors: true,
+      level: 'warn' as const,
+      log(level: 'debug' | 'info' | 'warn' | 'error') {
+        const write = level === 'error' ? console.error : console.warn;
+        write('Better Auth internal event', { level });
+      },
+    },
+    onAPIError: {
+      throw: true,
     },
     plugins,
     secret,
@@ -880,12 +1342,17 @@ async function handleBetterAuthMcpRequest(
   env: OAuthAppEnv,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  const authResult = await authenticateBetterAuthBearerRequest(env, request, new URL(request.url).origin);
+  const lifetime = hostedRequestLifetime(ctx);
+  const authResult = await authenticateBetterAuthBearerRequest(env, request, new URL(request.url).origin, lifetime);
   if (authResult instanceof Response) {
     return authResult;
   }
 
   if (!authResult) {
+    recordHostedAuthRejection(env.DB ? wrapCloudflareDatabase(env.DB) : null, {
+      reason: request.headers.get('authorization') ? 'malformed_authorization' : 'missing_token',
+      request,
+    }, lifetime);
     return createBearerAuthErrorResponse(
       request,
       'Missing or invalid access token',
@@ -931,6 +1398,8 @@ export async function authenticateBetterAuthBearerRequest(
   env: CloudRuntimeEnv,
   request: Request,
   resourceOrigin: string,
+  /** Required: rejection telemetry flushes are registered with this lifetime. */
+  lifetime: HostedRequestLifetime | null,
 ): Promise<FluentAuthProps | Response | null> {
   const presented = parseBearerToken(request.headers.get('authorization'));
   if (!presented) {
@@ -943,6 +1412,7 @@ export async function authenticateBetterAuthBearerRequest(
     const db = wrapCloudflareDatabase(env.DB);
     const clientDecision = await resolveHostedCloudClientDecision(db, request, authProps.oauthClientId);
     if (clientDecision.code) {
+      recordHostedAuthRejection(db, { code: clientDecision.code, reason: 'client_policy', request }, lifetime);
       return createFluentCloudEarlyAccessBearerResponse(request, resourceOrigin, clientDecision.code, {
         clientName: clientDecision.clientName ?? authProps.oauthClientName ?? authProps.oauthClientId,
         contractVersion: clientDecision.contractVersion,
@@ -955,6 +1425,7 @@ export async function authenticateBetterAuthBearerRequest(
       userId: authProps.userId,
     });
     if (!accessDecision.allowed && accessDecision.code) {
+      recordHostedAuthRejection(db, { code: accessDecision.code, reason: 'account_access', request }, lifetime);
       return createFluentCloudEarlyAccessBearerResponse(request, resourceOrigin, accessDecision.code, {
         email: authProps.email,
       });
@@ -975,6 +1446,7 @@ export async function authenticateBetterAuthBearerRequest(
       sessionId: null,
     });
     if (deletionCode) {
+      recordHostedAuthRejection(db, { code: deletionCode, reason: 'account_deletion', request }, lifetime);
       return createFluentCloudEarlyAccessBearerResponse(request, resourceOrigin, deletionCode, {
         email: authProps.email,
       });
@@ -982,6 +1454,10 @@ export async function authenticateBetterAuthBearerRequest(
 
     return authProps;
   } catch (error) {
+    recordHostedAuthRejection(env.DB ? wrapCloudflareDatabase(env.DB) : null, {
+      reason: error instanceof HostedAccessTokenRejection ? error.reason : 'verification_error',
+      request,
+    }, lifetime);
     const message = error instanceof Error ? error.message : String(error ?? 'Invalid access token');
     if (message.toLowerCase().includes('token inactive') || message.toLowerCase().includes('token has expired')) {
       return createFluentCloudEarlyAccessBearerResponse(request, resourceOrigin, 'auth_expired');
@@ -1311,9 +1787,51 @@ async function verifyHostedAccessToken(
       },
     );
     return payload;
-  } catch {
-    return lookupHostedOpaqueAccessTokenPayload(env, request, presented, issuer);
+  } catch (jwtError) {
+    try {
+      return await lookupHostedOpaqueAccessTokenPayload(env, request, presented, issuer);
+    } catch (opaqueError) {
+      throw classifyHostedAccessTokenFailure(jwtError, opaqueError);
+    }
   }
+}
+
+/**
+ * Carries a privacy-safe rejection category alongside the unchanged error
+ * message that drives the bearer response. Deliberately holds no identifiers.
+ */
+class HostedAccessTokenRejection extends Error {
+  constructor(
+    readonly reason: HostedAuthRejectionReason,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'HostedAccessTokenRejection';
+  }
+}
+
+function classifyHostedAccessTokenFailure(jwtError: unknown, opaqueError: unknown): Error {
+  // A token found in the opaque store (expired or revoked) is the most specific signal.
+  if (opaqueError instanceof HostedAccessTokenRejection && opaqueError.reason !== 'invalid_token') {
+    return opaqueError;
+  }
+  if (!(opaqueError instanceof HostedAccessTokenRejection)) {
+    return new HostedAccessTokenRejection(
+      'verification_error',
+      opaqueError instanceof Error ? opaqueError.message : String(opaqueError ?? 'Invalid access token'),
+    );
+  }
+
+  // jose only reports claim/expiry failures after the signature verified.
+  const jose = jwtError as { claim?: unknown; code?: unknown } | null;
+  if (jose?.code === 'ERR_JWT_EXPIRED') {
+    return new HostedAccessTokenRejection('expired_token', opaqueError.message);
+  }
+  if (jose?.code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') {
+    const reason = jose.claim === 'aud' ? 'wrong_audience' : jose.claim === 'iss' ? 'wrong_issuer' : 'invalid_claims';
+    return new HostedAccessTokenRejection(reason, opaqueError.message);
+  }
+  return opaqueError;
 }
 
 async function lookupHostedOpaqueAccessTokenPayload(
@@ -1337,12 +1855,12 @@ async function lookupHostedOpaqueAccessTokenPayload(
       userId?: string | null;
     }>();
   if (!accessToken) {
-    throw new Error('Invalid access token');
+    throw new HostedAccessTokenRejection('invalid_token', 'Invalid access token');
   }
 
   const expiresAt = accessToken.expiresAt ? new Date(accessToken.expiresAt) : null;
   if (!expiresAt || expiresAt.getTime() < Date.now()) {
-    throw new Error('token inactive');
+    throw new HostedAccessTokenRejection('expired_token', 'token inactive');
   }
 
   let clientMetadata: OAuthClientMetadata = {};
@@ -1352,7 +1870,7 @@ async function lookupHostedOpaqueAccessTokenPayload(
       .bind(accessToken.clientId)
       .first<{ clientId?: string | null; disabled?: number | null; metadata?: string | null }>();
     if (!client?.clientId || Number(client.disabled ?? 0) !== 0) {
-      throw new Error('token inactive');
+      throw new HostedAccessTokenRejection('client_revoked', 'token inactive');
     }
     clientMetadata = parseOAuthClientMetadata(client.metadata);
   }
@@ -1731,7 +2249,7 @@ function stringArrayValue(value: unknown): string[] | null {
 
 function betterAuthConfigErrorResponse(error: unknown): Response {
   console.error('Better Auth configuration unavailable', {
-    message: error instanceof Error ? error.message : String(error),
+    failure: 'configuration_exception',
   });
   const payload = createFluentCloudAccessFailurePayload('temporarily_unavailable');
   return json(
@@ -1741,6 +2259,10 @@ function betterAuthConfigErrorResponse(error: unknown): Response {
 }
 
 function betterAuthRuntimeErrorResponse(request: Request, error: unknown): Response {
+  const safeApiErrorResponse = buildSafeBetterAuthApiErrorResponse(error);
+  if (safeApiErrorResponse) {
+    return safeApiErrorResponse;
+  }
   if (isSelfServeProvisioningBrakeError(error)) {
     const details = buildFluentCloudAccessFailureDetails(error.code);
     return json(createFluentCloudAccessFailurePayload(error.code), details.status);
@@ -1748,10 +2270,9 @@ function betterAuthRuntimeErrorResponse(request: Request, error: unknown): Respo
 
   const url = new URL(request.url);
   console.error('Better Auth request failed', {
-    message: error instanceof Error ? error.message : String(error),
+    failure: 'runtime_exception',
     method: request.method,
     pathname: url.pathname,
-    stack: error instanceof Error ? error.stack : undefined,
   });
 
   return json(
@@ -1760,6 +2281,44 @@ function betterAuthRuntimeErrorResponse(request: Request, error: unknown): Respo
       error_description: 'Hosted authorization is temporarily unavailable.',
     },
     500,
+  );
+}
+
+export function buildSafeBetterAuthApiErrorResponse(error: unknown): Response | null {
+  if (!(error instanceof APIError)) {
+    return null;
+  }
+  const status = error.statusCode;
+  if (!Number.isInteger(status) || status < 400 || status >= 500) {
+    return null;
+  }
+  const safeCode =
+    typeof error.body?.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.body.code)
+      ? error.body.code
+      : undefined;
+  const oauthError =
+    status === 400
+      ? 'invalid_request'
+      : status === 401
+        ? 'unauthorized'
+        : status === 403
+          ? 'access_denied'
+          : status === 404
+            ? 'not_found'
+            : status === 409
+              ? 'conflict'
+              : status === 410
+                ? 'gone'
+                : status === 429
+                  ? 'too_many_requests'
+                  : 'request_rejected';
+  return json(
+    {
+      ...(safeCode ? { code: safeCode } : {}),
+      error: oauthError,
+      error_description: 'Hosted authorization request was rejected.',
+    },
+    status,
   );
 }
 
@@ -1836,7 +2395,7 @@ function renderSignInPage(input: {
   <div id="form-status" class="meta status-live" aria-live="polite"></div>
 </div>
 <ul class="support-list">
-  <li>Open the sign-in link in this same browser. Links expire in 15 minutes.</li>
+  <li>Open the sign-in link in this same browser. Links expire in ${HOSTED_MAGIC_LINK_TTL_LABEL}.</li>
   <li>Need help? Contact <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a>.</li>
 </ul>`;
 
@@ -2034,6 +2593,16 @@ function renderSignedInAccountBody(input: {
   <p class="notice-title">${escapeHtml(statusTitle)}</p>
   <p>${escapeHtml(statusDetail)}</p>
 </div>
+<div class="scope-card account-controls" aria-labelledby="account-controls-title">
+  <p class="eyebrow-sm">Account controls</p>
+  <p id="account-controls-title" class="account-controls-title">Manage your Fluent account</p>
+  <p class="account-controls-copy">You can permanently delete your Fluent account and the personal data stored in it.</p>
+  <div class="account-control-row">
+    <a class="account-control-link account-control-link-danger" href="/account/delete">Delete account</a>
+    <a class="account-control-link" href="https://meetfluent.app/support/">Get support</a>
+  </div>
+  <p class="meta">Opening the deletion page does not remove anything. You can review what will be deleted before you confirm.</p>
+</div>
 <div class="connect-card" aria-labelledby="connect-card-title">
   <p id="connect-card-title" class="connect-title">Your setup progress</p>
   <ol class="progress-list">
@@ -2042,29 +2611,43 @@ function renderSignedInAccountBody(input: {
     ${step(firstResponse, 'First Fluent response', 'Ask Fluent to check your account and suggest a first area.')}
     ${step(firstArea, 'First area started', 'Start with Meals or Style when you are ready.')}
   </ol>
-  <div class="mobile-setup-note">
-    <p><strong>Finish plugin setup on a computer.</strong></p>
-    <p>The ChatGPT mobile app cannot add plugins. Open the Fluent setup page to share, email, or copy the same ChatGPT + Codex steps to your computer.</p>
-    <p><a href="https://meetfluent.app/setup/openai">Open mobile setup options →</a></p>
-    <p><a href="https://meetfluent.app/setup/openai?device=computer">Already on a computer? Open computer steps →</a></p>
-  </div>
-  <div class="setup-actions desktop-setup-steps">
-    <a class="btn-primary" href="https://meetfluent.app/setup/openai">Add to ChatGPT + Codex <span class="btn-arrow">→</span></a>
+  <div class="setup-actions">
+    <a class="btn-primary" href="https://chatgpt.com/plugins/plugin_asdk_app_69e294401b9881919c1f050c35710f0b">Install in ChatGPT + Codex <span class="btn-arrow">→</span></a>
     <a class="btn-secondary" href="https://meetfluent.app/setup/claude">Add to Claude</a>
   </div>
+  <p class="notice-link">Fluent's public plugin page opens with an Install plugin button; one installation works in both ChatGPT and Codex. Prefer step-by-step? <a href="https://meetfluent.app/setup/openai">Open the guided setup →</a></p>
   <p class="eyebrow-sm">Connection address</p>
   <div class="copy-row">
     <input class="copy-field" type="text" readonly value="${escapeHtml(input.mcpUrl)}" aria-label="Fluent MCP URL" />
     <button id="copy-mcp-url" type="button" class="btn-secondary" data-copy-value="${escapeHtml(input.mcpUrl)}">Copy</button>
   </div>
   <div class="notice soft"><p class="notice-title">A useful first prompt</p><p>“Check my Fluent account and help me choose one area to set up.”</p></div>
-  <p class="notice-link">Full setup guide: <a href="${escapeHtml(FLUENT_CONNECT_DOCS_URL)}">${escapeHtml(FLUENT_CONNECT_DOCS_URL)}</a></p>
+  <p class="notice-link">Full setup guide: <a href="${escapeHtml(FLUENT_CONNECT_DOCS_URL)}">Open the Fluent setup guide →</a></p>
 </div>
 <div class="actions">
   <button id="sign-out-current-account" type="button" class="btn-secondary">Use a different account</button>
 </div>
 <div id="signed-in-status" class="meta status-live" aria-live="polite"></div>
 ${provisioningWarning}`;
+}
+
+// Shown on the consent page so the step after approval is never a blank. The
+// prompts must work on an empty account and stay host-neutral.
+export const FLUENT_FIRST_PROMPT_EXAMPLES = [
+  'Plan three dinners for this week.',
+  'Add my navy wool coat to my Fluent closet.',
+] as const;
+const FLUENT_CONSENT_APPROVED_STATUS =
+  `Approved. Returning you to your AI app. Start a new conversation and try: “${FLUENT_FIRST_PROMPT_EXAMPLES[0]}”`;
+const FLUENT_CONSENT_DENIED_STATUS = 'Access denied. Returning you to your AI app. Fluent was not connected.';
+
+function renderConsentNextStep(): string {
+  const prompts = FLUENT_FIRST_PROMPT_EXAMPLES.map((prompt) => `<li>“${escapeHtml(prompt)}”</li>`).join('');
+  return `<div class="notice soft consent-next-step">
+  <p class="notice-title">After you approve</p>
+  <p>You will return to your AI app. Start a new conversation and try one of these. They work even before you have added anything to Fluent:</p>
+  <ul class="support-list">${prompts}</ul>
+</div>`;
 }
 
 function renderConsentPage(input: {
@@ -2116,6 +2699,7 @@ function renderConsentPage(input: {
   <p class="notice-title">Connecting as <strong>${connectingAs}</strong></p>
   <p>Not you? Use a different account before approving this connection.</p>
 </div>
+${renderConsentNextStep()}
 <div class="actions">
   <button id="approve" class="btn-primary">Approve <span class="btn-arrow">→</span></button>
   <button id="deny" class="btn-secondary">Deny</button>
@@ -2159,7 +2743,11 @@ async function submitConsent(accept) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(consentErrorMessage(data));
-    if (data?.url) { window.location.assign(data.url); return; }
+    if (data?.url) {
+      status.textContent = accept ? ${JSON.stringify(FLUENT_CONSENT_APPROVED_STATUS)} : ${JSON.stringify(FLUENT_CONSENT_DENIED_STATUS)};
+      window.location.assign(data.url);
+      return;
+    }
     throw new Error('Fluent approved the connection, but the AI app did not provide a return link. Return to the app and start the connection again.');
   } catch (error) {
     status.classList.add('status-error');
@@ -2261,7 +2849,7 @@ function renderAccountDeletionPage(input: {
     body: `${actionNotice}
 <p class="eyebrow">⟩ Fluent account deletion</p>
 <h1 class="display">Delete your <span class="accent">Fluent</span> account</h1>
-<p class="lede">This page handles both provisioned Fluent accounts and signed-in early-access request accounts. Confirmation starts an immediate deletion pass, records proof of fulfillment, and calls out any retention exception before the request is done.</p>
+<p class="lede">This page handles both provisioned Fluent accounts and signed-in access request accounts. Confirmation starts an immediate deletion pass, records proof of fulfillment, and calls out any retention exception before the request is done.</p>
 ${statusCard}
 ${requestMeta}
 <div class="scope-card">
@@ -2279,7 +2867,7 @@ ${requestMeta}
 </div>
 ${actions}
 <ul class="support-list">
-  <li>Deletion attempts to finish immediately after confirmation for both provisioned Fluent accounts and early-access request accounts.</li>
+  <li>Deletion attempts to finish immediately after confirmation for both provisioned Fluent accounts and access request accounts.</li>
   <li>If the automatic purge fails, Fluent moves the request into manual review with the last error recorded.</li>
   <li>If deletion completes, connected clients lose OAuth access immediately and must not expect Fluent to reconnect.</li>
   <li>Need Fluent access instead of deletion? Start free access at <a href="${escapeHtml(input.support.waitlistUrl)}">${escapeHtml(input.support.waitlistUrl)}</a>.</li>
@@ -2503,7 +3091,7 @@ function renderAuthShell(input: { body: string; title: string }): string {
       font-size: 12.5px;
     }
     input[type="email"]::placeholder, input[type="password"]::placeholder { color: var(--faint); }
-    input:focus-visible, button:focus-visible {
+    input:focus-visible, button:focus-visible, .account-control-link:focus-visible {
       outline: none; border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(212,196,168,0.18);
     }
@@ -2565,13 +3153,14 @@ function renderAuthShell(input: { body: string; title: string }): string {
     .connect-card {
       margin-top: 20px; padding: 20px; border-radius: 14px;
       background: rgba(0,0,0,0.22); border: 1px solid var(--border);
-      display: grid; gap: 16px;
+      display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px;
     }
     .connect-title {
       margin: 0; color: var(--ink-strong); font-weight: 600; font-size: 15px;
     }
     .copy-row {
       display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px;
+      min-width: 0; width: 100%;
     }
     .quick-steps { display: grid; gap: 12px; }
     .progress-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
@@ -2586,18 +3175,6 @@ function renderAuthShell(input: { body: string; title: string }): string {
     .reviewer-sign-in { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
     .reviewer-sign-in summary, details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
     .reviewer-sign-in form { margin-top: 14px; }
-    .mobile-setup-note {
-      display: none; padding: 14px 16px; border-radius: 12px;
-      background: rgba(250,249,246,0.03); border: 1px solid var(--border);
-    }
-    .mobile-setup-note p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
-    .mobile-setup-note p + p { margin-top: 8px; }
-    .mobile-setup-note strong { color: var(--ink-strong); }
-    .mobile-setup-note a {
-      color: var(--accent-strong); text-decoration-color: rgba(225,211,186,0.5);
-      text-underline-offset: 3px;
-    }
-    .mobile-setup-note a:hover { color: var(--ink-strong); text-decoration-color: var(--ink-strong); }
     .quick-step-card {
       padding: 14px 16px; border-radius: 12px;
       background: rgba(250,249,246,0.03); border: 1px solid var(--border);
@@ -2612,10 +3189,6 @@ function renderAuthShell(input: { body: string; title: string }): string {
     .connect-card .notice-link a {
       color: var(--accent-strong); text-decoration-color: rgba(225,211,186,0.5);
       text-underline-offset: 3px;
-    }
-    @media (max-width: 720px), (pointer: coarse) {
-      .mobile-setup-note { display: block; }
-      .desktop-setup-steps { display: none; }
     }
     .connect-card .notice-link a:hover { color: var(--ink-strong); text-decoration-color: var(--ink-strong); }
     .client-card {
@@ -2644,6 +3217,20 @@ function renderAuthShell(input: { body: string; title: string }): string {
       padding: 18px; border-radius: 14px; margin: 4px 0 22px;
       background: rgba(0,0,0,0.22); border: 1px solid var(--border);
     }
+    .account-controls { margin-top: 20px; }
+    .account-controls-title { margin: 0; color: var(--ink-strong); font-weight: 600; font-size: 15px; }
+    .account-controls-copy { margin: 8px 0 16px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .account-control-row { display: flex; flex-wrap: wrap; gap: 10px; }
+    .account-control-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 140px; padding: 12px 16px; border-radius: 10px;
+      color: var(--ink); border: 1px solid var(--border-strong);
+      font-size: 14px; font-weight: 600; text-decoration: none;
+      transition: color .18s ease, border-color .18s ease, background .18s ease;
+    }
+    .account-control-link:hover { color: var(--ink-strong); border-color: var(--ink); }
+    .account-control-link-danger { color: var(--warn); border-color: rgba(224,155,125,0.45); }
+    .account-control-link-danger:hover { color: #f0b49a; border-color: var(--warn); background: rgba(224,155,125,0.06); }
     .scope-list { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 10px; }
     .scope-row { display: grid; gap: 4px; }
     .scope-code {

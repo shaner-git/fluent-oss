@@ -218,7 +218,7 @@ export function buildStyleImportBundle(
   const importSource = asNullableString(options.importSource) ?? null;
   const profile: StyleProfileDocument = {
     ...defaultStyleProfile(),
-    closetCoverage: null,
+    closetCoverage: 'unknown',
     importedClosetAt: importedAt,
     importedClosetConfirmed: false,
     importSource,

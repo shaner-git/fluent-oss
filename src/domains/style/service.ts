@@ -1,8 +1,10 @@
+import { findApprovedStyleCatalogPhoto } from './onboarding-calibration';
+import {photoVersions,reconcilePhotoLibrary,changePhotoArrangement, type PhotoLibraryAction, type PhotoLibraryState} from './photo-library';
 import type { MutationProvenance } from '../../auth';
 import type { InternalPurchaseContext } from '../budgets/service';
 import path from 'node:path';
 import type { FluentBlobStore, FluentDatabase } from '../../storage';
-import { StyleRepository } from './repository';
+import { StylePhotoArtifactReleasedError, StyleRepository } from './repository';
 import {
   asBoolean,
   asNullableNumber,
@@ -36,7 +38,18 @@ import {
   safeParseJson,
   stringifyJson,
 } from './helpers';
-import { buildSignedStyleImageUrl, buildStyleAssetKey, buildStyleImageUrl, parseOwnedStyleAsset } from './media';
+import {
+  buildSignedStyleImageUrl,
+  buildStyleAssetKey,
+  buildStyleDerivedImageAssetKey,
+  buildStyleImageUrl,
+  normalizeStyleRemoteImageSourceUrl,
+  assertStyleImageDataUrl,
+  StyleCatalogMediaUnusableError,
+  styleImageNotAttachedReason,
+  parseOwnedStyleAsset,
+} from './media';
+import { canonicalizeStyleItemRecord } from './metadata-normalization';
 import {
   buildStyleCalibrationSignal,
   buildStyleItemCalibration,
@@ -406,6 +419,9 @@ const STYLE_ITEM_PROFILE_FIELDS: StyleItemProfileField[] = [
   'descriptorConfidence',
   'dressCode',
   'fabricHand',
+  'feedbackNote',
+  'feedbackSignals',
+  'feedbackUpdatedAt',
   'fitObservations',
   'fitVerdict',
   'itemType',
@@ -425,6 +441,9 @@ const STYLE_ITEM_PROFILE_FIELDS: StyleItemProfileField[] = [
   'useCases',
   'avoidUseCases',
   'visualWeight',
+  'wearUnderstanding',
+  'worksFor',
+  'avoidFor',
 ];
 
 const STYLE_ITEM_PROFILE_CONTROL_FIELDS = new Set<StyleItemProfileField>([
@@ -494,6 +513,45 @@ export interface StyleDuplicateCandidate {
   signals: StyleDuplicateCandidateSignals;
 }
 
+export type StyleCatalogQualityMode = 'host_generated' | 'inspected_source';
+
+export interface StyleCatalogQualityReviewInput {
+  catalogMode: StyleCatalogQualityMode;
+  catalogPhotoId: string;
+  sourcePhotoId?: string | null;
+}
+
+export interface StyleAtomicCatalogMediaInput {
+  backgroundRemoved?: boolean | null;
+  catalogHostedFileDownloadUrl?: string | null;
+  catalogImageDataUrl?: string | null;
+  catalogImageUrl?: string | null;
+  imageOrigin: 'host_generated' | 'user_source';
+  retainedSourceHostedFileDownloadUrl?: string | null;
+  retainedSourceImageDataUrl?: string | null;
+  retainedSourceImageType?: 'alternate' | 'fit' | null;
+}
+
+// Raised when a photo write was built from a photo set that changed before it could commit.
+// Nothing was written; callers re-read and rebuild (setFluentStyleItemImage retries).
+const STYLE_PROVENANCE_WRITE_MAX_ATTEMPTS = 5;
+
+// Marks an error thrown AFTER this write's photo rows committed, so callers can report the photo as
+// saved from the writer's own evidence rather than inferring it from the item's photo set.
+export function markStyleWriteCommitted(error: unknown): unknown {
+  if (error && typeof error === 'object') {
+    Object.defineProperty(error, 'styleWriteCommitted', { configurable: true, value: true });
+  }
+  return error;
+}
+
+export class StylePhotoSetConflictError extends Error {
+  constructor(itemId: string) {
+    super(`The photos on ${itemId} changed while this photo was being saved. Nothing was saved; try again.`);
+    this.name = 'StylePhotoSetConflictError';
+  }
+}
+
 export class StyleService {
   private readonly repository: StyleRepository;
 
@@ -526,7 +584,12 @@ export class StyleService {
 
   async updateProfile(input: { profile: unknown; provenance: MutationProvenance }): Promise<StyleProfileRecord> {
     const before = await this.getProfile();
+    const requested = asRecord(parseJsonLike(input.profile)) ?? {};
     const patch = normalizeStyleProfilePatch(input.profile);
+    delete patch.closetCoverageConfirmedAt;
+    if (Object.hasOwn(requested, 'closetCoverage')) {
+      patch.closetCoverageConfirmedAt = new Date().toISOString();
+    }
     const merged = mergeStyleProfile(before.raw, patch);
 
     await this.repository.upsertProfile(JSON.stringify(merged));
@@ -594,7 +657,9 @@ export class StyleService {
     const deliverablePhotoCoverage = activeItems.length > 0 ? Number((deliverablePhotoCount / activeItems.length).toFixed(2)) : 0;
     const usableProfileCoverage = activeItems.length > 0 ? Number((usableProfileCount / activeItems.length).toFixed(2)) : 0;
     const stylistDescriptorCoverage = activeItems.length > 0 ? Number((stylistDescriptorCount / activeItems.length).toFixed(2)) : 0;
-    const evidenceGapCount = (await this.listEvidenceGaps({ priorityFilter: 'actionable' })).items.length;
+    const activeItemIds = new Set(activeItems.map((item) => item.id));
+    const evidenceGapCount = (await this.listEvidenceGaps({ priorityFilter: 'actionable' })).items
+      .filter((gap) => activeItemIds.has(gap.itemId)).length;
 
     return {
       activeItemCount: activeItems.length,
@@ -643,7 +708,9 @@ export class StyleService {
 
   async getOnboardingCalibration(): Promise<StyleOnboardingCalibrationRecord> {
     const [profile, items] = await Promise.all([this.getProfile(), this.listItems()]);
-    return buildStyleOnboardingCalibration({ profile, items });
+    const activeItemIds = items.filter((item) => item.status === 'active').map((item) => item.id);
+    const provenanceByItemId = await this.getItemProvenanceBatch(activeItemIds);
+    return buildStyleOnboardingCalibration({ profile, items, provenanceByItemId });
   }
 
   async recordCalibrationResponse(input: {
@@ -712,7 +779,14 @@ export class StyleService {
         signal.source === 'user_confirmed' &&
         ['aesthetic', 'color', 'formality', 'silhouette'].includes(signal.kind),
     );
-    const beforeCalibration = buildStyleOnboardingCalibration({ profile: before, items });
+    const beforeProvenanceByItemId = await this.getItemProvenanceBatch(
+      items.filter((item) => item.status === 'active').map((item) => item.id),
+    );
+    const beforeCalibration = buildStyleOnboardingCalibration({
+      profile: before,
+      items,
+      provenanceByItemId: beforeProvenanceByItemId,
+    });
     const merged = projectStyleCalibrationSignalsToProfile(mergeStyleProfile(before.raw, {
       ...profilePatch,
       calibrationSignals,
@@ -797,10 +871,11 @@ export class StyleService {
   }
 
   async listItems(): Promise<StyleItemRecord[]> {
-    const [itemRows, photoRows, profileRows] = await Promise.all([
+    const [itemRows, photoRows, profileRows, productRows] = await Promise.all([
       this.repository.listItemRows(),
       this.repository.listPhotoRows(),
       this.repository.listItemProfileRows(),
+      this.repository.listProductReferences(),
     ]);
 
     const photoMap = new Map<string, StylePhotoRecord[]>();
@@ -822,7 +897,9 @@ export class StyleService {
       });
     }
 
-    return itemRows.map((row) => ({
+    const products = new Map(productRows.map(row => [row.item_id, {revision:row.revision,reference:JSON.parse(row.reference_json)}]));
+    return itemRows.map((row) => canonicalizeStyleItemRecord({
+      productReference: products.get(row.id) ?? {revision:0,reference:null},
       brand: row.brand,
       category: row.category,
       comparatorKey: normalizeStyleComparatorKey(row.comparator_key),
@@ -844,18 +921,46 @@ export class StyleService {
     }));
   }
 
+  async saveProductReference(itemId: string, input: import('./product-reference').ProductEnrichment) {
+    const { productEnrichmentSchema } = await import('./product-reference');
+    const parsed = productEnrichmentSchema.parse(input);
+    const item = await this.repository.getItemRow(itemId);
+    if (!item || item.status !== 'active') throw Error('Item no longer available.');
+    const current = await this.repository.readProductReference(itemId);
+    const json = JSON.stringify(parsed.reference);
+    if (current?.operation_id === parsed.operation_id) {
+      if (current.reference_json !== json) throw Error('Operation ID already used for different product information.');
+      return { revision: current.revision, reference: parsed.reference };
+    }
+    if ((current?.revision ?? 0) !== parsed.expected_revision) throw Error('Product information changed. Read the item again before saving.');
+    if (current) {
+      const previous = JSON.parse(current.reference_json) as import('./product-reference').ProductReference;
+      if (previous.status === 'confirmed' && parsed.reference.status === 'candidate') throw Error('An uncertain candidate cannot replace a confirmed product.');
+      if (previous.status === 'rejected' && previous.product_url === parsed.reference.product_url && parsed.reference.status !== 'rejected' && parsed.reference.match_basis !== 'user_confirmed') throw Error('This product was rejected. Ask before matching it again.');
+      const changedKnownFact = Object.entries(previous.facts).some(([key, fact]) => fact?.value !== parsed.reference.facts[key as keyof typeof previous.facts]?.value);
+      const changedIdentity = previous.product_url !== parsed.reference.product_url || previous.brand !== parsed.reference.brand || previous.name !== parsed.reference.name || previous.product_code !== parsed.reference.product_code;
+      if (previous.status === 'confirmed' && parsed.reference.match_basis !== 'user_confirmed' && (changedIdentity || changedKnownFact || parsed.reference.status !== 'confirmed')) throw Error('Confirm conflicting product information before replacing it.');
+    }
+    await this.repository.saveProductReference(itemId, parsed.expected_revision, parsed.operation_id, json);
+    const saved = await this.repository.readProductReference(itemId);
+    if (saved?.operation_id !== parsed.operation_id) throw Error('Product information changed again. Read the latest item.');
+    return { revision: saved.revision, reference: parsed.reference };
+  }
+
   async getItem(itemId: string): Promise<StyleItemRecord | null> {
     const row = await this.repository.getItemRow(itemId);
     if (!row) {
       return null;
     }
 
-    const [photos, profile] = await Promise.all([
+    const [photos, profile, product] = await Promise.all([
       this.repository.listPhotoRows(itemId),
       this.repository.getItemProfileRow(itemId),
+      this.repository.readProductReference(itemId),
     ]);
 
-    return {
+    return canonicalizeStyleItemRecord({
+      productReference: { revision: product?.revision ?? 0, reference: product ? JSON.parse(product.reference_json) : null },
       brand: row.brand,
       category: row.category,
       comparatorKey: normalizeStyleComparatorKey(row.comparator_key),
@@ -883,18 +988,55 @@ export class StyleService {
       subcategory: row.subcategory,
       tenantId: row.tenant_id,
       updatedAt: row.updated_at,
-    };
+    });
   }
 
   async upsertItem(input: {
+    expectedDuplicateMergeId?: string | null;
     item: unknown;
     provenance: MutationProvenance;
     sourceSnapshot?: unknown;
   }): Promise<StyleItemRecord> {
     const payload = normalizeStyleItemInput(input.item);
     const itemId = asNullableString(payload.id) ?? `style-item:${crypto.randomUUID()}`;
+    // Public reads return a canonical presentation projection. Partial writes must merge against the
+    // stored tuple so an unrelated edit cannot overwrite extracted provenance with display aliases.
+    const storedBefore = await this.repository.getItemRow(itemId);
     const before = await this.getItem(itemId);
     const beforeProvenance = await this.getItemProvenance(itemId);
+    const requestedStatus = normalizeStyleItemStatus(payload.status, normalizeStyleItemStatus(storedBefore?.status, 'active'));
+    const duplicateMergeRedirect = asRecord(asRecord(beforeProvenance?.sourceSnapshot)?.duplicateMergeRedirect);
+    const duplicateMergeTargetId = asNullableString(duplicateMergeRedirect?.targetItemId);
+    const duplicateMergeId = asNullableString(duplicateMergeRedirect?.mergeId);
+    const duplicateMergeUndoneAt = asNullableString(duplicateMergeRedirect?.undoneAt);
+    if (storedBefore?.status === 'archived' && requestedStatus === 'active' && duplicateMergeTargetId && !duplicateMergeUndoneAt) {
+      if (!duplicateMergeId && input.expectedDuplicateMergeId) {
+        throw new Error('Style duplicate restore rejected a cycle identity for a legacy unbound merge.');
+      }
+      if (duplicateMergeId && input.expectedDuplicateMergeId !== duplicateMergeId) {
+        throw new Error('Style duplicate restore rejected a stale merge cycle identity.');
+      }
+      const transferredPhotoIds = Array.isArray(duplicateMergeRedirect?.transferredPhotoIds)
+        ? duplicateMergeRedirect.transferredPhotoIds
+          .map((photoId) => asNullableString(photoId))
+          .filter((photoId): photoId is string => Boolean(photoId))
+        : [];
+      const sourcePrimaryPhotoId = asNullableString(duplicateMergeRedirect?.sourcePrimaryPhotoId);
+      const restored = await this.repository.restoreDuplicateMergedItem({
+        mergeId: duplicateMergeId,
+        sourceItemId: itemId,
+        sourcePhotoIds: transferredPhotoIds,
+        sourcePrimaryPhotoId,
+        targetItemId: duplicateMergeTargetId,
+      });
+      if (
+        restored.sourceStatus !== 'active'
+        || restored.targetStatus !== 'active'
+        || restored.restoredPhotoCount !== transferredPhotoIds.length
+      ) {
+        throw new Error(`Style duplicate restore did not produce the required canonical state: ${JSON.stringify(restored)}.`);
+      }
+    }
     const hasField = (primaryKey: string, aliasKey?: string) => primaryKey in payload || (aliasKey ? aliasKey in payload : false);
     const mergedString = (primaryKey: string, aliasKey: string | undefined, fallback: string | null) =>
       hasField(primaryKey, aliasKey) ? asNullableString(payload[primaryKey] ?? (aliasKey ? payload[aliasKey] : undefined)) : fallback;
@@ -903,28 +1045,28 @@ export class StyleService {
         ? asNullableNumber(payload[primaryKey] ?? (aliasKey ? payload[aliasKey] : undefined))
         : fallback;
     const comparatorKey = inferStyleComparatorKey({
-      category: mergedString('category', undefined, before?.category ?? null),
+      category: mergedString('category', undefined, storedBefore?.category ?? null),
       comparatorKey: payload.comparator_key ?? payload.comparatorKey,
-      name: mergedString('name', undefined, before?.name ?? null),
+      name: mergedString('name', undefined, storedBefore?.name ?? null),
       profile: before?.profile?.raw ?? null,
-      subcategory: mergedString('subcategory', undefined, before?.subcategory ?? null),
+      subcategory: mergedString('subcategory', undefined, storedBefore?.subcategory ?? null),
       tags: before?.profile?.raw.tags ?? [],
     });
 
     await this.repository.upsertItem({
-      brand: mergedString('brand', undefined, before?.brand ?? null),
-      category: mergedString('category', undefined, before?.category ?? null),
-      comparatorKey: comparatorKey === 'unknown' ? before?.comparatorKey ?? 'unknown' : comparatorKey,
-      colorFamily: mergedString('color_family', 'colorFamily', before?.colorFamily ?? null),
-      colorHex: mergedString('color_hex', 'colorHex', before?.colorHex ?? null),
-      colorName: mergedString('color_name', 'colorName', before?.colorName ?? null),
-      formality: mergedNumber('formality', undefined, before?.formality ?? null),
+      brand: mergedString('brand', undefined, storedBefore?.brand ?? null),
+      category: mergedString('category', undefined, storedBefore?.category ?? null),
+      comparatorKey: comparatorKey === 'unknown' ? storedBefore?.comparator_key ?? 'unknown' : comparatorKey,
+      colorFamily: mergedString('color_family', 'colorFamily', storedBefore?.color_family ?? null),
+      colorHex: mergedString('color_hex', 'colorHex', storedBefore?.color_hex ?? null),
+      colorName: mergedString('color_name', 'colorName', storedBefore?.color_name ?? null),
+      formality: mergedNumber('formality', undefined, storedBefore?.formality ?? null),
       id: itemId,
-      legacyItemId: mergedNumber('legacy_item_id', 'legacyItemId', before?.legacyItemId ?? null),
-      name: mergedString('name', undefined, before?.name ?? null),
-      size: mergedString('size', undefined, before?.size ?? null),
-      status: normalizeStyleItemStatus(payload.status, before?.status ?? 'active'),
-        subcategory: mergedString('subcategory', undefined, before?.subcategory ?? null),
+      legacyItemId: mergedNumber('legacy_item_id', 'legacyItemId', storedBefore?.legacy_item_id ?? null),
+      name: mergedString('name', undefined, storedBefore?.name ?? null),
+      size: mergedString('size', undefined, storedBefore?.size ?? null),
+      status: requestedStatus,
+      subcategory: mergedString('subcategory', undefined, storedBefore?.subcategory ?? null),
     });
 
     const hasFieldEvidenceInput = hasField('field_evidence', 'fieldEvidence');
@@ -936,7 +1078,14 @@ export class StyleService {
     const nextTechnicalMetadata = hasTechnicalMetadataInput
       ? parseJsonLike(payload.technical_metadata ?? payload.technicalMetadata)
       : beforeProvenance?.technicalMetadata;
-    const nextSourceSnapshot = hasSourceSnapshotInput ? input.sourceSnapshot : beforeProvenance?.sourceSnapshot;
+    const requestedSourceSnapshot = hasSourceSnapshotInput ? parseJsonLike(input.sourceSnapshot) : undefined;
+    const existingSourceSnapshotRecord = asRecord(parseJsonLike(beforeProvenance?.sourceSnapshot));
+    const requestedSourceSnapshotRecord = asRecord(requestedSourceSnapshot);
+    const nextSourceSnapshot = hasSourceSnapshotInput
+      ? requestedSourceSnapshotRecord && existingSourceSnapshotRecord
+        ? { ...existingSourceSnapshotRecord, ...requestedSourceSnapshotRecord }
+        : requestedSourceSnapshot
+      : beforeProvenance?.sourceSnapshot;
     const fieldEvidenceJson = stringifyJson(nextFieldEvidence);
     const technicalMetadataJson = stringifyJson(nextTechnicalMetadata);
     const sourceSnapshotJson = stringifyJson(nextSourceSnapshot);
@@ -963,11 +1112,11 @@ export class StyleService {
         method: 'heuristic_bootstrap',
         rawJson: JSON.stringify(
             deriveBaselineStyleItemProfile({
-            category: mergedString('category', undefined, before?.category ?? null),
-            comparatorKey: comparatorKey === 'unknown' ? before?.comparatorKey ?? 'unknown' : comparatorKey,
-            formality: mergedNumber('formality', undefined, before?.formality ?? null),
-            name: mergedString('name', undefined, before?.name ?? null),
-            subcategory: mergedString('subcategory', undefined, before?.subcategory ?? null),
+            category: mergedString('category', undefined, storedBefore?.category ?? null),
+            comparatorKey: comparatorKey === 'unknown' ? storedBefore?.comparator_key ?? 'unknown' : comparatorKey,
+            formality: mergedNumber('formality', undefined, storedBefore?.formality ?? null),
+            name: mergedString('name', undefined, storedBefore?.name ?? null),
+            subcategory: mergedString('subcategory', undefined, storedBefore?.subcategory ?? null),
           }),
         ),
         source: 'style_auto_bootstrap',
@@ -997,6 +1146,7 @@ export class StyleService {
   // (replacing the heuristic stub), and the review block. Rich metadata + the review flag ride in the
   // provenance columns because normalizeStyleItemProfile strips unknown keys from profile.raw (D2/R1).
   async createItem(input: {
+    atomicCatalogMedia?: StyleAtomicCatalogMediaInput | null;
     item: unknown;
     profile?: unknown;
     technicalMetadata?: unknown;
@@ -1005,6 +1155,7 @@ export class StyleService {
     hostModel?: string | null;
     hasImage?: boolean;
     onDuplicate?: 'warn' | 'force' | 'skip';
+    duplicateCandidateId?: string | null;
     clientToken?: string | null;
     batchId?: string | null;
     provenance: MutationProvenance;
@@ -1017,6 +1168,7 @@ export class StyleService {
     normalizationNotes: string[];
     profileMethod: 'heuristic_bootstrap' | 'host_text' | 'host_vision';
     status: 'created' | 'duplicate_warning' | 'skipped_duplicate';
+    supersededItemId: string | null;
   }> {
     const raw = normalizeStyleItemInput(input.item);
     const notes: string[] = [];
@@ -1101,39 +1253,137 @@ export class StyleService {
       (overallConfidence !== null && overallConfidence < 0.6) ||
       (!hasHostProfile && !hasFieldEvidence);
 
+    const batchId = input.batchId?.trim() || null;
+
     // Idempotency (D13) FIRST, before dedup: a client_token maps to a deterministic id (hash of the EXACT
     // token — collision-safe, unlike sanitize+truncate), so a retried create returns the SAME row rather
     // than minting a new uuid or being flagged as a duplicate of itself.
-    const itemId = input.clientToken
-      ? `style-item:ct:${await hashClientToken(input.clientToken)}`
+    const clientTokenHash = input.clientToken ? await hashClientToken(input.clientToken) : null;
+    const itemId = clientTokenHash
+      ? `style-item:ct:${clientTokenHash}`
       : `style-item:${crypto.randomUUID()}`;
-    if (input.clientToken) {
-      const existing = await this.getItem(itemId);
-      if (existing) {
-        return { duplicateCandidates: [], idempotentReplay: true, item: existing, lowConfidenceFields, normalizationNotes: notes, profileMethod, status: 'created' };
+    const existingClientTokenItem = input.clientToken ? await this.getItem(itemId) : null;
+    const correctingExistingDuplicate = Boolean(
+      existingClientTokenItem
+      && input.onDuplicate === 'skip'
+      && input.duplicateCandidateId
+      && input.duplicateCandidateId !== existingClientTokenItem.id,
+    );
+    if (existingClientTokenItem?.status === 'active' && !correctingExistingDuplicate) {
+      const replayProvenance = await this.getItemProvenance(existingClientTokenItem.id);
+      const replayReview = asRecord(asRecord(replayProvenance?.technicalMetadata)?.review);
+      const replayDuplicateCandidates = Array.isArray(replayReview?.possibleDuplicateCandidates)
+        ? replayReview.possibleDuplicateCandidates.flatMap((candidate): StyleDuplicateCandidate[] => {
+            const record = asRecord(candidate);
+            const signals = asRecord(record?.signals);
+            if (!record || !signals || typeof record.id !== 'string' || typeof record.reason !== 'string' || typeof record.score !== 'number') {
+              return [];
+            }
+            return [{
+              id: record.id,
+              name: typeof record.name === 'string' ? record.name : null,
+              reason: record.reason,
+              score: record.score,
+              signals: signals as StyleDuplicateCandidateSignals,
+            }];
+          })
+        : [];
+      return { duplicateCandidates: replayDuplicateCandidates, idempotentReplay: true, item: existingClientTokenItem, lowConfidenceFields, normalizationNotes: notes, profileMethod, status: 'created', supersededItemId: null };
+    }
+    if (existingClientTokenItem?.status === 'archived') {
+      const redirect = await this.resolveDuplicateMergeRedirect(existingClientTokenItem.id);
+      if (redirect?.item?.status === 'active') {
+        return {
+          duplicateCandidates: [],
+          idempotentReplay: true,
+          item: redirect.item,
+          lowConfidenceFields,
+          normalizationNotes: notes,
+          profileMethod,
+          status: 'skipped_duplicate',
+          supersededItemId: existingClientTokenItem.id,
+        };
+      }
+      if (redirect) {
+        throw new Error(`Style item ${existingClientTokenItem.id} was merged and its canonical closet item is unavailable.`);
+      }
+    }
+    if (clientTokenHash && !existingClientTokenItem) {
+      const duplicateReplayItem = await this.resolveDuplicateCreateIdempotency(clientTokenHash);
+      if (duplicateReplayItem) {
+        return {
+          duplicateCandidates: [{
+            id: duplicateReplayItem.id,
+            name: duplicateReplayItem.name,
+            reason: 'previous client_token resolved to this existing closet item',
+            score: 1,
+            signals: {
+              brand: duplicateReplayItem.brand ?? undefined,
+              colorFamily: duplicateReplayItem.colorFamily ?? undefined,
+              colorName: duplicateReplayItem.colorName ?? undefined,
+              size: duplicateReplayItem.size ?? undefined,
+              subcategory: duplicateReplayItem.subcategory ?? undefined,
+            },
+          }],
+          idempotentReplay: true,
+          item: duplicateReplayItem,
+          lowConfidenceFields,
+          normalizationNotes: notes,
+          profileMethod,
+          status: 'skipped_duplicate',
+          supersededItemId: null,
+        };
       }
     }
 
-    // Dedup-on-add: warn (default) writes nothing; skip returns the match; force creates anyway.
-    const duplicateCandidates = await this.findStyleItemDuplicates({ brand, colorFamily: colorFamily ?? colorName, comparatorKey, name });
+    // Dedup-on-add: warn (default) writes nothing. A resolution must name the candidate it resolves;
+    // silently choosing the top score loses user intent whenever more than one similar item exists.
+    const duplicateCandidates = (await this.findStyleItemDuplicates({ brand, colorFamily: colorFamily ?? colorName, comparatorKey, name }))
+      .filter((candidate) => candidate.id !== existingClientTokenItem?.id);
     const onDuplicate = input.onDuplicate ?? 'warn';
+    const duplicateCandidateId = asNullableString(input.duplicateCandidateId);
+    const selectedDuplicate = duplicateCandidateId
+      ? duplicateCandidates.find((candidate) => candidate.id === duplicateCandidateId) ?? null
+      : null;
+    if (onDuplicate !== 'warn' && !selectedDuplicate) {
+      throw new Error('fluent_create_style_item duplicate resolution requires duplicate_candidate_id matching a returned candidate.');
+    }
     if (duplicateCandidates.length > 0 && onDuplicate !== 'force') {
+      const matchedItem = onDuplicate === 'skip' && selectedDuplicate
+        ? await this.getItem(selectedDuplicate.id)
+        : null;
+      // Resolution becomes durable only with the successful Catalog/source photo
+      // transaction. Returning the intent here prevents a failed attachment from
+      // partially rewriting the canonical item or archiving an earlier token row.
       return {
         duplicateCandidates,
         idempotentReplay: false,
-        item: onDuplicate === 'skip' ? await this.getItem(duplicateCandidates[0].id) : null,
+        item: matchedItem,
         lowConfidenceFields,
         normalizationNotes: notes,
         profileMethod,
         status: onDuplicate === 'skip' ? 'skipped_duplicate' : 'duplicate_warning',
+        supersededItemId: matchedItem && existingClientTokenItem && existingClientTokenItem.id !== matchedItem.id
+          ? existingClientTokenItem.id
+          : null,
       };
     }
 
     // Review block + technical metadata -> provenance columns (profile.raw strips unknown keys, D2).
     const technicalMetadata = {
       ...(asRecord(parseJsonLike(input.technicalMetadata)) ?? {}),
+      ...(selectedDuplicate ? {
+        duplicateResolution: {
+          batchId,
+          candidateId: selectedDuplicate.id,
+          clientToken: input.clientToken ?? null,
+          decision: 'keep_both',
+          reason: selectedDuplicate.reason,
+          resolvedAt: new Date().toISOString(),
+        },
+      } : {}),
       review: {
-        batchId: input.batchId ?? null,
+        batchId,
         clientToken: input.clientToken ?? null,
         hostModel: input.hostModel ?? null,
         lowConfidenceFields,
@@ -1142,6 +1392,53 @@ export class StyleService {
         overallConfidence,
       },
     };
+
+    const onboardingSourceSnapshot = {
+      ...(asRecord(parseJsonLike(input.sourceSnapshot)) ?? {}),
+      createdVia: 'fluent_create_style_item',
+      hostModel: input.hostModel ?? null,
+      onboardingSource: profileMethod,
+      source: hasImage ? 'host_vision' : 'host_text',
+      ...(selectedDuplicate ? {
+        distinguishedFrom: selectedDuplicate.id,
+        duplicateDecision: 'keep_both',
+      } : {}),
+    };
+    if (input.atomicCatalogMedia) {
+      const created = await this.createItemWithAtomicCatalogMedia({
+        fieldEvidence,
+        hasHostProfile,
+        item: {
+          brand,
+          category,
+          colorFamily,
+          colorHex,
+          colorName,
+          comparatorKey,
+          formality,
+          id: itemId,
+          name,
+          size,
+          subcategory,
+        },
+        media: input.atomicCatalogMedia,
+        profile: profileDoc,
+        profileMethod,
+        provenance: input.provenance,
+        sourceSnapshot: onboardingSourceSnapshot,
+        technicalMetadata,
+      });
+      return {
+        duplicateCandidates: selectedDuplicate ? [selectedDuplicate] : [],
+        idempotentReplay: false,
+        item: created,
+        lowConfidenceFields,
+        normalizationNotes: notes,
+        profileMethod,
+        status: 'created',
+        supersededItemId: null,
+      };
+    }
 
     const created = await this.upsertItem({
       item: {
@@ -1161,13 +1458,7 @@ export class StyleService {
         technical_metadata: technicalMetadata,
       },
       provenance: input.provenance,
-      sourceSnapshot: {
-        ...(asRecord(parseJsonLike(input.sourceSnapshot)) ?? {}),
-        createdVia: 'fluent_create_style_item',
-        hostModel: input.hostModel ?? null,
-        onboardingSource: profileMethod,
-        source: hasImage ? 'host_vision' : 'host_text',
-      },
+      sourceSnapshot: onboardingSourceSnapshot,
     });
 
     // Replace upsertItem's heuristic bootstrap with the host understanding ONLY when the host supplied a
@@ -1185,23 +1476,22 @@ export class StyleService {
     }
 
     return {
-      duplicateCandidates: [],
+      duplicateCandidates: selectedDuplicate ? [selectedDuplicate] : [],
       idempotentReplay: false,
       item: await this.getItem(created.id),
       lowConfidenceFields,
       normalizationNotes: notes,
       profileMethod,
       status: 'created',
+      supersededItemId: null,
     };
   }
 
   // Dedup-on-add scoring: same comparatorKey 0.5 + same brand 0.3 + same color 0.15 + a shared MEANINGFUL
-  // name token 0.05; >= 0.7 is a candidate (gate raised from the design's 0.6 per Codex — at 0.6 a second
-  // different-brand navy jean, comparator+color = 0.65, would be wrongly blocked; 0.7 needs same type AND
-  // same brand, or type+color+name). Generic garment/cut/color words ("short", "black", "slim", …) carry
-  // no identity, so they are stop-worded OUT of the name-token signal — otherwise a brandless type+color
-  // coincidence plus a generic word (e.g. "short") would tip exactly to 0.70 and wrongly block a distinct
-  // item (the Nike-SB-vs-black-performance-short false positive). Returns up to 5, highest first.
+  // name token 0.05. Strong candidates score >= 0.7. When either side lacks a brand, same type+color at
+  // 0.65 is deliberately surfaced as a weaker candidate for host inspection instead of silently creating
+  // a likely camera-roll duplicate. Two explicit disagreeing brands never enter this weaker lane. Generic
+  // garment/cut/color words remain stop-worded out of the name signal. Returns up to 5, highest first.
   async findStyleItemDuplicates(draft: {
     brand: string | null;
     colorFamily: string | null;
@@ -1277,7 +1567,8 @@ export class StyleService {
         score += 0.05;
         reasons.push(exactNameMatch ? 'same name' : 'name overlap');
       }
-      if (score >= 0.7) {
+      const missingBrandEvidence = !draftBrandKey || !itemBrandKey;
+      if (score >= 0.7 || (!brandsConflict && missingBrandEvidence && score >= 0.65)) {
         const raw = item.profile?.raw;
         const signals: StyleDuplicateCandidateSignals = {};
         const brand = trimmedOrNull(item.brand);
@@ -1345,6 +1636,21 @@ export class StyleService {
       };
     }
 
+    if (!requestedItemId && activeExactMatchesBefore.length > 1) {
+      return {
+        activeExactMatchesAfter: activeExactMatchesBefore.map((item) => summarizeStyleItem(item) as StyleItemSummaryRecord),
+        activeExactMatchesBefore: activeExactMatchesBefore.map((item) => summarizeStyleItem(item) as StyleItemSummaryRecord),
+        archivedItemIds: [],
+        archivedItems: [],
+        matchedItems: matchedItems.map((item) => summarizeStyleItem(item) as StyleItemSummaryRecord),
+        notes: ['Multiple active exact-name matches found; provide item_id before archiving. No items were changed.'],
+        requestedItemId,
+        requestedName,
+        status: 'needs_disambiguation',
+        verifiedNoActiveExactMatch: false,
+      };
+    }
+
     const archivedItems: StyleItemRecord[] = [];
     for (const item of activeExactMatchesBefore) {
       archivedItems.push(
@@ -1354,7 +1660,7 @@ export class StyleService {
             status: 'archived',
           },
           provenance: input.provenance,
-          sourceSnapshot: input.sourceSnapshot,
+          ...(input.sourceSnapshot !== undefined ? { sourceSnapshot: input.sourceSnapshot } : {}),
         }),
       );
     }
@@ -1387,40 +1693,218 @@ export class StyleService {
     };
   }
 
+  async getPhotoLibrary(itemId:string) {
+    const item=await this.getItem(itemId);
+    if(!item)throw Error('Item no longer available.');
+    const stored=await this.repository.readPhotoLibrary(itemId);
+    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([stored.revision,stored.fingerprint])));
+    const revision=Array.from(new Uint8Array(bytes),n=>n.toString(16).padStart(2,'0')).join('');
+    return {...stored,revisionNumber:stored.revision,revision,state:reconcilePhotoLibrary(stored.state as PhotoLibraryState,stored.fingerprint)};
+  }
+
+  async managePhotoLibrary(input:{itemId:string;expectedRevision:string;operationId:string;action:PhotoLibraryAction;provenance:MutationProvenance}) {
+    const item=await this.getItem(input.itemId);
+    if(!item||item.status!=='active')throw Error('Item no longer available.');
+    const current=await this.getPhotoLibrary(input.itemId);
+    const actionJson=JSON.stringify(input.action);
+    if(current.state.operationId===input.operationId){
+      if(current.state.actionJson!==actionJson)throw Error('This operation ID was already used for a different change.');
+      return {revision:current.revision,undoToken:current.state.undo?.token??null,state:{hidden:current.state.hidden,order:current.state.order,coverId:current.state.coverId}};
+    }
+    if(current.revision!==input.expectedRevision)throw Error('Photos changed. Refresh this item before saving.');
+    const before={hidden:current.state.hidden,order:current.state.order,hiddenVersions:current.state.hiddenVersions,...(current.state.coverId!==undefined?{coverId:current.state.coverId}:{})};
+    let next;
+    if(input.action.type==='undo'){
+      if(!current.state.undo||current.state.undo.token!==input.action.token||current.state.undo.fingerprint!==current.fingerprint)throw Error('This Undo is no longer available.');
+      next=current.state.undo.before;
+    }else{
+      const provenance=await this.getItemProvenance(input.itemId);
+      const quality=asRecord(asRecord(provenance?.sourceSnapshot)?.catalogNormalizationQuality);
+      const approved=findApprovedStyleCatalogPhoto(item,provenance);
+      const defaultCover=approved?.id??item.photos.find(p=>p.isPrimary&&!isStyleFitPhoto(p)&&p.source!=='generated_metadata')?.id??item.photos.find(p=>!isStyleFitPhoto(p)&&p.source!=='generated_metadata')?.id??item.photos.find(p=>isStyleFitPhoto(p)&&p.source!=='generated_metadata')?.id??null;
+      const sourceId=asNullableString(quality?.sourcePhotoId);
+      const catalogId=approved?.id??null;
+      const candidates=item.photos.filter(p=>(p.source!=='generated_metadata'||p.id===catalogId)&&!(sourceId===p.id&&sourceId!==catalogId&&catalogId&&item.photos.some(c=>c.id===catalogId)&&!before.hidden.includes(catalogId)));
+      next=changePhotoArrangement(before,candidates,input.action,defaultCover);
+      if((input.action.type==='remove'||input.action.type==='replace')&&input.action.photoId===catalogId&&sourceId)next.hidden=[...new Set([...next.hidden,sourceId])];
+    }
+    const versions=photoVersions(current.fingerprint);
+    next.hiddenVersions=Object.fromEntries(next.hidden.map(id=>[id,versions[id]]));
+    const state:PhotoLibraryState={...next,operationId:input.operationId,actionJson,...(input.action.type==='undo'?{}:{undo:{token:crypto.randomUUID(),fingerprint:current.fingerprint,before}})};
+    await this.repository.savePhotoLibrary(input.itemId,current.revisionNumber,current.fingerprint,state);
+    const after=await this.getPhotoLibrary(input.itemId);
+    if(after.state.operationId!==input.operationId)throw Error('Photos changed again. Refresh to see the latest state.');
+    return {revision:after.revision,undoToken:after.state.undo?.token??null,state:{hidden:after.state.hidden,order:after.state.order,coverId:after.state.coverId}};
+  }
+
   async upsertItemPhotos(input: {
+    catalogQualityReview?: StyleCatalogQualityReviewInput | null;
+    duplicateResolution?: {
+      batchId?: string | null;
+      candidateId: string;
+      clientToken?: string | null;
+      decision: 'use_existing';
+    } | null;
     itemId: string;
     photos: unknown;
+    preserveExistingPhotoIds?: string[];
+    /** The photo ids the caller's new set was built from; the write commits only if unchanged. */
+    expectedCurrentPhotoIds?: string[] | null;
     provenance: MutationProvenance;
+    sourceSnapshot?: unknown;
   }): Promise<StylePhotoRecord[]> {
     const before = await this.getItem(input.itemId);
     if (!before) {
       throw new Error(`Unknown style item: ${input.itemId}`);
     }
+    const beforeProvenance = await this.getItemProvenance(input.itemId);
+    const qualityReview = input.catalogQualityReview ?? null;
+    let retainedSourceSha256: string | null = null;
+    let retainedSourceArtifactId: string | null = null;
+    if (qualityReview?.catalogMode === 'host_generated') {
+      const sourcePhotoId = asNullableString(qualityReview.sourcePhotoId);
+      const sourcePhoto = sourcePhotoId ? before.photos.find((photo) => photo.id === sourcePhotoId) ?? null : null;
+      if (sourcePhoto) {
+        if (
+          sourcePhoto.source === 'generated_metadata'
+          || sourcePhoto.importedFrom === 'fluent_style_host_generated'
+          || sourcePhoto.artifactAvailable !== true
+          || !sourcePhoto.artifactId
+        ) {
+          throw new Error('Catalog-ready host-generated media requires one exact retained, owned, non-generated source_photo_id for this item.');
+        }
+        retainedSourceArtifactId = sourcePhoto.artifactId;
+        retainedSourceSha256 = await this.hashOwnedPhotoBytes(sourcePhoto);
+      }
+    }
 
+    const expectedCurrentPhotoIds = input.expectedCurrentPhotoIds ?? null;
+    // Bracket the row read with full-tuple fingerprints so the guarded write below is bound to the
+    // exact rows this call read (a concurrent change in between is a conflict, not stale data).
+    const photoSetFingerprint = expectedCurrentPhotoIds ? await this.repository.photoSetFingerprint(input.itemId) : null;
+    const previousPhotoRows = await this.repository.listPhotoRows(input.itemId);
+    if (photoSetFingerprint !== null && await this.repository.photoSetFingerprint(input.itemId) !== photoSetFingerprint) {
+      throw new StylePhotoSetConflictError(input.itemId);
+    }
+    const previousPhotoRowsById = new Map(previousPhotoRows.map((photo) => [photo.id, photo]));
+    const photoSetMatchesExpected = (ids: string[]) =>
+      expectedCurrentPhotoIds !== null
+      && [...ids].sort().join(String.fromCharCode(31)) === [...expectedCurrentPhotoIds].sort().join(String.fromCharCode(31));
+    if (expectedCurrentPhotoIds && !photoSetMatchesExpected(previousPhotoRows.map((photo) => photo.id))) {
+      throw new StylePhotoSetConflictError(input.itemId);
+    }
+    const normalizedPhotos = normalizePhotoInput(input.photos);
+    const preserveExistingPhotoIds = new Set(input.preserveExistingPhotoIds ?? []);
+    if (preserveExistingPhotoIds.size !== (input.preserveExistingPhotoIds?.length ?? 0)) {
+      throw new Error('Style photo preservation IDs must be unique.');
+    }
+    const incomingPhotoIds = new Set(normalizedPhotos.map((photo, index) =>
+      asNullableString(photo.id) ?? `style-photo:${input.itemId}:${index + 1}`,
+    ));
+    for (const photoId of preserveExistingPhotoIds) {
+      if (!previousPhotoRowsById.has(photoId) || !incomingPhotoIds.has(photoId)) {
+        throw new Error(`Cannot preserve missing Style photo tuple: ${photoId}.`);
+      }
+    }
+    const generatedCatalogId = `style-photo:${input.itemId}:catalog`;
+    const incomingCatalog = normalizedPhotos.find((photo) => asNullableString(photo.id) === generatedCatalogId);
+    const previousCatalog = previousPhotoRowsById.get(generatedCatalogId);
+    if (incomingCatalog && !isIncomingGeneratedCatalogPhotoTuple(incomingCatalog)) {
+      throw new Error('Generated Catalog photo ID is reserved for fully classified presentation media.');
+    }
+    if (previousCatalog && !isPersistedGeneratedCatalogPhotoTuple(previousCatalog)) {
+      throw new Error('Generated Catalog photo ID collides with non-Catalog evidence.');
+    }
     const previousArtifacts = await this.repository.listItemPhotoArtifacts(input.itemId);
+    const previousArtifactsById = new Map(previousArtifacts.map((artifact) => [artifact.id, artifact]));
     if (previousArtifacts.length > 0 && !this.options.artifacts?.delete) {
       throw new Error('Style photo replacement requires artifact deletion support for previously owned media.');
     }
 
     const createdArtifacts: Array<{ id: string; r2_key: string }> = [];
+    let committed = false;
     try {
       const photos: Parameters<StyleRepository['replaceItemPhotos']>[1] = [];
-      for (const [index, photo] of normalizePhotoInput(input.photos).entries()) {
+      let catalogSha256: string | null = null;
+      for (const [index, photo] of normalizedPhotos.entries()) {
         const photoId = asNullableString(photo.id) ?? `style-photo:${input.itemId}:${index + 1}`;
-        const sourceUrl = asNullableString(photo.source_url ?? photo.sourceUrl ?? photo.url);
+        if (preserveExistingPhotoIds.has(photoId)) {
+          const previousPhoto = previousPhotoRowsById.get(photoId);
+          if (!previousPhoto) {
+            throw new Error(`Cannot preserve missing Style photo tuple: ${photoId}.`);
+          }
+          photos.push({
+            artifactId: previousPhoto.artifact_id,
+            bgRemoved: asBoolean(previousPhoto.bg_removed),
+            capturedAt: previousPhoto.captured_at,
+            createdAt: previousPhoto.created_at,
+            id: previousPhoto.id,
+            importedFrom: previousPhoto.imported_from,
+            isFit: asBoolean(previousPhoto.is_fit),
+            isPrimary: asBoolean(photo.is_primary ?? photo.isPrimary),
+            kind: previousPhoto.kind,
+            legacyPhotoId: previousPhoto.legacy_photo_id,
+            mimeType: previousPhoto.mime_type,
+            source: previousPhoto.source,
+            sourceUrl: previousPhoto.source_url,
+            url: previousPhoto.url,
+            view: previousPhoto.view,
+          });
+          continue;
+        }
+        const existingArtifactId = asNullableString(photo.artifact_id ?? photo.artifactId);
+        const existingArtifact = existingArtifactId ? previousArtifactsById.get(existingArtifactId) ?? null : null;
+        const explicitSourceUrl = asNullableString(photo.source_url ?? photo.sourceUrl);
+        const rawSourceUrl = explicitSourceUrl ?? (existingArtifact ? null : asNullableString(photo.url));
+        // A data: URL is never a reference: validate it as image bytes and ingest it into owned
+        // artifact storage, so no data URL (or app-internal handle) lands in the url column.
+        const sourceDataUrl = rawSourceUrl && /^data:/i.test(rawSourceUrl) ? rawSourceUrl : null;
+        if (sourceDataUrl) assertStyleImageDataUrl(sourceDataUrl);
+        const inlineDataUrl = asNullableString(photo.data_url ?? photo.dataUrl) ?? sourceDataUrl;
+        if (inlineDataUrl) assertStyleImageDataUrl(inlineDataUrl);
+        const sourceUrl = sourceDataUrl ? null : rawSourceUrl;
+        const hasInlineImage = Boolean(
+          asNullableString(photo.data_base64 ?? photo.dataBase64 ?? photo.base64) ||
+          inlineDataUrl,
+        );
+        const hostedFileDownloadUrl = asNullableString(
+          photo.hosted_file_download_url ?? photo.hostedFileDownloadUrl,
+        );
+        if (hasInlineImage && hostedFileDownloadUrl) {
+          throw new Error('Style photo input cannot combine inline image bytes with a hosted file download.');
+        }
         // Store-by-reference for host-inspected closet photos (the public fluent_set_style_item_image
         // path): the host already has/inspected the image and the widget renders it via the
         // adapter CSP, so DO NOT server-side fetch the caller-supplied URL — that would be an SSRF
         // surface on a public write. Mirrors fluent_get_media_bundle, which provides URLs, never
-        // fetches pixels. Legacy/owned ingestion (other sources) keeps fetching as before.
-        const referenceOnly = asNullableString(photo.source) === 'host_inspected';
-        const ownedAsset = referenceOnly
+        // fetches pixels. A declared ChatGPT file parameter is the narrow exception: it goes
+        // through the allowlisted, size-capped, signature-checked owned-asset importer below.
+        const importedFrom = asNullableString(photo.imported_from ?? photo.importedFrom);
+        const presentationInputSha256 = asNullableString(
+          photo.presentation_input_sha256 ?? photo.presentationInputSha256,
+        );
+        if (presentationInputSha256 && !/^[a-f0-9]{64}$/.test(presentationInputSha256)) {
+          throw new Error('Style presentation input fingerprint must be a lowercase SHA-256 value.');
+        }
+        const referenceOnly = !hasInlineImage && !hostedFileDownloadUrl && (
+          asNullableString(photo.source) === 'host_inspected' || importedFrom?.startsWith('fluent_style_') === true
+        );
+        const ownedAsset = existingArtifact
+          ? {
+              artifactId: existingArtifact.id,
+              mimeType: asNullableString(photo.mime_type ?? photo.mimeType) ?? 'application/octet-stream',
+              r2Key: existingArtifact.r2_key,
+            }
+          : referenceOnly
           ? null
           : await this.ingestPhotoAsset({
               dataBase64: asNullableString(photo.data_base64 ?? photo.dataBase64 ?? photo.base64),
-              dataUrl: asNullableString(photo.data_url ?? photo.dataUrl),
+              dataUrl: inlineDataUrl,
+              hostedFileDownloadUrl,
               itemId: input.itemId,
-              mimeType: asNullableString(photo.mime_type ?? photo.mimeType),
+              mimeType: asNullableString(
+                photo.hosted_file_mime_type ?? photo.hostedFileMimeType ?? photo.mime_type ?? photo.mimeType,
+              ),
               photoId,
               sourceUrl,
             });
@@ -1430,14 +1914,38 @@ export class StyleService {
           );
         }
 
-        if (ownedAsset) {
+        if (ownedAsset && !existingArtifact) {
           createdArtifacts.push({ id: ownedAsset.artifactId, r2_key: ownedAsset.r2Key });
+        }
+        if (qualityReview && photoId === qualityReview.catalogPhotoId) {
+          if (!ownedAsset || existingArtifact || !('sha256' in ownedAsset)) {
+            throw new Error('Catalog-ready media must be supplied as newly owned image bytes, not a mutable URL or caller-selected artifact reference.');
+          }
+          catalogSha256 = ownedAsset.sha256;
+        }
+        if (
+          qualityReview?.catalogMode === 'host_generated'
+          && photoId === qualityReview.sourcePhotoId
+          && !retainedSourceSha256
+        ) {
+          if (
+            !ownedAsset
+            || existingArtifact
+            || !('sha256' in ownedAsset)
+            || asNullableString(photo.source) === 'generated_metadata'
+            || importedFrom === 'fluent_style_host_generated'
+          ) {
+            throw new Error('Catalog-ready host-generated media requires newly owned, non-generated source bytes when source_photo_id is not already retained.');
+          }
+          retainedSourceArtifactId = ownedAsset.artifactId;
+          retainedSourceSha256 = ownedAsset.sha256;
         }
 
         photos.push({
           artifactId: ownedAsset?.artifactId ?? null,
           bgRemoved: asBoolean(photo.bg_removed ?? photo.bgRemoved),
           capturedAt: asNullableString(photo.captured_at ?? photo.capturedAt),
+          createdAt: null,
           kind: inferStylePhotoKind({
             isFit: asBoolean(photo.is_fit ?? photo.isFit),
             kind: photo.kind,
@@ -1455,12 +1963,42 @@ export class StyleService {
             url: sourceUrl,
           }),
           sourceUrl,
-          url: sourceUrl ?? `artifact:${photoId}`,
+          url: sourceUrl ?? (
+            ownedAsset
+            && importedFrom === 'fluent_style_host_generated'
+            && presentationInputSha256
+              ? `artifact:${photoId}#input-sha256=${presentationInputSha256}`
+              : `artifact:${photoId}`
+          ),
           view: normalizeStylePhotoView(photo.view),
         });
       }
 
-      await this.repository.replaceItemPhotos(input.itemId, photos);
+      const provenanceUpdate = await this.catalogQualityProvenanceUpdate({
+        beforeProvenance,
+        catalogSha256,
+        duplicateResolution: input.duplicateResolution ?? null,
+        itemId: input.itemId,
+        photos,
+        qualityReview,
+        retainedSourceArtifactId,
+        retainedSourceSha256,
+        sourceSnapshot: input.sourceSnapshot,
+      });
+      try {
+        await this.repository.replaceItemPhotos(input.itemId, photos, provenanceUpdate, photoSetFingerprint);
+        committed = true;
+      } catch (error) {
+        // A photo this write built from its read was released by a concurrent replacement.
+        if (error instanceof StylePhotoArtifactReleasedError) throw new StylePhotoSetConflictError(input.itemId);
+        if (photoSetFingerprint !== null) {
+          const current = await this.repository.photoSetFingerprint(input.itemId).catch(() => null);
+          if (current !== null && current !== photoSetFingerprint) {
+            throw new StylePhotoSetConflictError(input.itemId);
+          }
+        }
+        throw error;
+      }
       await this.cleanupUnreferencedPhotoArtifacts(previousArtifacts);
       const after = await this.getItem(input.itemId);
       if (!after) {
@@ -1477,10 +2015,154 @@ export class StyleService {
       });
       return after.photos;
     } catch (error) {
+      if (committed) {
+        // Post-commit failure: the commit evidence is attached FIRST, and cleanup can never mask it.
+        // Cleanup only releases artifacts that no photo row references (getUnreferencedArtifact), so
+        // the committed rows' artifacts and blobs are never deleted here.
+        markStyleWriteCommitted(error);
+        await this.cleanupUnreferencedPhotoArtifacts(createdArtifacts).catch(() => undefined);
+        throw error;
+      }
       // If ingestion or the transactional row swap fails, delete any new assets that did not
       // become the durable replacement. Assets referenced by a successful swap are preserved.
       await this.cleanupUnreferencedPhotoArtifacts(createdArtifacts);
       throw error;
+    }
+  }
+
+  // Atomic append for photo_action "add": ingest exactly one new non-cover photo and insert only
+  // its row. No other row is deleted or rewritten, so a concurrent replace or add can never be
+  // undone (and no replaced artifact restored) by this write, and the cover is never touched.
+  // A repeat of the same content-addressed id is a no-op (the new artifact is then released).
+  async appendItemPhoto(input: {
+    // A duplicate "use existing" resolution completed by this append: its client_token binding is
+    // written atomically with the new photo row, so a same-token retry replays the completed result.
+    duplicateResolution?: {
+      batchId?: string | null;
+      candidateId: string;
+      clientToken?: string | null;
+      decision: 'use_existing';
+    } | null;
+    itemId: string;
+    photo: Record<string, unknown>;
+    provenance: MutationProvenance;
+  }): Promise<{ inserted: boolean; photos: StylePhotoRecord[] }> {
+    const before = await this.getItem(input.itemId);
+    if (!before) {
+      throw new Error(`Unknown style item: ${input.itemId}`);
+    }
+    const photo = input.photo;
+    const photoId = asNullableString(photo.id);
+    if (!photoId) throw new Error('Style photo append requires a photo id.');
+    if (asBoolean(photo.is_primary ?? photo.isPrimary)) {
+      throw new Error('Adding a photo cannot change the cover.');
+    }
+    const rawSourceUrl = asNullableString(photo.source_url ?? photo.sourceUrl ?? photo.url);
+    const sourceDataUrl = rawSourceUrl && /^data:/i.test(rawSourceUrl) ? rawSourceUrl : null;
+    const inlineDataUrl = asNullableString(photo.data_url ?? photo.dataUrl) ?? sourceDataUrl;
+    if (inlineDataUrl) assertStyleImageDataUrl(inlineDataUrl);
+    const sourceUrl = sourceDataUrl ? null : rawSourceUrl;
+    const hostedFileDownloadUrl = asNullableString(photo.hosted_file_download_url ?? photo.hostedFileDownloadUrl);
+    if (inlineDataUrl && hostedFileDownloadUrl) {
+      throw new Error('Style photo input cannot combine inline image bytes with a hosted file download.');
+    }
+    const importedFrom = asNullableString(photo.imported_from ?? photo.importedFrom);
+    const referenceOnly = !inlineDataUrl && !hostedFileDownloadUrl && (
+      asNullableString(photo.source) === 'host_inspected' || importedFrom?.startsWith('fluent_style_') === true
+    );
+    const ownedAsset = referenceOnly
+      ? null
+      : await this.ingestPhotoAsset({
+          dataBase64: null,
+          dataUrl: inlineDataUrl,
+          hostedFileDownloadUrl,
+          itemId: input.itemId,
+          mimeType: asNullableString(photo.mime_type ?? photo.mimeType),
+          photoId,
+          sourceUrl,
+        });
+    if (!ownedAsset && !sourceUrl) {
+      throw new Error('Style photo append requires image bytes or a direct image URL.');
+    }
+    const createdArtifacts = ownedAsset ? [{ id: ownedAsset.artifactId, r2_key: ownedAsset.r2Key }] : [];
+    const row = {
+      artifactId: ownedAsset?.artifactId ?? null,
+      bgRemoved: asBoolean(photo.bg_removed ?? photo.bgRemoved),
+      capturedAt: asNullableString(photo.captured_at ?? photo.capturedAt),
+      id: photoId,
+      importedFrom,
+      isFit: asBoolean(photo.is_fit ?? photo.isFit),
+      kind: inferStylePhotoKind({
+        isFit: asBoolean(photo.is_fit ?? photo.isFit),
+        kind: photo.kind,
+        view: photo.view,
+      }),
+      mimeType: ownedAsset?.mimeType ?? asNullableString(photo.mime_type ?? photo.mimeType),
+      source: inferStylePhotoSource({ importedFrom, source: photo.source, url: sourceUrl }),
+      sourceUrl,
+      url: sourceUrl ?? `artifact:${photoId}`,
+      view: normalizeStylePhotoView(photo.view),
+    };
+    let inserted = false;
+    try {
+      // A duplicate-resolution token binding is merged into the CURRENT provenance: each attempt reads
+      // the raw row, derives the update from it, and commits only if the row is unchanged (revision
+      // check). A concurrent binding makes the batch write nothing; the next attempt merges on top.
+      for (let attempt = 1; ; attempt += 1) {
+        const expected = input.duplicateResolution ? await this.repository.provenanceRevision(input.itemId) : null;
+        const resolutionProvenance = input.duplicateResolution
+          ? await this.catalogQualityProvenanceUpdate({
+              beforeProvenance: await this.getItemProvenance(input.itemId),
+              catalogSha256: null,
+              duplicateResolution: input.duplicateResolution,
+              itemId: input.itemId,
+              photos: [],
+              qualityReview: null,
+              retainedSourceArtifactId: null,
+              retainedSourceSha256: null,
+              sourceSnapshot: null,
+            })
+          : undefined;
+        try {
+          inserted = await this.repository.appendItemPhoto(
+            input.itemId,
+            row,
+            resolutionProvenance ? { ...resolutionProvenance, expected } : undefined,
+          );
+          break;
+        } catch (error) {
+          if (!resolutionProvenance || attempt >= STYLE_PROVENANCE_WRITE_MAX_ATTEMPTS) throw error;
+          const current = await this.repository.provenanceRevision(input.itemId);
+          if (JSON.stringify(current) === JSON.stringify(expected)) throw error;
+        }
+      }
+    } catch (error) {
+      await this.cleanupUnreferencedPhotoArtifacts(createdArtifacts);
+      throw error;
+    }
+    if (!inserted) {
+      // Same content already added (or the item vanished): release the unused new artifact.
+      await this.cleanupUnreferencedPhotoArtifacts(createdArtifacts);
+    }
+    try {
+      const after = await this.getItem(input.itemId);
+      if (!after) {
+        throw new Error(`Style item ${input.itemId} disappeared after photo append.`);
+      }
+      if (inserted) {
+        await this.recordDomainEvent({
+          after: { itemId: input.itemId, photoCount: after.photos.length, photoId },
+          before: { itemId: input.itemId, photoCount: before.photos.length },
+          entityId: input.itemId,
+          entityType: 'style_item_photos',
+          eventType: 'style.item_photo_added',
+          provenance: input.provenance,
+        });
+      }
+      return { inserted, photos: after.photos };
+    } catch (error) {
+      // After a committed insert no rollback cleanup runs; only the commit evidence is attached.
+      throw inserted ? markStyleWriteCommitted(error) : error;
     }
   }
 
@@ -1562,6 +2244,14 @@ export class StyleService {
       const storedRank = styleItemProfileSourceRank(storedSource, before?.method ?? null);
       const beforeValue = nextRaw[field];
       const incomingValue = incomingRaw[field];
+      if (
+        field === 'wearUnderstanding'
+        && incomingValue !== 'unknown'
+        && incomingSource !== 'user'
+        && incomingSource !== 'user_correction'
+      ) {
+        throw new Error('wearUnderstanding recently_worn/rarely_worn requires explicit user evidence.');
+      }
       const shouldApply = incomingRank >= storedRank || isEmptyStyleItemProfileValue(beforeValue);
 
       if (shouldApply) {
@@ -1604,6 +2294,7 @@ export class StyleService {
       for (const field of STYLE_ITEM_PROFILE_FIELDS) {
         if (incomingFieldSet.has(field)) continue; // win / reject-stamp path already handled it
         if (asRecord(nextEvidence[field])) continue; // already has explicit evidence - never clobber
+        if (field === 'wearUnderstanding' && nextRaw[field] === 'unknown') continue; // default means no wear evidence
         if (isEmptyStyleItemProfileValue(nextRaw[field])) continue; // nothing to protect
         const floor = styleItemProfileStoredSource(field, storedEvidence, before);
         if (!floor) continue;
@@ -1878,7 +2569,10 @@ export class StyleService {
   async analyzeWardrobe(input: { focus?: StyleWardrobeAnalysisFocus | null }): Promise<StyleWardrobeAnalysis> {
     const focus = input.focus ?? 'all';
     const [profile, items, evidenceGaps] = await Promise.all([this.getProfile(), this.listItems(), this.listEvidenceGaps()]);
-    const calibration = buildStyleOnboardingCalibration({ profile, items });
+    const provenanceByItemId = await this.getItemProvenanceBatch(
+      items.filter((item) => item.status === 'active').map((item) => item.id),
+    );
+    const calibration = buildStyleOnboardingCalibration({ profile, items, provenanceByItemId });
     const activeItems = items.filter((item) => item.status === 'active' && !isStyleItemExcludedFromCalibration(profile, item.id));
     const itemsById = Object.fromEntries(
       activeItems.map((item) => [item.id, summarizeStyleItem(item) as StyleItemSummaryRecord]),
@@ -2022,7 +2716,10 @@ export class StyleService {
     const candidate = normalizeStylePurchaseCandidate(input.candidate);
     const visualEvidence = normalizeStylePurchaseVisualEvidence(input.visualEvidence);
     const [profile, items] = await Promise.all([this.getProfile(), this.listItems()]);
-    const calibration = buildStyleOnboardingCalibration({ profile, items });
+    const provenanceByItemId = await this.getItemProvenanceBatch(
+      items.filter((item) => item.status === 'active').map((item) => item.id),
+    );
+    const calibration = buildStyleOnboardingCalibration({ profile, items, provenanceByItemId });
     const activeItems = items.filter((item) => item.status === 'active' && !isStyleItemExcludedFromCalibration(profile, item.id));
     const itemsById: Record<string, StyleItemSummaryRecord> = {};
     const registerAnalysisItem = (item: StyleItemRecord): StyleItemSummaryRecord => {
@@ -2557,6 +3254,7 @@ export class StyleService {
     itemIds?: string[] | null;
     maxImages?: number | null;
     photoPreference?: 'product' | 'fit' | null;
+    sourceEvidenceOnly?: boolean | null;
   }): Promise<StyleVisualBundleRecord> {
     const deliveryMode = input.deliveryMode === 'authenticated_only' ? 'authenticated_only' : 'authenticated_with_signed_fallback';
     const includeComparators = input.includeComparators !== false;
@@ -2587,9 +3285,17 @@ export class StyleService {
         evidenceWarnings.push(`Item ${itemId} is not present in the current closet state.`);
         return;
       }
-      const bundlePhoto = selectBestVisualBundlePhoto(item.photos, photoPreference);
+      const bundlePhoto = selectBestVisualBundlePhoto(
+        item.photos,
+        photoPreference,
+        input.sourceEvidenceOnly === true,
+      );
       if (!bundlePhoto) {
-        evidenceWarnings.push(`${item.name ?? item.id} has no saved Style photo.`);
+        evidenceWarnings.push(
+          item.photos.length > 0
+            ? `${item.name ?? item.id} has no deliverable saved Style photo.`
+            : `${item.name ?? item.id} has no saved Style photo.`,
+        );
         return;
       }
       if (seenPhotoIds.has(bundlePhoto.id)) {
@@ -2600,9 +3306,12 @@ export class StyleService {
       if (!bundlePhoto.delivery) {
         evidenceWarnings.push(`${item.name ?? item.id} does not have an owned Fluent image delivery route yet.`);
       }
-      const fallbackSigned = deliveryMode === 'authenticated_with_signed_fallback'
+      const fallbackSigned = deliveryMode === 'authenticated_with_signed_fallback' && bundlePhoto.artifactAvailable === true
         ? await this.buildFallbackSignedPhotoDelivery(bundlePhoto.id, bundlePhoto.artifactId)
         : null;
+      const retainedSourceUrl = normalizeStyleRemoteImageSourceUrl(
+        bundlePhoto.sourceUrl?.trim() || bundlePhoto.url?.trim() || '',
+      )?.toString() ?? null;
       assets.push({
         authenticatedOriginalUrl: bundlePhoto.delivery?.originalUrl ?? null,
         comparisonContext: comparisonContextByItemId.get(item.id) ?? null,
@@ -2613,7 +3322,10 @@ export class StyleService {
         label: item.name ?? item.id,
         photoId: bundlePhoto.id,
         role,
-        sourceUrl: bundlePhoto.sourceUrl ?? bundlePhoto.url ?? null,
+        // An owned/backfilled artifact can remain safely deliverable even when its historical
+        // source tuple is private, insecure, or relative. Keep that provenance server-side and
+        // expose only validated public HTTPS sources in assistant-facing structured content.
+        sourceUrl: retainedSourceUrl,
       });
     };
     const roleForRequestedItem = (
@@ -2773,6 +3485,25 @@ export class StyleService {
     };
   }
 
+  async getItemProvenanceBatch(itemIds: string[]) {
+    const rows = await this.repository.listProvenanceRows(itemIds);
+    return new Map(rows.map((row) => {
+      const parsedEvidence = safeParseJson(row.field_evidence_json);
+      const evidenceRecord = asRecord(parsedEvidence);
+      const fieldEvidence = evidenceRecord
+        ? Object.fromEntries(
+            Object.entries(evidenceRecord).filter(([key]) => !STYLE_ITEM_PROFILE_CONTROL_FIELDS.has(key as StyleItemProfileField)),
+          )
+        : parsedEvidence;
+      return [row.item_id, {
+        fieldEvidence,
+        sourceSnapshot: safeParseJson(row.source_snapshot_json),
+        technicalMetadata: safeParseJson(row.technical_metadata_json),
+        updatedAt: row.updated_at,
+      }] as const;
+    }));
+  }
+
   async getPhotoDeliveryAsset(photoId: string): Promise<{
     artifactId: string;
     mimeType: string;
@@ -2889,13 +3620,14 @@ export class StyleService {
     await this.db
       .prepare(
         `INSERT INTO domain_events (
-          id, domain, entity_type, entity_id, event_type,
+          id, tenant_id, domain, entity_type, entity_id, event_type,
           before_json, after_json, patch_json,
           source_agent, source_skill, session_id, confidence, source_type, actor_email, actor_name
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         `domain-event:${crypto.randomUUID()}`,
+        this.repository.profileKey.tenantId,
         'style',
         input.entityType,
         input.entityId,
@@ -2914,8 +3646,12 @@ export class StyleService {
       .run();
   }
 
-  private async buildPhotoDelivery(photoId: string, artifactId: string | null): Promise<StylePhotoDeliveryRecord | null> {
-    if (!artifactId || !this.options.origin) {
+  private async buildPhotoDelivery(
+    photoId: string,
+    artifactId: string | null,
+    artifactAvailable: boolean,
+  ): Promise<StylePhotoDeliveryRecord | null> {
+    if (!artifactId || !artifactAvailable || !this.options.origin) {
       return null;
     }
     return {
@@ -2942,27 +3678,610 @@ export class StyleService {
     });
   }
 
+  private async catalogQualityProvenanceUpdate(input: {
+    beforeProvenance: Awaited<ReturnType<StyleService['getItemProvenance']>>;
+    catalogSha256: string | null;
+    duplicateResolution: {
+      batchId?: string | null;
+      candidateId: string;
+      clientToken?: string | null;
+      decision: 'use_existing';
+    } | null;
+    itemId: string;
+    photos: Parameters<StyleRepository['replaceItemPhotos']>[1];
+    qualityReview: StyleCatalogQualityReviewInput | null;
+    retainedSourceArtifactId: string | null;
+    retainedSourceSha256: string | null;
+    sourceSnapshot: unknown;
+  }): Promise<Parameters<StyleRepository['replaceItemPhotos']>[2] | undefined> {
+    const requestedSnapshot = asRecord(parseJsonLike(input.sourceSnapshot));
+    if (!input.qualityReview && !requestedSnapshot && !input.duplicateResolution) {
+      return undefined;
+    }
+    const existingSnapshot = asRecord(parseJsonLike(input.beforeProvenance?.sourceSnapshot)) ?? {};
+    const nextSnapshot: Record<string, unknown> = {
+      ...existingSnapshot,
+      ...(requestedSnapshot ?? {}),
+    };
+    const existingTechnicalMetadata = asRecord(parseJsonLike(input.beforeProvenance?.technicalMetadata)) ?? {};
+    const nextTechnicalMetadata: Record<string, unknown> = { ...existingTechnicalMetadata };
+    if (input.duplicateResolution) {
+      const resolvedAt = new Date().toISOString();
+      nextTechnicalMetadata.duplicateResolution = {
+        ...input.duplicateResolution,
+        resolvedAt,
+      };
+      const existingObservations = Array.isArray(existingSnapshot.duplicateObservations)
+        ? existingSnapshot.duplicateObservations.slice(-19)
+        : [];
+      nextSnapshot.duplicateObservations = [
+        ...existingObservations,
+        {
+          ...input.duplicateResolution,
+          resolvedAt,
+          source: requestedSnapshot ?? null,
+        },
+      ];
+      if (input.duplicateResolution.clientToken) {
+        const clientTokenSha256 = await hashClientToken(input.duplicateResolution.clientToken);
+        const existingBindings = Array.isArray(existingSnapshot.duplicateCreateIdempotency)
+          ? existingSnapshot.duplicateCreateIdempotency.filter((binding) =>
+              asNullableString(asRecord(binding)?.clientTokenSha256) !== clientTokenSha256,
+            )
+          : [];
+        nextSnapshot.duplicateCreateIdempotency = [
+          ...existingBindings,
+          {
+            batchId: input.duplicateResolution.batchId ?? null,
+            boundAt: resolvedAt,
+            clientTokenSha256,
+            decision: 'use_existing',
+            targetItemId: input.itemId,
+          },
+        ];
+      }
+    }
+    if (input.qualityReview) {
+      const catalog = input.photos.find((photo) => photo.id === input.qualityReview?.catalogPhotoId) ?? null;
+      if (
+        !catalog
+        || !catalog.artifactId
+        || !input.catalogSha256
+        || catalog.isPrimary !== true
+        || catalog.isFit === true
+        || catalog.kind !== 'product'
+        || catalog.view !== 'front'
+      ) {
+        throw new Error('Catalog-ready attestation did not bind to one owned primary front-facing product image.');
+      }
+      const generated = input.qualityReview.catalogMode === 'host_generated';
+      if (generated && (
+        catalog.source !== 'generated_metadata'
+        || catalog.importedFrom !== 'fluent_style_host_generated'
+      )) {
+        throw new Error('Host-generated Catalog approval requires the reserved generated Catalog tuple.');
+      }
+      if (!generated && (
+        catalog.source === 'generated_metadata'
+        || catalog.importedFrom === 'fluent_style_host_generated'
+      )) {
+        throw new Error('Inspected-source Catalog approval cannot classify generated media as source evidence.');
+      }
+      const source = generated
+        ? input.photos.find((photo) => photo.id === input.qualityReview?.sourcePhotoId) ?? null
+        : catalog;
+      const sourceSha256 = generated ? input.retainedSourceSha256 : input.catalogSha256;
+      const sourceArtifactId = generated ? input.retainedSourceArtifactId : catalog.artifactId;
+      if (
+        !source
+        || !sourceArtifactId
+        || !sourceSha256
+        || source.artifactId !== sourceArtifactId
+        || source.source === 'generated_metadata'
+        || source.importedFrom === 'fluent_style_host_generated'
+      ) {
+        throw new Error('Catalog-ready attestation lost its exact retained source binding before persistence.');
+      }
+      const checks = {
+        backgroundClean: true,
+        centered: true,
+        colorAndPatternMatch: true,
+        detailsAndLogoMatch: true,
+        frontFacing: true,
+        fullSilhouette: true,
+        identityAndCategoryMatch: true,
+        scaleAndMatteConsistent: true,
+      } as const;
+      const generationInputSha256 = await sha256StyleCatalogBinding({
+        itemId: input.itemId,
+        mode: input.qualityReview.catalogMode,
+        sourceArtifactId,
+        sourcePhotoId: source.id,
+        sourceSha256,
+      });
+      const reviewBoardSha256 = await sha256StyleCatalogBinding({
+        catalogArtifactId: catalog.artifactId,
+        catalogPhotoId: catalog.id,
+        catalogSha256: input.catalogSha256,
+        checks,
+        generationInputSha256,
+        itemId: input.itemId,
+        mode: input.qualityReview.catalogMode,
+        sourceArtifactId,
+        sourcePhotoId: source.id,
+        sourceSha256,
+      });
+      nextSnapshot.catalogNormalizationQuality = {
+        catalogArtifactId: catalog.artifactId,
+        catalogPhotoId: catalog.id,
+        catalogSha256: input.catalogSha256,
+        checks,
+        generationInputSha256,
+        itemId: input.itemId,
+        mode: input.qualityReview.catalogMode,
+        reviewBoardSha256,
+        sourceArtifactId,
+        sourcePhotoId: source.id,
+        sourceSha256,
+        status: 'approved',
+      };
+    }
+    return {
+      fieldEvidenceJson: stringifyJson(input.beforeProvenance?.fieldEvidence),
+      sourceSnapshotJson: stringifyJson(nextSnapshot),
+      technicalMetadataJson: stringifyJson(nextTechnicalMetadata),
+    };
+  }
+
+  async mergeDuplicateItem(input: {
+    mergeId?: string | null;
+    provenance: MutationProvenance;
+    sourceItemId: string;
+    targetItemId: string;
+  }) {
+    const requestedMergeId = asNullableString(input.mergeId);
+    if (!input.sourceItemId || !input.targetItemId || input.sourceItemId === input.targetItemId) {
+      throw new Error('Style duplicate merge requires distinct source and target item IDs.');
+    }
+    const [sourceBefore, targetBefore] = await Promise.all([
+      this.getItem(input.sourceItemId),
+      this.getItem(input.targetItemId),
+    ]);
+    if (sourceBefore?.status === 'archived') {
+      const sourceProvenance = await this.getItemProvenance(sourceBefore.id);
+      const currentRedirect = asRecord(asRecord(sourceProvenance?.sourceSnapshot)?.duplicateMergeRedirect);
+      const currentMergeId = asNullableString(currentRedirect?.mergeId);
+      if (requestedMergeId !== currentMergeId) {
+        throw new Error('Style duplicate merge rejected a different cycle identity for an already merged item.');
+      }
+      const redirect = await this.resolveDuplicateMergeRedirect(sourceBefore.id);
+      if (redirect?.item?.status === 'active' && redirect.path.includes(input.targetItemId)) {
+        return {
+          archivedSourceItemId: sourceBefore.id,
+          sourceStatus: sourceBefore.status,
+          targetItem: redirect.item,
+          targetItemId: redirect.item.id,
+          transferredPhotoIds: [],
+          verifiedOneActiveItem: true,
+          eventRecorded: false,
+          idempotentReplay: true,
+          mergeId: currentMergeId,
+        };
+      }
+    }
+    if (!sourceBefore || sourceBefore.status !== 'active') {
+      throw new Error(`Style duplicate source ${input.sourceItemId} is not an active closet item.`);
+    }
+    if (!targetBefore || targetBefore.status !== 'active') {
+      throw new Error(`Style duplicate target ${input.targetItemId} is not an active closet item.`);
+    }
+    const sourcePhotoIds = sourceBefore.photos.map((photo) => photo.id);
+    // A caller that does not yet understand merge cycle IDs must create a legacy
+    // unbound cycle so that the same cached client can still Undo it. Current
+    // clients always provide a UUID and therefore get the stronger bound path.
+    const mergeId = requestedMergeId;
+    const expectedPhotoIds = new Set([...targetBefore.photos, ...sourceBefore.photos].map((photo) => photo.id));
+    const repositoryVerification = await this.repository.mergeDuplicateItem({
+      mergeId,
+      expectedPhotoCount: expectedPhotoIds.size,
+      sourceItemId: input.sourceItemId,
+      sourcePhotoIds,
+      sourcePrimaryPhotoId: sourceBefore.photos.find((photo) => photo.isPrimary)?.id ?? null,
+      targetItemId: input.targetItemId,
+    });
+    if (
+      repositoryVerification.sourceStatus !== 'archived'
+      || repositoryVerification.targetStatus !== 'active'
+      || repositoryVerification.sourcePhotoCount !== 0
+      || repositoryVerification.targetPhotoCount !== expectedPhotoIds.size
+      || repositoryVerification.redirectTargetItemId !== input.targetItemId
+    ) {
+      throw new Error(`Style duplicate merge transaction did not produce the required canonical state: ${JSON.stringify(repositoryVerification)}.`);
+    }
+    let sourceAfter: StyleItemRecord | null = null;
+    let targetAfter: StyleItemRecord | null = null;
+    let readbackDegraded = false;
+    try {
+      [sourceAfter, targetAfter] = await Promise.all([
+        this.getItem(input.sourceItemId),
+        this.getItem(input.targetItemId),
+      ]);
+    } catch (error) {
+      readbackDegraded = true;
+      targetAfter = {
+        ...targetBefore,
+        photos: [...targetBefore.photos, ...sourceBefore.photos],
+        status: 'active',
+      };
+      sourceAfter = { ...sourceBefore, status: 'archived' };
+    }
+    if (!sourceAfter || sourceAfter.status !== 'archived') {
+      throw new Error('Style duplicate merge did not archive the redundant item.');
+    }
+    if (!targetAfter || targetAfter.status !== 'active') {
+      throw new Error('Style duplicate merge did not preserve the canonical item.');
+    }
+    const actualPhotoIds = new Set(targetAfter.photos.map((photo) => photo.id));
+    if (actualPhotoIds.size !== expectedPhotoIds.size || [...expectedPhotoIds].some((photoId) => !actualPhotoIds.has(photoId))) {
+      throw new Error('Style duplicate merge did not preserve the complete combined photo set.');
+    }
+    let eventRecorded = true;
+    try {
+      await this.recordDomainEvent({
+        after: { sourceItemId: sourceAfter.id, sourceStatus: sourceAfter.status, targetItemId: targetAfter.id, targetPhotoCount: targetAfter.photos.length },
+        before: { sourceItemId: sourceBefore.id, sourcePhotoCount: sourceBefore.photos.length, targetItemId: targetBefore.id, targetPhotoCount: targetBefore.photos.length },
+        entityId: targetAfter.id,
+        entityType: 'style_item',
+        eventType: 'style.duplicate_items_merged',
+        provenance: input.provenance,
+      });
+    } catch (error) {
+      // The item/photo transaction and its readback are authoritative. A secondary audit-event
+      // failure must not tell the user that nothing changed and invite a destructive retry.
+      eventRecorded = false;
+    }
+    return {
+      archivedSourceItemId: sourceAfter.id,
+      sourceStatus: sourceAfter.status,
+      targetItem: targetAfter,
+      targetItemId: targetAfter.id,
+      transferredPhotoIds: sourcePhotoIds,
+      verifiedOneActiveItem: sourceAfter.status === 'archived' && targetAfter.status === 'active',
+      eventRecorded,
+      idempotentReplay: false,
+      mergeId,
+      readbackDegraded,
+    };
+  }
+
+  private async resolveDuplicateMergeRedirect(itemId: string) {
+    const seen = new Set<string>([itemId]);
+    const path: string[] = [];
+    let currentId = itemId;
+    for (let depth = 0; depth < 24; depth += 1) {
+      const provenance = await this.getItemProvenance(currentId);
+      const redirect = asRecord(asRecord(provenance?.sourceSnapshot)?.duplicateMergeRedirect);
+      const targetItemId = asNullableString(redirect?.targetItemId);
+      if (asNullableString(redirect?.undoneAt)) return path.length > 0 ? { item: await this.getItem(currentId), path } : null;
+      if (!targetItemId) return path.length > 0 ? { item: await this.getItem(currentId), path } : null;
+      if (seen.has(targetItemId)) throw new Error(`Style duplicate merge redirect cycle detected for ${itemId}.`);
+      seen.add(targetItemId);
+      path.push(targetItemId);
+      const target = await this.getItem(targetItemId);
+      if (target?.status === 'active') return { item: target, path };
+      currentId = targetItemId;
+    }
+    throw new Error(`Style duplicate merge redirect chain is too deep for ${itemId}.`);
+  }
+
+  private async resolveDuplicateCreateIdempotency(clientTokenSha256: string): Promise<StyleItemRecord | null> {
+    const rows = await this.repository.listDuplicateCreateIdempotencySnapshots();
+    for (const row of rows) {
+      const snapshot = asRecord(parseJsonLike(row.source_snapshot_json));
+      const bindings = Array.isArray(snapshot?.duplicateCreateIdempotency)
+        ? snapshot.duplicateCreateIdempotency
+        : [];
+      const matched = bindings.some((binding) =>
+        asNullableString(asRecord(binding)?.clientTokenSha256) === clientTokenSha256
+        && asNullableString(asRecord(binding)?.decision) === 'use_existing'
+        && asNullableString(asRecord(binding)?.targetItemId) === row.item_id,
+      );
+      if (!matched) continue;
+      const item = await this.getItem(row.item_id);
+      if (!item || item.status !== 'active') {
+        throw new Error(`Style duplicate idempotency target ${row.item_id} is unavailable.`);
+      }
+      return item;
+    }
+    return null;
+  }
+
+  private async hashOwnedPhotoBytes(photo: StylePhotoRecord): Promise<string> {
+    if (!photo.artifactId || !this.options.artifacts) {
+      throw new Error(`Cannot hash unowned Style source photo ${photo.id}.`);
+    }
+    const delivery = await this.repository.getPhotoDeliveryRow(photo.id);
+    if (!delivery?.r2_key || delivery.artifact_id !== photo.artifactId) {
+      throw new Error(`Style source photo ${photo.id} does not have an exact owned artifact binding.`);
+    }
+    const object = await this.options.artifacts.get(delivery.r2_key);
+    if (!object) {
+      throw new Error(`Style source photo ${photo.id} is missing its owned bytes.`);
+    }
+    return sha256StyleBytes(new Uint8Array(await object.arrayBuffer()));
+  }
+
+  private async createItemWithAtomicCatalogMedia(input: {
+    fieldEvidence: unknown;
+    hasHostProfile: boolean;
+    item: {
+      brand: string | null;
+      category: string;
+      colorFamily: string | null;
+      colorHex: string | null;
+      colorName: string | null;
+      comparatorKey: string;
+      formality: number | null;
+      id: string;
+      name: string | null;
+      size: string | null;
+      subcategory: string;
+    };
+    media: StyleAtomicCatalogMediaInput;
+    profile: ReturnType<typeof normalizeStyleItemProfile>;
+    profileMethod: 'heuristic_bootstrap' | 'host_text' | 'host_vision';
+    provenance: MutationProvenance;
+    sourceSnapshot: unknown;
+    technicalMetadata: unknown;
+  }): Promise<StyleItemRecord> {
+    const media = input.media;
+    const catalogUsesData = Boolean(media.catalogImageDataUrl?.trim());
+    const catalogUsesHosted = Boolean(media.catalogHostedFileDownloadUrl?.trim());
+    const catalogUsesUrl = Boolean(media.catalogImageUrl?.trim());
+    if ([catalogUsesData, catalogUsesHosted, catalogUsesUrl].filter(Boolean).length !== 1) {
+      throw new Error('Atomic Style create requires exactly one owned Catalog byte source.');
+    }
+    const generated = media.imageOrigin === 'host_generated';
+    const sourceUsesData = Boolean(media.retainedSourceImageDataUrl?.trim());
+    const sourceUsesHosted = Boolean(media.retainedSourceHostedFileDownloadUrl?.trim());
+    if (generated && sourceUsesData === sourceUsesHosted) {
+      throw new Error('Atomic host-generated Style create requires exactly one retained source byte input.');
+    }
+    if (!generated && (sourceUsesData || sourceUsesHosted)) {
+      throw new Error('Atomic inspected-source Style create uses the Catalog bytes as source evidence and cannot accept a second retained source.');
+    }
+
+    const catalogPhotoId = `style-photo:${input.item.id}:${generated ? 'catalog' : 'primary'}`;
+    const sourcePhotoId = generated ? `style-photo:${input.item.id}:source-${crypto.randomUUID()}` : null;
+    const createdArtifacts: Array<{ id: string; r2_key: string }> = [];
+    let committed = false;
+    try {
+      // Reading and validating the image bytes runs before any item or photo row is written. Those
+      // failures are typed (unusableStage) so the public create can save the item text-first instead
+      // of losing it (D24). Storage failures stay ordinary errors; artifacts are cleaned below.
+      const catalogAsset = await this.ingestPhotoAsset({
+        dataBase64: null,
+        dataUrl: media.catalogImageDataUrl?.trim() || null,
+        hostedFileDownloadUrl: media.catalogHostedFileDownloadUrl?.trim() || null,
+        itemId: input.item.id,
+        mimeType: null,
+        photoId: catalogPhotoId,
+        sourceUrl: media.catalogImageUrl?.trim() || null,
+        unusableStage: 'catalog',
+      });
+      if (!catalogAsset) throw new Error('Atomic Style create could not retain the required Catalog bytes.');
+      createdArtifacts.push({ id: catalogAsset.artifactId, r2_key: catalogAsset.r2Key });
+
+      const retainedSourceAsset = generated && sourcePhotoId
+        ? await this.ingestPhotoAsset({
+            dataBase64: null,
+            dataUrl: media.retainedSourceImageDataUrl?.trim() || null,
+            hostedFileDownloadUrl: media.retainedSourceHostedFileDownloadUrl?.trim() || null,
+            itemId: input.item.id,
+            mimeType: null,
+            photoId: sourcePhotoId,
+            sourceUrl: null,
+            unusableStage: 'source',
+          })
+        : null;
+      if (generated && !retainedSourceAsset) {
+        throw new Error('Atomic Style create could not retain the required source bytes.');
+      }
+      if (retainedSourceAsset) createdArtifacts.push({ id: retainedSourceAsset.artifactId, r2_key: retainedSourceAsset.r2Key });
+
+      const photos: Parameters<StyleRepository['replaceItemPhotos']>[1] = [
+        {
+          artifactId: catalogAsset.artifactId,
+          bgRemoved: media.backgroundRemoved === true,
+          capturedAt: null,
+          createdAt: null,
+          id: catalogPhotoId,
+          importedFrom: generated ? 'fluent_style_host_generated' : 'fluent_style_user_source',
+          isFit: false,
+          isPrimary: true,
+          kind: 'product',
+          legacyPhotoId: null,
+          mimeType: catalogAsset.mimeType,
+          source: generated ? 'generated_metadata' : 'user_upload',
+          sourceUrl: null,
+          url: `artifact:${catalogPhotoId}`,
+          view: 'front',
+        },
+        ...(retainedSourceAsset && sourcePhotoId
+          ? [{
+              artifactId: retainedSourceAsset.artifactId,
+              bgRemoved: false,
+              capturedAt: null,
+              createdAt: null,
+              id: sourcePhotoId,
+              importedFrom: 'fluent_style_user_source',
+              isFit: (media.retainedSourceImageType ?? 'alternate') === 'fit',
+              isPrimary: false,
+              kind: (media.retainedSourceImageType ?? 'alternate') === 'fit' ? 'fit' : 'product',
+              legacyPhotoId: null,
+              mimeType: retainedSourceAsset.mimeType,
+              source: 'user_upload',
+              sourceUrl: null,
+              url: `artifact:${sourcePhotoId}`,
+              view: (media.retainedSourceImageType ?? 'alternate') === 'fit' ? 'fit_front' : 'front',
+            } satisfies Parameters<StyleRepository['replaceItemPhotos']>[1][number]]
+          : []),
+      ];
+      const provenance = await this.catalogQualityProvenanceUpdate({
+        beforeProvenance: {
+          fieldEvidence: input.fieldEvidence,
+          sourceSnapshot: input.sourceSnapshot,
+          technicalMetadata: input.technicalMetadata,
+          updatedAt: null,
+        },
+        catalogSha256: catalogAsset.sha256,
+        duplicateResolution: null,
+        itemId: input.item.id,
+        photos,
+        qualityReview: {
+          catalogMode: generated ? 'host_generated' : 'inspected_source',
+          catalogPhotoId,
+          sourcePhotoId,
+        },
+        retainedSourceArtifactId: retainedSourceAsset?.artifactId ?? (generated ? null : catalogAsset.artifactId),
+        retainedSourceSha256: retainedSourceAsset?.sha256 ?? (generated ? null : catalogAsset.sha256),
+        sourceSnapshot: {
+          ...(asRecord(parseJsonLike(input.sourceSnapshot)) ?? {}),
+          imageInput: catalogUsesData ? 'inline_data_url' : 'hosted_file_download',
+          imageOrigin: media.imageOrigin,
+        },
+      });
+      if (!provenance) throw new Error('Atomic Style create did not produce the required provenance binding.');
+      const profile = input.hasHostProfile
+        ? input.profile
+        : deriveBaselineStyleItemProfile({
+            category: input.item.category,
+            comparatorKey: input.item.comparatorKey,
+            formality: input.item.formality,
+            name: input.item.name,
+            subcategory: input.item.subcategory,
+          });
+      const profileSource = input.hasHostProfile ? 'style_host_onboarding' : 'style_auto_bootstrap';
+      const profileMethod = input.hasHostProfile ? input.profileMethod : 'heuristic_bootstrap';
+      const committedFallback: StyleItemRecord = {
+        brand: input.item.brand,
+        category: input.item.category,
+        colorFamily: input.item.colorFamily,
+        colorHex: input.item.colorHex,
+        colorName: input.item.colorName,
+        comparatorKey: input.item.comparatorKey as StyleItemRecord['comparatorKey'],
+        createdAt: null,
+        formality: input.item.formality,
+        id: input.item.id,
+        legacyItemId: null,
+        name: input.item.name,
+        photos: photos.map((photo) => ({
+          artifactAvailable: true,
+          artifactId: photo.artifactId,
+          bgRemoved: photo.bgRemoved,
+          capturedAt: photo.capturedAt,
+          createdAt: photo.createdAt,
+          delivery: null,
+          id: photo.id,
+          importedFrom: photo.importedFrom,
+          isFit: photo.isFit,
+          isPrimary: photo.isPrimary,
+          itemId: input.item.id,
+          kind: photo.kind as StylePhotoRecord['kind'],
+          legacyPhotoId: photo.legacyPhotoId,
+          mimeType: photo.mimeType,
+          source: photo.source as StylePhotoRecord['source'],
+          sourceUrl: photo.sourceUrl,
+          url: photo.url,
+          view: photo.view,
+        })),
+        profile: {
+          itemId: input.item.id,
+          legacyProfileId: null,
+          method: profileMethod,
+          raw: profile,
+          source: profileSource,
+          updatedAt: null,
+        },
+        size: input.item.size,
+        status: 'active',
+        subcategory: input.item.subcategory,
+        tenantId: this.repository.profileKey.tenantId,
+        updatedAt: null,
+      };
+      await this.repository.createItemWithPhotos({
+        event: {
+          actorEmail: input.provenance.actorEmail,
+          actorName: input.provenance.actorName,
+          afterJson: stringifyJson(summarizeStyleItem(committedFallback)),
+          confidence: input.provenance.confidence,
+          id: `domain-event:${crypto.randomUUID()}`,
+          sessionId: input.provenance.sessionId,
+          sourceAgent: input.provenance.sourceAgent,
+          sourceSkill: input.provenance.sourceSkill,
+          sourceType: input.provenance.sourceType,
+        },
+        item: input.item,
+        photos,
+        profile: {
+          method: profileMethod,
+          rawJson: JSON.stringify(profile),
+          source: profileSource,
+        },
+        provenance,
+      });
+      committed = true;
+      try {
+        const created = await this.getItem(input.item.id);
+        if (created?.status === 'active' && created.photos.length === photos.length) {
+          return created;
+        }
+      } catch {
+        // The repository batch atomically verified the complete item/media state and durable event.
+        // A secondary presentation readback failure cannot turn that committed success into a retry risk.
+      }
+      return committedFallback;
+    } catch (error) {
+      if (!committed) await this.cleanupUnreferencedPhotoArtifacts(createdArtifacts);
+      throw error;
+    }
+  }
+
   private async ingestPhotoAsset(input: {
     dataBase64: string | null;
     dataUrl: string | null;
     filePath?: string | null;
+    hostedFileDownloadUrl?: string | null;
     itemId: string;
     mimeType: string | null;
     photoId: string;
     sourceUrl: string | null;
-  }): Promise<{ artifactId: string; mimeType: string; r2Key: string } | null> {
+    // Set by the atomic Catalog create: a failure to read or validate the image bytes is raised as
+    // StyleCatalogMediaUnusableError so the caller can save the item text-first.
+    unusableStage?: 'catalog' | 'source';
+  }): Promise<{ artifactId: string; mimeType: string; r2Key: string; sha256: string } | null> {
     if (!this.options.artifacts) {
       return null;
     }
 
-    const ownedAsset = await parseOwnedStyleAsset({
-      dataBase64: input.dataBase64,
-      dataUrl: input.dataUrl,
-      filePath: input.filePath ?? null,
-      mimeTypeHint: input.mimeType,
-      sourceUrl: input.sourceUrl,
-    });
+    let ownedAsset: Awaited<ReturnType<typeof parseOwnedStyleAsset>>;
+    try {
+      ownedAsset = await parseOwnedStyleAsset({
+        dataBase64: input.dataBase64,
+        dataUrl: input.dataUrl,
+        filePath: input.filePath ?? null,
+        hostedFileDownloadUrl: input.hostedFileDownloadUrl ?? null,
+        mimeTypeHint: input.mimeType,
+        sourceUrl: input.sourceUrl,
+      });
+    } catch (error) {
+      if (!input.unusableStage) throw error;
+      throw new StyleCatalogMediaUnusableError(styleImageNotAttachedReason(error), input.unusableStage);
+    }
     if (!ownedAsset) {
+      if (input.unusableStage) {
+        throw new StyleCatalogMediaUnusableError('the image reference is not a downloadable image', input.unusableStage);
+      }
       return null;
     }
 
@@ -3008,6 +4327,7 @@ export class StyleService {
       artifactId: ownedAsset.artifactId,
       mimeType: ownedAsset.mimeType,
       r2Key,
+      sha256: await sha256StyleBytes(ownedAsset.bytes),
     };
   }
 
@@ -3018,14 +4338,23 @@ export class StyleService {
       if (!unreferenced) {
         continue;
       }
-      const keyIsShared = await this.repository.hasOtherArtifactAtR2Key(unreferenced.id, unreferenced.r2_key);
-      if (!keyIsShared) {
-        if (!this.options.artifacts?.delete) {
-          throw new Error(`Cannot delete superseded Style artifact ${unreferenced.id}: blob deletion is unavailable.`);
-        }
-        await this.options.artifacts.delete(unreferenced.r2_key);
+      const blobDelete = this.options.artifacts?.delete?.bind(this.options.artifacts);
+      if (!blobDelete && !await this.repository.hasOtherArtifactAtR2Key(unreferenced.id, unreferenced.r2_key)) {
+        throw new Error(`Cannot delete superseded Style artifact ${unreferenced.id}: blob deletion is unavailable.`);
       }
-      await this.repository.deleteArtifactIfUnreferenced(unreferenced.id);
+      // Release the row first, atomically and only while unreferenced; only that release permits the
+      // blob delete. Photo writes refuse to reference a released artifact (see the repository guard),
+      // so no committed row can reference a blob deleted here. A failed blob delete leaks a blob
+      // (never a broken reference).
+      if (!await this.repository.deleteArtifactIfUnreferenced(unreferenced.id)) {
+        continue;
+      }
+      const keyIsShared = await this.repository.hasOtherArtifactAtR2Key(unreferenced.id, unreferenced.r2_key);
+      if (!keyIsShared && blobDelete) {
+        await blobDelete(unreferenced.r2_key);
+        await blobDelete(buildStyleDerivedImageAssetKey(unreferenced.r2_key, 'thumbnail'));
+        await blobDelete(buildStyleDerivedImageAssetKey(unreferenced.r2_key, 'detail'));
+      }
     }
   }
 
@@ -3064,6 +4393,7 @@ export class StyleService {
 
   private async mapPhotoRow(row: {
     artifact_id?: string | null;
+    artifact_exists?: unknown;
     bg_removed: unknown;
     captured_at?: string | null;
     created_at: string | null;
@@ -3081,9 +4411,14 @@ export class StyleService {
     view: string | null;
   }): Promise<StylePhotoRecord> {
     const isFit = asBoolean(row.is_fit);
-    const sourceUrl = row.source_url ?? row.url ?? null;
-    const delivery = await this.buildPhotoDelivery(row.id, row.artifact_id ?? null);
+    // Keep retained source evidence separate from the display transport. Owned
+    // photos use an artifact:<photoId> display URL; that pseudo-URL is not a
+    // source reference and must never satisfy source-evidence replay checks.
+    const sourceUrl = row.source_url ?? null;
+    const artifactAvailable = asBoolean(row.artifact_exists);
+    const delivery = await this.buildPhotoDelivery(row.id, row.artifact_id ?? null, artifactAvailable);
     return {
+      artifactAvailable,
       artifactId: row.artifact_id ?? null,
       bgRemoved: asBoolean(row.bg_removed),
       capturedAt: row.captured_at ?? null,
@@ -3107,7 +4442,7 @@ export class StyleService {
         url: sourceUrl,
       }),
       sourceUrl,
-      url: sourceUrl ?? row.url,
+      url: row.url,
       view: normalizeStylePhotoView(row.view),
     };
   }
@@ -3163,6 +4498,25 @@ function buildComparatorCoverage(input: {
     sameCategoryCount: 0,
     typedRoleCount: 0,
   };
+}
+
+function isIncomingGeneratedCatalogPhotoTuple(photo: Record<string, unknown>): boolean {
+  return asNullableString(photo.imported_from ?? photo.importedFrom) === 'fluent_style_host_generated'
+    && asNullableString(photo.source) === 'generated_metadata'
+    && asNullableString(photo.kind) === 'product'
+    && asNullableString(photo.view) === 'front'
+    && !asBoolean(photo.is_fit ?? photo.isFit);
+}
+
+function isPersistedGeneratedCatalogPhotoTuple(photo: Record<string, unknown>): boolean {
+  if (!isIncomingGeneratedCatalogPhotoTuple(photo)) return false;
+  const artifactBacked = asNullableString(photo.artifact_id ?? photo.artifactId) !== null
+    && asBoolean(photo.artifact_exists ?? photo.artifactAvailable);
+  const sourceUrl = asNullableString(photo.source_url ?? photo.sourceUrl);
+  const referenceBacked = sourceUrl !== null
+    && asNullableString(photo.url) === sourceUrl
+    && normalizeStyleRemoteImageSourceUrl(sourceUrl) !== null;
+  return artifactBacked || referenceBacked;
 }
 
 function pickRepresentativeItems(items: StyleItemRecord[]): StyleItemSummaryRecord[] {
@@ -3380,15 +4734,35 @@ function rankStyleArchiveNameCandidates(items: StyleItemRecord[], requestedName:
     .map((entry) => entry.item);
 }
 
-function selectBestVisualBundlePhoto(photos: StylePhotoRecord[], preference: 'product' | 'fit' = 'fit'): StylePhotoRecord | null {
-  const candidates = preference === 'product' ? photos.filter(isStyleDisplayPhoto) : photos;
+function selectBestVisualBundlePhoto(
+  photos: StylePhotoRecord[],
+  preference: 'product' | 'fit' = 'fit',
+  sourceEvidenceOnly = false,
+): StylePhotoRecord | null {
+  // Grid/catalog presentation excludes worn fit photos, but must not discard retained source,
+  // detail, or unknown-view media before deliverability is considered. Legacy imports often
+  // carry their only healthy source image under one of those non-product labels.
+  const roleCandidates = preference === 'product' ? photos.filter((photo) => !isStyleFitPhoto(photo)) : photos;
+  // Repair reads must recover the exact retained/source evidence, never a generated presentation
+  // derivative that happens to be primary or incompletely classified as Catalog. Normal Closet,
+  // purchase, and visual-bundle selection deliberately keep their existing generated-media path.
+  const evidenceCandidates = sourceEvidenceOnly
+    ? roleCandidates.filter((photo) => photo.source !== 'generated_metadata' && photo.importedFrom !== 'fluent_style_host_generated')
+    : roleCandidates;
+  // Eligibility is stricter than ranking: a saved row is not visual evidence unless Fluent can
+  // deliver its owned artifact or the retained source is a validated public HTTPS URL. This keeps
+  // private, insecure, and relative legacy references out of MCP structured content entirely.
+  const candidates = evidenceCandidates.filter(isDeliverableVisualBundlePhoto);
   if (candidates.length === 0) {
     return null;
   }
+  const hasDeliverableNonGeneratedPrimary = candidates.some((photo) =>
+    photo.isPrimary && photo.source !== 'generated_metadata',
+  );
 
   const sorted = [...candidates].sort((left, right) => {
-    const leftScore = scoreVisualBundlePhoto(left, preference);
-    const rightScore = scoreVisualBundlePhoto(right, preference);
+    const leftScore = scoreVisualBundlePhoto(left, preference, hasDeliverableNonGeneratedPrimary);
+    const rightScore = scoreVisualBundlePhoto(right, preference, hasDeliverableNonGeneratedPrimary);
     if (rightScore !== leftScore) {
       return rightScore - leftScore;
     }
@@ -3400,23 +4774,52 @@ function selectBestVisualBundlePhoto(photos: StylePhotoRecord[], preference: 'pr
   return sorted[0] ?? null;
 }
 
-function scoreVisualBundlePhoto(photo: StylePhotoRecord, preference: 'product' | 'fit' = 'fit'): number {
-  const hasArtifact = Boolean(photo.artifactId || photo.delivery);
+function isDeliverableVisualBundlePhoto(photo: StylePhotoRecord): boolean {
+  if (photo.artifactAvailable === true) {
+    return true;
+  }
+  const sourceUrl = photo.sourceUrl?.trim() || photo.url?.trim() || '';
+  return normalizeStyleRemoteImageSourceUrl(sourceUrl) !== null;
+}
+
+function scoreVisualBundlePhoto(
+  photo: StylePhotoRecord,
+  preference: 'product' | 'fit' = 'fit',
+  hasDeliverableNonGeneratedPrimary = false,
+): number {
+  const hasArtifact = photo.artifactAvailable === true;
+  const sourceUrl = photo.sourceUrl?.trim() || photo.url?.trim() || '';
+  const hasRetainedRemoteCandidate = normalizeStyleRemoteImageSourceUrl(sourceUrl) !== null;
   const isFit = isStyleFitPhoto(photo);
   const isProduct = isStyleDisplayPhoto(photo);
 
-  // Default ('fit') keeps the purchase-analysis/comparator behaviour where worn/fit imagery is
-  // richer for silhouette reasoning. The closet viewer passes 'product' to prefer clean studio shots.
-  const preferred = preference === 'product' ? isProduct : isFit;
-  const secondary = preference === 'product' ? isFit : isProduct;
+  // Product/Grid mode ranks actual deliverability first, then clean product semantics. This lets
+  // a retained source/detail image beat a dangling legacy row merely labelled as a product photo.
+  if (preference === 'product') {
+    const isGeneratedCatalog = photo.source === 'generated_metadata'
+      && photo.importedFrom === 'fluent_style_host_generated'
+      && photo.kind === 'product'
+      && photo.view === 'front'
+      && (photo.isPrimary || !hasDeliverableNonGeneratedPrimary)
+      && !isFit;
+    const deliverabilityScore = hasArtifact ? 30 : hasRetainedRemoteCandidate ? 20 : 0;
+    // Catalog is presentation, Original is truth. A valid generated Catalog reference must remain
+    // the grid/detail presentation even when an owned Original is also available for trust review.
+    return (isGeneratedCatalog ? 40 : 0) + deliverabilityScore + (isProduct ? 4 : 0) + (photo.isPrimary ? 1 : 0);
+  }
+
+  // Default fit mode preserves purchase-analysis/comparator behaviour where worn imagery is
+  // richer for silhouette reasoning.
+  const preferred = isFit;
+  const secondary = isProduct;
 
   let score = 0;
   if (preferred) {
-    score = hasArtifact ? 10 : 6;
+    score = hasArtifact ? 10 : hasRetainedRemoteCandidate ? 7 : 3;
   } else if (secondary) {
-    score = hasArtifact ? 8 : 3;
+    score = hasArtifact ? 8 : hasRetainedRemoteCandidate ? 5 : 2;
   } else {
-    score = hasArtifact ? 7 : 2;
+    score = hasArtifact ? 7 : hasRetainedRemoteCandidate ? 4 : 1;
   }
   if (photo.isPrimary) {
     score += 1;
@@ -3741,6 +5144,17 @@ async function hashClientToken(token: string): Promise<string> {
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('')
     .slice(0, 40);
+}
+
+async function sha256StyleBytes(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function sha256StyleCatalogBinding(value: Record<string, unknown>): Promise<string> {
+  return sha256StyleBytes(new TextEncoder().encode(JSON.stringify(value)));
 }
 
 // Onboarding provenance honesty (GAP-4/R9): with no image delivered, downgrade any host_vision field

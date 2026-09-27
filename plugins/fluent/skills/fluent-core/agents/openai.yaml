@@ -1,0 +1,6 @@
+interface:
+  display_name: "Fluent Setup"
+  short_description: "Get Fluent ready and keep shared facts current"
+  default_prompt: "Use $fluent-core to check my Fluent context and help with the most useful next step."
+policy:
+  allow_implicit_invocation: true

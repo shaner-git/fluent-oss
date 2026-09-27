@@ -16,7 +16,29 @@ export const FLUENT_RESOURCE_URIS = FLUENT_PUBLIC_RESOURCE_URIS;
 export const FLUENT_RENDER_ADAPTER_TOOL_NAMES = FLUENT_PUBLIC_RENDER_ADAPTERS;
 export const FLUENT_OPTIONAL_CAPABILITIES = FLUENT_PUBLIC_OPTIONAL_CAPABILITIES;
 export const FLUENT_CHATGPT_APP_WRITE_TOOL_NAMES = FLUENT_PUBLIC_WRITE_TOOL_NAMES;
-export const FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES = [] as const;
+// Classify the most consequential supported mode. Reversible overwrites and
+// archive operations still count; audit history is not a non-destructive exemption.
+export const FLUENT_CHATGPT_APP_DESTRUCTIVE_TOOL_NAMES = [
+  'fluent_update_shared_profile_patch',
+  'fluent_update_recipe_patch',
+  'fluent_record_recipe_feedback',
+  'fluent_save_meal_plan',
+  'fluent_apply_grocery_list_change',
+  'fluent_apply_grocery_shopping_result',
+  'fluent_set_budget_envelope',
+  'fluent_update_style_item_patch',
+  'fluent_create_style_item',
+  'fluent_refresh_style_item_profile',
+  'fluent_set_style_item_image',
+  'fluent_archive_item',
+] as const;
+// These tools may fetch host-selected public image URLs, including retained
+// references. Merely accessing Fluent-owned storage is not open-world access.
+export const FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES = [
+  'fluent_get_item',
+  'fluent_get_media_bundle',
+  'fluent_create_style_item',
+] as const;
 
 // Runtime guidance from retired generations is intentionally not part of the
 // launch contract. Packaged host skills provide the current routing guidance.

@@ -64,8 +64,8 @@ const CLOUD_ACCOUNT_TIMELINE =
   'Full Fluent account deletions are attempted immediately after confirmation and should finish in the same browser session unless an error requires manual review.';
 
 const WAITLIST_ONLY_DELETED_DATA = [
-  'Better Auth sign-in data for the early-access request account, including the Better Auth user row plus its linked sessions, accounts, and opaque access tokens.',
-  'Any early-access request, invite, onboarding, and pre-access hosted identity rows that were created before the account was approved.',
+  'Better Auth sign-in data for the Fluent account, including the Better Auth user row plus its linked sessions, accounts, and opaque access tokens.',
+  'Any access request, invite, onboarding, and pre-access hosted identity rows that were created before the account was approved.',
 ];
 
 const CLOUD_ACCOUNT_DELETED_DATA = [
@@ -649,12 +649,13 @@ async function recordAccountDeletionAuditEvent(
   await db
     .prepare(
       `INSERT INTO domain_events (
-         id, domain, entity_type, entity_id, event_type, before_json, after_json, patch_json,
+         id, tenant_id, domain, entity_type, entity_id, event_type, before_json, after_json, patch_json,
          source_agent, source_skill, session_id, confidence, source_type, actor_email, actor_name
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       `domain-event:${crypto.randomUUID()}`,
+      input.after?.tenantId ?? input.before?.tenantId ?? null,
       'core',
       'fluent_account_deletion_request',
       input.after?.id ?? input.before?.id ?? null,

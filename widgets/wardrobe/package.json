@@ -1,0 +1,8 @@
+{
+  "name": "fluent-wardrobe-widget",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "node build.mjs", "test": "node --test tests/*.test.mjs" },
+  "dependencies": { "@phosphor-icons/react": "2.1.10", "react": "19.2.0", "react-dom": "19.2.0" },
+  "devDependencies": { "esbuild": "0.25.12" }
+}

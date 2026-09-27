@@ -87,9 +87,10 @@ const STYLE_ROLES = ['workhorse', 'bridge', 'statement', 'anchor', 'dress', 'spe
 
 const STYLE_ROLE_SYNONYMS: Record<string, string> = {
   casual: 'workhorse', everyday: 'workhorse', basic: 'workhorse', relaxed: 'workhorse',
-  smart: 'bridge', 'smart casual': 'bridge', versatile: 'bridge', business: 'bridge',
-  formal: 'dress',
-  lounge: 'specialist', loungewear: 'specialist', athletic: 'specialist', sport: 'specialist', outdoor: 'specialist', performance: 'specialist', specialty: 'specialist',
+  'everyday casual bottom': 'workhorse', 'everyday white sneaker': 'workhorse', utility: 'workhorse',
+  smart: 'bridge', 'smart casual': 'bridge', 'elevated casual': 'bridge', 'smart casual to casual elevated bottom': 'bridge', 'layering staple': 'bridge', versatile: 'bridge', business: 'bridge',
+  formal: 'dress', occasion: 'dress',
+  lounge: 'specialist', loungewear: 'specialist', athletic: 'specialist', sport: 'specialist', outdoor: 'specialist', performance: 'specialist', specialty: 'specialist', sentimental: 'specialist',
 };
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
@@ -158,7 +159,8 @@ export function defaultStyleProfile(): StyleProfileDocument {
     brandAffinities: [],
     budgetProfile: null,
     calibrationSignals: [],
-    closetCoverage: null,
+    closetCoverage: 'unknown',
+    closetCoverageConfirmedAt: null,
     colorPreferences: [],
     colorDirections: [],
     contextRules: [],
@@ -185,6 +187,9 @@ export function defaultStyleProfile(): StyleProfileDocument {
 export function normalizeStyleProfile(value: unknown): StyleProfileDocument {
   const record = asRecord(parseJsonLike<Record<string, unknown>>(value)) ?? {};
   const defaults = defaultStyleProfile();
+  const importedClosetConfirmed = typeof record.importedClosetConfirmed === 'boolean'
+    ? record.importedClosetConfirmed
+    : defaults.importedClosetConfirmed;
   const legacyColorDirections = asStringArray(record.colorDirections ?? defaults.colorDirections);
   const legacyPreferredSilhouettes = asStringArray(record.preferredSilhouettes ?? defaults.preferredSilhouettes);
   return {
@@ -192,7 +197,8 @@ export function normalizeStyleProfile(value: unknown): StyleProfileDocument {
     brandAffinities: normalizeBrandAffinities(record.brandAffinities ?? defaults.brandAffinities),
     budgetProfile: normalizeBudgetProfile(record.budgetProfile ?? defaults.budgetProfile),
     calibrationSignals: normalizeCalibrationSignals(record.calibrationSignals ?? defaults.calibrationSignals),
-    closetCoverage: normalizeStyleClosetCoverage(record.closetCoverage ?? defaults.closetCoverage),
+    closetCoverage: normalizeStyleClosetCoverage(record.closetCoverage ?? defaults.closetCoverage, importedClosetConfirmed),
+    closetCoverageConfirmedAt: asNullableString(record.closetCoverageConfirmedAt ?? defaults.closetCoverageConfirmedAt),
     colorPreferences: normalizeWeightedPreferences(record.colorPreferences, legacyColorDirections),
     colorDirections: legacyColorDirections,
     contextRules: asStringArray(record.contextRules ?? defaults.contextRules),
@@ -203,10 +209,7 @@ export function normalizeStyleProfile(value: unknown): StyleProfileDocument {
     formalityTendency: asNullableString(record.formalityTendency ?? defaults.formalityTendency),
     hardAvoids: asStringArray(record.hardAvoids ?? defaults.hardAvoids),
     importedClosetAt: asNullableString(record.importedClosetAt ?? defaults.importedClosetAt),
-    importedClosetConfirmed:
-      typeof record.importedClosetConfirmed === 'boolean'
-        ? record.importedClosetConfirmed
-        : defaults.importedClosetConfirmed,
+    importedClosetConfirmed,
     importSource: asNullableString(record.importSource ?? defaults.importSource),
     itemCalibration: normalizeItemCalibration(record.itemCalibration ?? defaults.itemCalibration),
     onboardingPath: normalizeStyleOnboardingPath(record.onboardingPath ?? defaults.onboardingPath),
@@ -233,7 +236,12 @@ export function normalizeStyleProfilePatch(value: unknown): Partial<StyleProfile
   if ('brandAffinities' in record) patch.brandAffinities = normalizeBrandAffinities(record.brandAffinities);
   if ('budgetProfile' in record) patch.budgetProfile = normalizeBudgetProfile(record.budgetProfile);
   if ('calibrationSignals' in record) patch.calibrationSignals = normalizeCalibrationSignals(record.calibrationSignals);
-  if ('closetCoverage' in record) patch.closetCoverage = normalizeStyleClosetCoverage(record.closetCoverage);
+  if ('closetCoverage' in record) {
+    patch.closetCoverage = normalizeStyleClosetCoverage(record.closetCoverage, record.importedClosetConfirmed === true);
+  }
+  if ('closetCoverageConfirmedAt' in record) {
+    patch.closetCoverageConfirmedAt = asNullableString(record.closetCoverageConfirmedAt);
+  }
   if ('colorPreferences' in record) patch.colorPreferences = normalizeWeightedPreferences(record.colorPreferences);
   if ('colorDirections' in record) patch.colorDirections = asStringArray(record.colorDirections);
   if ('contextRules' in record) patch.contextRules = asStringArray(record.contextRules);
@@ -546,6 +554,9 @@ export function normalizeStyleItemProfile(value: unknown): StyleItemProfileDocum
         }
       : null,
     fabricHand: asNullableString(record.fabricHand),
+    feedbackNote: asNullableString(record.feedbackNote),
+    feedbackSignals: normalizeStyleItemFeedbackSignals(record.feedbackSignals),
+    feedbackUpdatedAt: asNullableString(record.feedbackUpdatedAt),
     fitObservations: asStringArray(record.fitObservations),
     fitVerdict: normalizeStyleFitVerdict(record.fitVerdict),
     itemType: asNullableString(record.itemType),
@@ -565,7 +576,21 @@ export function normalizeStyleItemProfile(value: unknown): StyleItemProfileDocum
     useCases: asStringArray(record.useCases),
     avoidUseCases: asStringArray(record.avoidUseCases),
     visualWeight: asNullableString(record.visualWeight),
+    wearUnderstanding: normalizeStyleWearUnderstanding(record.wearUnderstanding),
+    worksFor: asStringArray(record.worksFor),
+    avoidFor: asStringArray(record.avoidFor),
   };
+}
+
+function normalizeStyleWearUnderstanding(value: unknown): StyleItemProfileDocument['wearUnderstanding'] {
+  return value === 'recently_worn' || value === 'rarely_worn' || value === 'unknown' ? value : 'unknown';
+}
+
+function normalizeStyleItemFeedbackSignals(value: unknown): StyleItemProfileDocument['feedbackSignals'] {
+  return asStringArray(value).filter(
+    (entry): entry is StyleItemProfileDocument['feedbackSignals'][number] =>
+      entry === 'comfortable' || entry === 'hard_to_style' || entry === 'too_formal',
+  );
 }
 
 export function normalizeStylePurchaseCandidate(value: unknown): StylePurchaseCandidate {
@@ -1069,8 +1094,14 @@ export function normalizeStyleComparatorKey(value: unknown): StyleComparatorKey 
     : 'unknown';
 }
 
-export function normalizeStyleClosetCoverage(value: unknown): StyleClosetCoverage {
-  return value === 'current' || value === 'partial' ? value : null;
+export function normalizeStyleClosetCoverage(value: unknown, legacyImportedClosetConfirmed = false): StyleClosetCoverage {
+  if (value === 'representative' || value === 'partial' || value === 'out_of_date' || value === 'unknown') {
+    return value;
+  }
+  if (value === 'current') {
+    return legacyImportedClosetConfirmed ? 'representative' : 'unknown';
+  }
+  return 'unknown';
 }
 
 export function normalizeStyleOnboardingPath(value: unknown): StyleOnboardingPath {

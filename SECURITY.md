@@ -1,6 +1,6 @@
 # Security
 
-Fluent is early-access software with a supported single-user OSS runtime. This page summarizes the security controls that are implemented in this repository today.
+Fluent has a hosted service and a supported single-user open-source runtime. This page summarizes the security controls that are implemented in this repository today.
 
 ## Reporting
 

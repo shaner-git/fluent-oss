@@ -9,6 +9,7 @@ This reference is generated from the single Fluent 2.0 public contract. There is
 
 - `fluent_get_capabilities`
 - `fluent_get_account_status`
+- `fluent_get_account_profile`
 - `fluent_get_context`
 - `fluent_get_shared_profile`
 - `fluent_list_items`
@@ -41,4 +42,12 @@ This reference is generated from the single Fluent 2.0 public contract. There is
 - `fluent_render_style_closet_surface`
 <!-- current-tools:end -->
 
-Writes require explicit user intent and returned read-after-write proof. Render adapters are optional presentation layers; structured data and text remain canonical.
+## Product enrichment candidate
+
+`fluent_update_style_item_patch` accepts `product_enrichment` with an empty `patch`, `expected_revision` from the item (0 when absent), UUID `operation_id`, and a complete attributed `reference`. References contain candidate/confirmed/rejected status, match basis, public product URL, brand/name/code, dated sources, and source-linked colour/composition/care/construction/origin facts. Preserve unchanged facts when replacing a reference. Stale revisions and changed replays fail; identical latest-operation retries are idempotent. Conflicting confirmed facts require user confirmation. New items are created first, then enriched using their saved ID.
+
+Only confirmed references appear in the widget. Enrichment does not browse, read email, edit personal fit/size, or alter media. Add inspected retailer photos using the existing alternate-photo add operation. Shared Cloud/OSS migration 0033 is required; references participate in tenant export, snapshot and account deletion. This is a test candidate, not a production or host-acceptance claim.
+
+Writes require explicit user intent. Verify saved state with read-after-write proof; an unavailable readback must distinguish a confirmed commit from an unknown outcome without blindly repeating the write. Render adapters are optional presentation layers; structured data and text remain canonical.
+
+`fluent_get_shared_profile` returns shared facts plus a minimal public profile projection containing only `displayName` and `timezone`; it excludes internal identifiers and metadata in hosted and open-source runtimes.

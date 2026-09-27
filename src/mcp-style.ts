@@ -1,3 +1,5 @@
+import { wardrobeIndexFor } from './domains/style/wardrobe-index';
+import { getApprovedWardrobeWidgetHtml } from './domains/style/wardrobe-approved-renderer';
 import { createHash } from 'node:crypto';
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -18,7 +20,14 @@ import {
   normalizeStylePurchaseCandidate,
   parseJsonLike,
 } from './domains/style/helpers';
-import { buildSignedStyleRemoteImageUrl } from './domains/style/media';
+import {
+  buildSignedStyleImageUrl,
+  buildSignedStyleRemoteImageUrl,
+  decryptStyleRemoteImageSourceToken,
+  normalizeStyleRemoteImageSourceUrl,
+  type StyleImageVariant,
+} from './domains/style/media';
+import { getFluentIdentityContext } from './fluent-identity';
 import {
   getStyleSetupCalibrationWidgetHtml,
   STYLE_SETUP_CALIBRATION_TEMPLATE_URI,
@@ -28,8 +37,22 @@ import {
   buildStyleClosetWidgetMeta,
   getStyleClosetWidgetHtml,
   STYLE_CLOSET_TEMPLATE_URI,
+  STYLE_CLOSET_TEMPLATE_VERSION,
+  STYLE_CLOSET_V20_TEMPLATE_URI,
+  STYLE_CLOSET_V21_TEMPLATE_URI,
+  STYLE_CLOSET_V22_TEMPLATE_URI,
+  STYLE_CLOSET_V23_TEMPLATE_URI,
+  STYLE_CLOSET_V24_TEMPLATE_URI,
+  STYLE_CLOSET_V25_TEMPLATE_URI,
+  STYLE_CLOSET_V26_TEMPLATE_URI,
+  STYLE_CLOSET_V27_TEMPLATE_URI,
+  STYLE_CLOSET_V33_TEMPLATE_URI,
+  STYLE_CLOSET_V8_TEMPLATE_URI,
   type StyleClosetFilter,
+  type StyleClosetPresentationIntent,
+  type StyleClosetStructuredContent,
 } from './domains/style/closet-manager';
+import { STYLE_CLOSET_V7_TEMPLATE_URI } from './domains/style/closet-manager-v7';
 import type {
   StylePurchaseStylistJudgment,
   StyleVisualBundleAssetRecord,
@@ -95,12 +118,16 @@ const styleClosetFilterSchema = z.object({
   brand: z.string().optional(),
   category: z.string().optional(),
   color: z.string().optional(),
-  favorite_only: z.boolean().optional(),
   item_ids: z.array(z.string()).optional(),
   query: z.string().optional(),
   size: z.string().optional(),
-  status: z.enum(['active', 'archived', 'any']).optional(),
+  status: z.enum(['active', 'archived', 'any']).optional().describe('Lifecycle filter. Newly created items are active. pending_review is not a valid lifecycle status; use presentation.mode="ingestion_review" for immediate post-ingestion review.'),
   subcategory: z.string().optional(),
+}).optional();
+const styleClosetPresentationSchema = z.object({
+  focused_item_id: z.string().optional(),
+  mode: z.enum(['browse', 'ingestion_review', 'comparison', 'detail', 'recommendation']).describe('Presentation mode only. ingestion_review displays exact newly created active item IDs; it does not change lifecycle status.'),
+  recommendation_reason: z.string().max(180).optional(),
 }).optional();
 const styleCalibrationSignalKindSchema = z.enum([
   'aesthetic',
@@ -200,7 +227,7 @@ const styleProfilePatchInputSchema = z.object({
   aestheticKeywords: z.array(z.string()).optional().describe('User-confirmed aesthetic words to add to the Style profile.'),
   brandAffinities: z.array(styleBrandAffinityInputSchema).optional().describe('User-confirmed brand preferences or avoids.'),
   budgetProfile: styleBudgetProfileInputSchema.nullable().optional().describe('Budget profile patch confirmed by the user.'),
-  closetCoverage: z.enum(['current', 'partial']).nullable().optional().describe('Whether the closet evidence is current or partial.'),
+  closetCoverage: z.enum(['representative', 'partial', 'out_of_date', 'unknown', 'current']).optional().describe('User-confirmed Closet coverage. current is accepted only as a legacy input and migrates conservatively.'),
   colorDirections: z.array(z.string()).optional().describe('Legacy simple color direction labels confirmed by the user.'),
   colorPreferences: z.array(styleWeightedPreferenceInputSchema).optional().describe('Weighted color preferences confirmed by the user.'),
   contextRules: z.array(z.string()).optional().describe('Context rules such as work, weekend, travel, or climate constraints.'),
@@ -478,7 +505,7 @@ type StylePurchaseVisualEvidenceCacheEntry = {
 const stylePurchaseVisualEvidenceCache = new Map<string, StylePurchaseVisualEvidenceCacheEntry>();
 
 export const STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGES = 4;
-const STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGE_BYTES = 1_500_000;
+const STYLE_VISUAL_BUNDLE_MAX_INLINE_IMAGE_BYTES = 5_000_000;
 const STYLE_PURCHASE_STATE_AUTHORITY_RULE =
   'Do not let host memory, prior chat context, or an earlier unsaved recommendation determine the buy/wait/skip call unless the user confirms it in the current turn or Fluent state/tool evidence supports it. Mention outside context only as outside Fluent state.';
 
@@ -1755,8 +1782,12 @@ async function buildWidgetImageUrl(
   if (!publicUrl) {
     return null;
   }
-  if (isSameOriginUrl(publicUrl, options.origin)) {
+  if (isSignedStyleDeliveryUrl(publicUrl, options.origin)) {
     return publicUrl.toString();
+  }
+  const remoteSource = normalizeStyleWidgetRemoteSourceUrl(publicUrl.toString());
+  if (!remoteSource) {
+    return null;
   }
   if (!options.imageDeliverySecret) {
     return null;
@@ -1765,7 +1796,7 @@ async function buildWidgetImageUrl(
     const signed = await buildSignedStyleRemoteImageUrl({
       origin: options.origin,
       secret: options.imageDeliverySecret,
-      sourceUrl: publicUrl.toString(),
+      sourceUrl: remoteSource.toString(),
     });
     return signed.originalUrl;
   } catch {
@@ -1779,6 +1810,27 @@ function isSameOriginUrl(url: URL, origin: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function normalizeStyleWidgetRemoteSourceUrl(value: string): URL | null {
+  const publicUrl = normalizePublicProductUrl(value);
+  if (!publicUrl) return null;
+  if (publicUrl.protocol === 'http:') {
+    if (publicUrl.port && publicUrl.port !== '80') return null;
+    publicUrl.protocol = 'https:';
+    publicUrl.port = '';
+  }
+  return normalizeStyleRemoteImageSourceUrl(publicUrl.toString());
+}
+
+function isSignedStyleDeliveryUrl(url: URL, origin: string): boolean {
+  if (!isSameOriginUrl(url, origin) || !url.searchParams.has('exp') || !url.searchParams.has('sig')) {
+    return false;
+  }
+  if (/^\/images\/style\/remote\/(?:detail|original|thumbnail)$/.test(url.pathname)) {
+    return url.searchParams.has('u');
+  }
+  return /^\/images\/style\/[^/]+\/(?:detail|original|thumbnail)$/.test(url.pathname);
 }
 
 function selectStyleVisualBundlePublicUrl(asset: StyleVisualBundleAssetRecord): string | null {
@@ -1962,12 +2014,171 @@ function isInsufficientPurchaseVisualEvidenceText(value: string): boolean {
   return INSUFFICIENT_PURCHASE_VISUAL_EVIDENCE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+export interface StyleClosetSurfaceBuilderInput {
+  cursor?: string | null;
+  filter?: StyleClosetFilter | null;
+  limit?: number | null;
+  presentation?: StyleClosetPresentationIntent | null;
+}
+
+export type StyleClosetSurfaceBuilder = (
+  input: StyleClosetSurfaceBuilderInput,
+) => Promise<StyleClosetStructuredContent>;
+
+export function createStyleClosetSurfaceBuilder(
+  style: StyleService,
+  origin: string,
+  options: { imageDeliverySecret?: string | null; thumbnailCapable?: boolean } = {},
+): StyleClosetSurfaceBuilder {
+  return async (input) => {
+    const structuredContent = await buildStyleClosetStructuredContent(style, {
+      cursor: input.cursor,
+      filter: input.filter,
+      limit: input.limit,
+      presentation: input.presentation,
+      resolveOwnedMediaUrl: async (photoId) => {
+        if (!options.imageDeliverySecret) return null;
+        try {
+          return (await buildSignedStyleImageUrl({
+            origin,
+            photoId,
+            secret: options.imageDeliverySecret,
+            tenantId: getFluentIdentityContext().tenantId,
+          })).originalUrl;
+        } catch {
+          return null;
+        }
+      },
+      resolveRemoteMediaUrl: async (sourceUrl) => buildWidgetImageUrl(sourceUrl, {
+        imageDeliverySecret: options.imageDeliverySecret,
+        origin,
+      }),
+    });
+    // Only recognized signed Fluent delivery URLs pass through. An arbitrary same-origin retained
+    // reference can still contain credentials and must be wrapped by the encrypted remote proxy.
+    const signedStyleImage = (value: string): boolean => {
+      try {
+        return isSignedStyleDeliveryUrl(new URL(value), origin);
+      } catch {
+        return false;
+      }
+    };
+    const buildRemoteStyleVariantUrl = async (value: string, variant: StyleImageVariant): Promise<string | null> => {
+      if (!options.imageDeliverySecret) return null;
+      let sourceUrl = value;
+      try {
+        const current = new URL(value);
+        if (isSameOriginUrl(current, origin) && /^\/images\/style\/remote\/(?:detail|original|thumbnail)$/.test(current.pathname)) {
+          const currentVariant = current.pathname.split('/').at(-1) as StyleImageVariant;
+          if (currentVariant === variant) return value;
+          const token = current.searchParams.get('u');
+          if (!token) return null;
+          sourceUrl = await decryptStyleRemoteImageSourceToken({
+            secret: options.imageDeliverySecret,
+            token,
+            variant: currentVariant,
+          }) ?? '';
+          if (!sourceUrl) return null;
+        } else if (signedStyleImage(value)) {
+          return value;
+        }
+        return (await buildSignedStyleRemoteImageUrl({
+          origin,
+          secret: options.imageDeliverySecret,
+          sourceUrl,
+          variant,
+        })).originalUrl;
+      } catch {
+        return null;
+      }
+    };
+    await Promise.all(structuredContent.items.map(async (item) => {
+      const gridSourceUrl = item.imageUrl;
+      const gridMedia = gridSourceUrl ? item.media.find((media) => media.url === gridSourceUrl) ?? null : null;
+      if (item.imageUrl && !signedStyleImage(item.imageUrl)) {
+        const proxied = await buildWidgetImageUrl(item.imageUrl, { imageDeliverySecret: options.imageDeliverySecret, origin });
+        item.imageUrl = proxied;
+        item.hasImage = Boolean(proxied);
+      }
+      if (item.fitImageUrl && !signedStyleImage(item.fitImageUrl)) {
+        item.fitImageUrl = await buildWidgetImageUrl(item.fitImageUrl, { imageDeliverySecret: options.imageDeliverySecret, origin });
+      }
+      await Promise.all(item.media.map(async (media) => {
+        if (media.artifactBacked && options.imageDeliverySecret && options.thumbnailCapable) {
+          try {
+            media.url = (await buildSignedStyleImageUrl({
+              origin,
+              photoId: media.id,
+              secret: options.imageDeliverySecret,
+              tenantId: getFluentIdentityContext().tenantId,
+              variant: 'detail',
+            })).originalUrl;
+          } catch {
+            media.url = null;
+          }
+          return;
+        }
+        if (!media.url && media.artifactBacked && options.imageDeliverySecret) {
+          try {
+            media.url = (await buildSignedStyleImageUrl({
+              origin,
+              photoId: media.id,
+              secret: options.imageDeliverySecret,
+              tenantId: getFluentIdentityContext().tenantId,
+            })).originalUrl;
+          } catch {
+            media.url = null;
+          }
+          return;
+        }
+        if (!media.url) return;
+        if (options.thumbnailCapable && options.imageDeliverySecret) {
+          media.url = await buildRemoteStyleVariantUrl(media.url, 'detail');
+          return;
+        }
+        if (media.url === item.imageUrl || media.url === item.fitImageUrl || signedStyleImage(media.url)) return;
+        media.url = await buildWidgetImageUrl(media.url, { imageDeliverySecret: options.imageDeliverySecret, origin });
+      }));
+      let thumbnailUrl: string | null = null;
+      if (options.thumbnailCapable && gridSourceUrl && options.imageDeliverySecret) {
+        try {
+          thumbnailUrl = gridMedia?.artifactBacked
+            ? (await buildSignedStyleImageUrl({
+                origin,
+                photoId: gridMedia.id,
+                secret: options.imageDeliverySecret,
+                tenantId: getFluentIdentityContext().tenantId,
+                variant: 'thumbnail',
+              })).originalUrl
+            : await buildRemoteStyleVariantUrl(gridSourceUrl, 'thumbnail');
+        } catch {
+          thumbnailUrl = null;
+        }
+      }
+      if (options.thumbnailCapable) {
+        item.imageUrl = thumbnailUrl;
+        item.hasImage = Boolean(thumbnailUrl);
+      }
+      if (!item.hasImage) {
+        item.presentationMediaState = item.presentationMediaSource === 'none' ? 'needs_photo' : 'unavailable';
+      }
+    }));
+    return structuredContent;
+  };
+}
+
 export function registerStyleMcpSurface(
   server: McpServer,
   style: StyleService,
   origin: string,
-  options: { imageDeliverySecret?: string | null } = {},
+  options: {
+    imageDeliverySecret?: string | null;
+    styleClosetSurfaceBuilder?: StyleClosetSurfaceBuilder;
+    thumbnailCapable?: boolean;
+  } = {},
 ) {
+  const styleClosetSurfaceBuilder = options.styleClosetSurfaceBuilder
+    ?? createStyleClosetSurfaceBuilder(style, origin, options);
   const styleReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_READ_SCOPE] }];
   const styleClosetReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_READ_SCOPE] }];
   const styleWriteSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_STYLE_WRITE_SCOPE] }];
@@ -2109,7 +2320,7 @@ export function registerStyleMcpSurface(
     'Purchase Analysis Widget',
   );
 
-  const registerStyleClosetWidgetResource = (name: string, uri: string, title: string) => {
+  const registerStyleClosetWidgetResource = (name: string, uri: string, title: string, html: () => string) => {
     server.registerResource(
       name,
       uri,
@@ -2125,7 +2336,7 @@ export function registerStyleMcpSurface(
           {
             uri,
             mimeType: 'text/html;profile=mcp-app',
-            text: getStyleClosetWidgetHtml(),
+            text: html(),
             _meta: closetWidgetMeta,
           },
         ],
@@ -2135,8 +2346,75 @@ export function registerStyleMcpSurface(
 
   registerStyleClosetWidgetResource(
     'fluent-style-closet-widget-v7',
+    STYLE_CLOSET_V7_TEMPLATE_URI,
+    'Fluent Closet published-app compatibility',
+    () => getApprovedWardrobeWidgetHtml(),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v8',
+    STYLE_CLOSET_V8_TEMPLATE_URI,
+    'Fluent Closet v8',
+    () => getStyleClosetWidgetHtml({ templateUri: STYLE_CLOSET_V8_TEMPLATE_URI, templateVersion: 'v8' }),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v20',
+    STYLE_CLOSET_V20_TEMPLATE_URI,
+    'Fluent Closet v20',
+    () => getStyleClosetWidgetHtml({ templateUri: STYLE_CLOSET_V20_TEMPLATE_URI, templateVersion: 'v20' }),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v21',
+    STYLE_CLOSET_V21_TEMPLATE_URI,
+    'Fluent Closet v21',
+    () => getStyleClosetWidgetHtml({ templateUri: STYLE_CLOSET_V21_TEMPLATE_URI, templateVersion: 'v21' }),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v22',
+    STYLE_CLOSET_V22_TEMPLATE_URI,
+    'Fluent Closet v22',
+    () => getStyleClosetWidgetHtml({ templateUri: STYLE_CLOSET_V22_TEMPLATE_URI, templateVersion: 'v22' }),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v23',
+    STYLE_CLOSET_V23_TEMPLATE_URI,
+    'Fluent Closet v23',
+    () => getStyleClosetWidgetHtml({ templateUri: STYLE_CLOSET_V23_TEMPLATE_URI, templateVersion: 'v23' }),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v24',
+    STYLE_CLOSET_V24_TEMPLATE_URI,
+    'Fluent Closet v24',
+    () => getStyleClosetWidgetHtml({ templateUri: STYLE_CLOSET_V24_TEMPLATE_URI, templateVersion: 'v24' }),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v25',
+    STYLE_CLOSET_V25_TEMPLATE_URI,
+    'Fluent Closet v25',
+    () => getStyleClosetWidgetHtml({ templateUri: STYLE_CLOSET_V25_TEMPLATE_URI, templateVersion: 'v25' }),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v26',
+    STYLE_CLOSET_V26_TEMPLATE_URI,
+    'Fluent Closet v26',
+    () => getStyleClosetWidgetHtml({ templateUri: STYLE_CLOSET_V26_TEMPLATE_URI, templateVersion: 'v26' }),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v27',
+    STYLE_CLOSET_V27_TEMPLATE_URI,
+    'Fluent Closet v27',
+    () => getStyleClosetWidgetHtml({ templateUri: STYLE_CLOSET_V27_TEMPLATE_URI, templateVersion: 'v27' }),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v33',
+    STYLE_CLOSET_V33_TEMPLATE_URI,
+    'Fluent Closet v33',
+    () => getStyleClosetWidgetHtml({ templateUri: STYLE_CLOSET_V33_TEMPLATE_URI, templateVersion: 'v33' }),
+  );
+  registerStyleClosetWidgetResource(
+    'fluent-style-closet-widget-v34',
     STYLE_CLOSET_TEMPLATE_URI,
-    'Style Closet Widget',
+    'Fluent Closet v34',
+    () => getApprovedWardrobeWidgetHtml(),
   );
 
   server.registerResource(
@@ -2333,7 +2611,7 @@ export function registerStyleMcpSurface(
     {
       title: 'Get Style Onboarding Calibration',
       description:
-        'Required first and sufficient read model for Style setup/calibration. Fetch closet status, active evidence count, photo and category coverage, inferred versus confirmed taste signals, unresolved questions, suggested next action, and purchase-analysis readiness. Category counts are coverage evidence, not taste or aesthetic signals. Use this for Style setup, closet import calibration, stale/accidental calibration, widget rendering, confirm/correct prompts, starter closet additions, and any purchase answer that depends on closet confidence. For ordinary setup/calibration summaries, do not call style_get_context; this read model owns the onboarding state. For inferred signals, say "your closet suggests" and avoid second-person taste phrasing such as "you prefer", "you lean", or "you are going for" unless the user confirmed it. If the user marks a named item/phrase stale or accidental so it should not count as preference, and you cannot match a stable item ID, record phrase-level calibration with style_record_calibration_response instead of asking to use style_upsert_item.',
+        'Required first and sufficient read model for Style setup/calibration. Fetch closet status, active evidence count, photo and category coverage, presentation-readiness counts, a bounded exact-item repair queue, inferred versus confirmed taste signals, unresolved questions, suggested next action, and purchase-analysis readiness. Presentation ready requires the exact current Catalog asset to have a durable quality approval bound to its retained source and required identity, appearance, pose, crop, background, centering, scale, and matte checks. Needs normalization or recoverable source means an Original/source exists but is not normalized; photo unavailable and no photo yet require an owned attachment/file for the exact returned item ID. Nothing in this read call writes automatically. Every repair must preserve retained Original/source evidence; use the merge-preserving fluent_set_style_item_image path, never a replace-all photo path, and only generate a Catalog asset when the host supports image generation and exact garment identity is preserved. Category counts are coverage evidence, not taste or aesthetic signals. Use this for Style setup, closet import calibration, stale/accidental calibration, widget rendering, confirm/correct prompts, starter closet additions, and any purchase answer that depends on closet confidence. For ordinary setup/calibration summaries, do not call style_get_context; this read model owns the onboarding state. For inferred signals, say "your closet suggests" and avoid second-person taste phrasing such as "you prefer", "you lean", or "you are going for" unless the user confirmed it. If the user marks a named item/phrase stale or accidental so it should not count as preference, and you cannot match a stable item ID, record phrase-level calibration with style_record_calibration_response instead of asking to use style_upsert_item.',
       inputSchema: {
         view: readViewSchema,
       },
@@ -2349,6 +2627,22 @@ export function registerStyleMcpSurface(
         confirmedSignalCount: calibration.confirmedStyleSignals.length,
         confidenceBreakdown: calibration.confidenceBreakdown,
         inferredSignalCount: calibration.inferredStyleSignals.length,
+        photoEvidenceCoverage: calibration.photoEvidenceCoverage,
+        presentationReadiness: {
+          automaticWrites: calibration.presentationReadiness.automaticWrites,
+          itemCount: calibration.presentationReadiness.itemCount,
+          noPhotoCount: calibration.presentationReadiness.noPhotoCount,
+          photoUnavailableCount: calibration.presentationReadiness.photoUnavailableCount,
+          presentationReadyCount: calibration.presentationReadiness.presentationReadyCount,
+          recoverableSourceCount: calibration.presentationReadiness.recoverableSourceCount,
+          repairInventoryScope: calibration.presentationReadiness.repairInventoryScope,
+          repairPreservesSourceEvidence: calibration.presentationReadiness.repairPreservesSourceEvidence,
+          repairQueueAvailableInView: 'full',
+          repairQueueIncludedCount: 0,
+          repairQueueLimit: calibration.presentationReadiness.repairQueueLimit,
+          repairQueueOmittedCount: calibration.presentationReadiness.repairRequiredCount,
+          repairRequiredCount: calibration.presentationReadiness.repairRequiredCount,
+        },
         purchaseAnalysisReadiness: calibration.purchaseAnalysisReadiness,
         suggestedNextAction: calibration.suggestedNextAction,
         unresolvedQuestions: calibration.unresolvedQuestions,
@@ -3435,15 +3729,16 @@ export function registerStyleMcpSurface(
   server.registerTool(
     'fluent_render_style_closet_surface',
     withAppsSecurity({
-      title: 'Show Fluent Style Closet',
+      title: 'Show or Compare Fluent Style Closet',
       description:
-        'Promoted render adapter for the Fluent Style closet manager MCP Apps surface. Reads owned Style items and returns the v1 closet widget plus compact structured fallback data. Pass the consolidated filter object to open the closet pre-narrowed to what the user asked about — for example filter.category "TOP" for shirts/tops, "SHOE" for shoes, or filter.color/filter.subcategory/filter.query for a more specific ask; the card opens focused on that filter and the user can broaden it in-card. Use filter.status "archived" to show archived items. This surface is for managing saved closet state, not purchase advice or stylist judgment.',
+        'Promoted render adapter for the Fluent Closet v8 MCP Apps surface. Reads owned Style items and returns one collection-to-detail experience plus compact structured fallback data. When the user asks to review, compare, or resolve a possible duplicate between two saved closet records, call this tool with exactly those two saved IDs in filter.item_ids, filter.status="active", and presentation.mode="comparison"; omit focused_item_id. Do not claim that the comparison is open unless this tool was actually called and returned. After an outfit or shoe recommendation names one winning owned item, render the conversational payoff with filter.item_ids containing only its exact saved ID, presentation.mode="recommendation", focused_item_id set to the same ID, and one concise recommendation_reason; never substitute a category/subcategory/query filter or the whole closet. For an outfit of 3 to 5 exact owned items, render only those selected saved IDs with presentation.mode="comparison" and omit focused_item_id; the model must name the exact items and may offer at most one exact-owned replacement. Recommendation mode is a compact responsive card with progressive disclosure into full item detail. Use presentation.mode="ingestion_review" only as the text-only/non-UI fallback when fluent_create_style_item could not attach its create-owned review app: follow fluent_create_style_item payload.reviewHandoff with filter.status="active", exact filter.item_ids, and the exact focused_item_id. Newly created items are active; pending_review is not a valid lifecycle or filter status. Exact filter.item_ids otherwise default to comparison and always provide an in-app route back to the full closet. Use mode="detail" with focused_item_id only when the user explicitly asks to inspect or manage the complete saved item. Category/type/brand/color/size/query filters are for deliberate collection browsing; status="archived" shows archived items. This surface manages saved closet state and hands exact stored item IDs to outfit creation; it does not invent garments or make purchase judgments.',
       inputSchema: {
         cursor: z.string().optional(),
         filter: styleClosetFilterSchema,
         limit: z.number().int().min(1).max(120).optional(),
+        presentation: styleClosetPresentationSchema,
       },
-      annotations: { title: 'Show Fluent Style Closet', readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Show or Compare Fluent Style Closet', readOnlyHint: true, idempotentHint: true },
       _meta: {
         ui: {
           csp: closetWidgetMeta.ui.csp,
@@ -3457,36 +3752,16 @@ export function registerStyleMcpSurface(
     }, styleClosetReadSecuritySchemes),
     async (args) => {
       requireScope(FLUENT_STYLE_READ_SCOPE);
-      const structuredContent = await buildStyleClosetStructuredContent(style, {
+      const structuredContent = await styleClosetSurfaceBuilder({
         cursor: args.cursor,
         filter: args.filter as StyleClosetFilter | undefined,
         limit: args.limit,
+        presentation: args.presentation,
       });
-      // Reference-only / external photos (e.g. a pasted product URL) are cross-origin to the widget
-      // iframe and Claude's COEP sandbox blocks them unless served through Fluent's signed same-origin
-      // image route. Owned photos already carry a same-origin signed URL and pass through unchanged.
-      const sameOriginImage = (value: string): boolean => {
-        try {
-          return new URL(value).origin === new URL(origin).origin;
-        } catch {
-          return false;
-        }
-      };
-      await Promise.all(structuredContent.items.map(async (item) => {
-        if (item.imageUrl && !sameOriginImage(item.imageUrl)) {
-          const proxied = await buildWidgetImageUrl(item.imageUrl, { imageDeliverySecret: options.imageDeliverySecret, origin });
-          item.imageUrl = proxied;
-          item.hasImage = Boolean(proxied);
-        }
-        // The flip card's worn/fit photo needs the same treatment: a reference-only fit photo can be a
-        // cross-origin sourceUrl that Claude's COEP iframe blocks. Proxy it, or null it if unproxiable.
-        if (item.fitImageUrl && !sameOriginImage(item.fitImageUrl)) {
-          item.fitImageUrl = await buildWidgetImageUrl(item.fitImageUrl, { imageDeliverySecret: options.imageDeliverySecret, origin });
-        }
-      }));
       const label = structuredContent.summary.filterLabel.toLowerCase();
       return {
         _meta: {
+          wardrobeIndex: wardrobeIndexFor(structuredContent),
           openai: { outputTemplate: STYLE_CLOSET_TEMPLATE_URI },
           ui: { resourceUri: STYLE_CLOSET_TEMPLATE_URI },
           widgetResourceUri: STYLE_CLOSET_TEMPLATE_URI,

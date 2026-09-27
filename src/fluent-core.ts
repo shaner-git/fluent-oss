@@ -580,15 +580,6 @@ export class FluentCoreService {
           ? 'onboarding_started'
           : domain.onboardingState;
     }
-    if (domain.domainId === 'health') {
-      const ready = await this.isHealthReady();
-      effectiveOnboardingState =
-        domain.lifecycleState === 'enabled' &&
-        domain.onboardingState === 'onboarding_completed' &&
-        !ready
-          ? 'onboarding_started'
-          : effectiveOnboardingState;
-    }
 
     return {
       ...domain,
@@ -663,60 +654,6 @@ export class FluentCoreService {
     // Preserve strict onboarding for fresh or sparse closets, but keep mature imported
     // closets from being downgraded just because the legacy style_profile row is absent.
     return !profileRow && itemCount >= 24 && primaryPhotoCount >= 12 && itemProfileCount >= 24;
-  }
-
-  private async isHealthReady(): Promise<boolean> {
-    const [preferencesRow, activeBlockCountRow, goalCountRow, workoutCountRow, metricCountRow] = await Promise.all([
-      this.db
-        .prepare(
-          `SELECT updated_at
-           FROM health_preferences
-           WHERE tenant_id = ? AND profile_id = ?
-           LIMIT 1`,
-        )
-        .bind(this.tenantId, this.profileId)
-        .first<{ updated_at: string | null }>(),
-      this.db
-        .prepare(
-          `SELECT COUNT(*) AS count
-           FROM health_training_blocks
-           WHERE tenant_id = ? AND profile_id = ?`,
-        )
-        .bind(this.tenantId, this.profileId)
-        .first<{ count: number | string | null }>(),
-      this.db
-        .prepare(
-          `SELECT COUNT(*) AS count
-           FROM health_goals
-           WHERE tenant_id = ? AND profile_id = ?`,
-        )
-        .bind(this.tenantId, this.profileId)
-        .first<{ count: number | string | null }>(),
-      this.db
-        .prepare(
-          `SELECT COUNT(*) AS count
-           FROM health_workout_logs
-           WHERE tenant_id = ? AND profile_id = ?`,
-        )
-        .bind(this.tenantId, this.profileId)
-        .first<{ count: number | string | null }>(),
-      this.db
-        .prepare(
-          `SELECT COUNT(*) AS count
-           FROM health_body_metrics
-           WHERE tenant_id = ? AND profile_id = ?`,
-        )
-        .bind(this.tenantId, this.profileId)
-        .first<{ count: number | string | null }>(),
-    ]);
-
-    return (
-      Boolean(preferencesRow?.updated_at) ||
-      asCount(activeBlockCountRow?.count) > 0 ||
-      asCount(goalCountRow?.count) > 0 ||
-      asCount(workoutCountRow?.count) > 0 ||
-      asCount(metricCountRow?.count) > 0
-    );
   }
 
   private async updateDomain(
@@ -1122,12 +1059,13 @@ export class FluentCoreService {
     await this.db
       .prepare(
         `INSERT INTO domain_events (
-          id, domain, entity_type, entity_id, event_type, before_json, after_json, patch_json,
+          id, tenant_id, domain, entity_type, entity_id, event_type, before_json, after_json, patch_json,
           source_agent, source_skill, session_id, confidence, source_type, actor_email, actor_name
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         `domain-event:${crypto.randomUUID()}`,
+        this.tenantId,
         'core',
         input.entityType,
         input.entityId,
@@ -1561,7 +1499,7 @@ function readyDomainActions(input: {
       {
         kind: 'read',
         reason:
-          'Use the account-status surface for account, access, early-access availability, export, deletion, reactivation, support, or account-ready asks.',
+          'Use the account-status surface for account access, availability, export, deletion, reactivation, support, or account-ready asks.',
         tool: 'fluent_get_account_status',
       },
       {
@@ -1925,7 +1863,7 @@ function buildAccountEntitlement(
   if (deploymentTrack !== 'cloud') {
     return {
       state: 'unavailable',
-      summary: 'Managed-service account state does not apply to the local OSS runtime.',
+      summary: 'Hosted account state does not apply to the local open-source runtime.',
       graceDeadline: null,
       retentionDeadline: null,
     };
@@ -2048,7 +1986,7 @@ function buildAccountInstructions(
   if (deploymentTrack !== 'cloud') {
     return {
       deletion: 'Use the self-hosted runtime controls for deletion, then remove the local Fluent data directory or database backups you control.',
-      export: 'Use the local OSS snapshot export workflow from the Fluent runtime to export the data stored on this machine.',
+      export: 'Use the local open-source snapshot export workflow from the Fluent runtime to export the data stored on this machine.',
       manageAccount: 'Use your local Fluent runtime controls for account-like settings.',
       support: `Email ${FLUENT_SUPPORT_EMAIL} for account help.`,
     };

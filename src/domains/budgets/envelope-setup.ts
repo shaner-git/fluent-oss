@@ -1,7 +1,8 @@
 import type { BudgetCategory, BudgetsService, InternalPurchaseContext } from './service';
 import { buildBudgetLine } from '../style/purchase-analysis';
 
-export const BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI = 'ui://widget/fluent-budgets-envelope-setup-v1.html';
+export const BUDGETS_ENVELOPE_SETUP_V1_TEMPLATE_URI = 'ui://widget/fluent-budgets-envelope-setup-v1.html';
+export const BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI = 'ui://widget/fluent-budgets-envelope-setup.html';
 
 export type BudgetEnvelopeSetupStatus = 'set' | 'stale' | 'unset';
 

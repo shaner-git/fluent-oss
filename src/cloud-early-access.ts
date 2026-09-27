@@ -3,7 +3,7 @@ export const FLUENT_CLOUD_ACCESS_DOCS_URL = 'https://docs.meetfluent.app/getting
 export const FLUENT_OSS_AVAILABLE_URL = 'https://github.com/shaner-git/fluent-oss';
 export const FLUENT_SUPPORT_EMAIL = 'hello@meetfluent.app';
 
-const FLUENT_CLOUD_EARLY_ACCESS_NOTE = 'Fluent is in early access and open source.';
+const FLUENT_CLOUD_EARLY_ACCESS_NOTE = "Fluent is free. Online signup is open in the United States, Canada, and Mexico. The open-source runtime is also available.";
 
 export type FluentCloudAccessEnvironment = 'production' | 'staging' | 'development' | 'local';
 export type FluentCloudConfiguredAccessMode = 'allowlist' | 'open_dev' | 'self_serve';
@@ -243,7 +243,7 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATE_EXPORT = (
       template.explanationTemplate,
       `Next action: ${template.nextActionTemplate}`,
       template.ossFallback ? `Open-source runtime: ${FLUENT_OSS_AVAILABLE_URL}` : null,
-      template.waitlist ? `Request early access: ${FLUENT_CLOUD_WAITLIST_URL}` : null,
+      template.waitlist ? `Sign up for Fluent: ${FLUENT_CLOUD_WAITLIST_URL}` : null,
       `Support: ${FLUENT_SUPPORT_EMAIL}`,
       FLUENT_CLOUD_EARLY_ACCESS_NOTE,
     ]
@@ -382,7 +382,7 @@ export function buildFluentCloudAccessFailureDetails(
       shortExplanation,
       `Next action: ${nextAction}`,
       ossFallback,
-      waitlistUrl ? `Request early access: ${waitlistUrl}` : null,
+      waitlistUrl ? `Sign up for Fluent: ${waitlistUrl}` : null,
       supportPath,
       FLUENT_CLOUD_EARLY_ACCESS_NOTE,
     ]
@@ -561,7 +561,7 @@ export function renderFluentCloudAccessFailurePage(
     <div class="note">${escapeHtml(FLUENT_CLOUD_EARLY_ACCESS_NOTE)}</div>
     <ul>
       <li>Next action: ${escapeHtml(details.nextAction)}</li>
-      ${details.waitlistUrl ? `<li>Request early access: <a href="${escapeHtml(details.waitlistUrl)}">${escapeHtml(details.waitlistUrl)}</a></li>` : ''}
+      ${details.waitlistUrl ? `<li>Sign up for Fluent: <a href="${escapeHtml(details.waitlistUrl)}">${escapeHtml(details.waitlistUrl)}</a></li>` : ''}
       ${details.ossFallback ? `<li>Open-source runtime: <a href="${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}">${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}</a></li>` : ''}
       <li>Support: <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a></li>
       <li>If you already signed in and need deletion instead, open <code>/account/delete</code>.</li>

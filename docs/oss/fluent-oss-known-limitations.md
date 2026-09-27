@@ -24,5 +24,5 @@ These limits are part of the supported `v0.1.0` public open-source release.
 ## Product Limits
 
 - OSS focuses on self-hosting and local operator control
-- hosted billing, hosted onboarding, and Fluent managed early access OAuth flows are out of scope for OSS
+- hosted billing, hosted onboarding, and Fluent hosted-service OAuth flows are out of scope for OSS
 - packaged client assets assume you will scaffold fresh MCP config against your own OSS base URL and token

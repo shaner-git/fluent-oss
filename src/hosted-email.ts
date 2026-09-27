@@ -33,6 +33,13 @@ type CloudflareEmailError = Error & {
 
 const DEFAULT_FROM_ADDRESS = 'signin@meetfluent.app';
 const DEFAULT_FROM_NAME = 'Fluent';
+const MAGIC_LINK_VERIFY_PATH = '/api/auth/magic-link/verify';
+const MAGIC_LINK_CONFIRM_PATH = '/api/auth/magic-link/confirm';
+
+// Single source of truth for hosted magic-link lifetime. Better Auth enforces it
+// (magicLink({ expiresIn })) and every user-facing expiry promise renders from it.
+export const HOSTED_MAGIC_LINK_TTL_SECONDS = 15 * 60;
+export const HOSTED_MAGIC_LINK_TTL_LABEL = `${HOSTED_MAGIC_LINK_TTL_SECONDS / 60} minutes`;
 
 export function hasHostedEmailDelivery(env: HostedEmailRuntimeEnv): boolean {
   return typeof env.EMAIL?.send === 'function';
@@ -44,6 +51,26 @@ export function resolveHostedEmailFromAddress(env: HostedEmailRuntimeEnv): strin
 
 export function resolveHostedEmailFromName(env: HostedEmailRuntimeEnv): string {
   return env.HOSTED_EMAIL_FROM_NAME?.trim() || DEFAULT_FROM_NAME;
+}
+
+export function buildHostedMagicLinkConfirmationUrl(verificationUrl: string): string {
+  const verification = new URL(verificationUrl);
+  if (verification.pathname !== MAGIC_LINK_VERIFY_PATH) {
+    throw new Error('Hosted sign-in expected a Better Auth magic-link verification URL.');
+  }
+
+  const token = verification.searchParams.get('token')?.trim();
+  const callbackUrl = verification.searchParams.get('callbackURL');
+  if (!token || !callbackUrl) {
+    throw new Error('Hosted sign-in verification URL is missing its one-time credential or callback.');
+  }
+
+  const confirmation = new URL(MAGIC_LINK_CONFIRM_PATH, verification.origin);
+  confirmation.hash = new URLSearchParams({
+    callbackURL: callbackUrl,
+    token,
+  }).toString();
+  return confirmation.toString();
 }
 
 export function buildHostedMagicLinkEmailMessage(
@@ -77,7 +104,7 @@ export function buildHostedMagicLinkEmailMessage(
     <title>Your Fluent sign-in link</title>
   </head>
   <body style="margin:0;padding:0;background:#F5F1E8;color:#181613;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
-    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Sign in to Fluent — link expires in 15 minutes.</div>
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Sign in to Fluent — link expires in ${HOSTED_MAGIC_LINK_TTL_LABEL}.</div>
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#F5F1E8;padding:40px 16px;">
       <tr>
         <td align="center">
@@ -116,13 +143,13 @@ export function buildHostedMagicLinkEmailMessage(
                         We received a request to sign in to Fluent as <strong style="color:#181613;">${safeEmail}</strong>.
                       </p>
                       <p style="margin:0 0 28px;font-size:15.5px;line-height:1.6;color:#4A443D;">
-                        This link works in the same browser for the next 15 minutes.
+                        Open this link in the same browser, then choose <strong style="color:#181613;">Continue to Fluent</strong>. Previewing the link does not sign you in. It expires in ${HOSTED_MAGIC_LINK_TTL_LABEL}.
                       </p>
                       <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px;">
                         <tr>
                           <td style="border-radius:10px;background:#D97757;">
                             <a href="${safeUrl}" style="display:inline-block;padding:14px 22px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;color:#181613;text-decoration:none;border-radius:10px;">
-                              Sign in to Fluent &nbsp;&rarr;
+                              Review Fluent sign-in &nbsp;&rarr;
                             </a>
                           </td>
                         </tr>
@@ -167,8 +194,10 @@ export function buildHostedMagicLinkEmailMessage(
     text: [
       `Sign in to Fluent as ${input.email}.`,
       '',
-      'Use this link in the same browser within 15 minutes:',
+      `Use this link in the same browser within ${HOSTED_MAGIC_LINK_TTL_LABEL}:`,
       input.url,
+      '',
+      'Then choose Continue to Fluent. Previewing the link does not sign you in.',
       '',
       "If you didn't request this email, you can ignore it.",
       '',

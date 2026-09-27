@@ -37,6 +37,7 @@ const server = createServer(async (req, res) => {
       method,
     }),
     runtime.env,
+    null, // Node server: no Workers execution lifetime; counts stay pending
   );
   if (styleImageResponse) {
     return writeFetchResponse(res, styleImageResponse);
