@@ -263,7 +263,7 @@ async function waitForHttp(url: string): Promise<void> {
 async function fetchJson(url: string) {
   const response = await fetch(url);
   return {
-    body: await response.json(),
+    body: await response.json() as { storageBackend?: string },
     ok: response.ok,
     status: response.status,
   };
