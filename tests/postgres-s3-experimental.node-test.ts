@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -8,6 +8,9 @@ import { Client } from 'pg';
 
 const docker = resolveDockerBinary();
 if (!docker) {
+  if (process.env.FLUENT_REQUIRE_DOCKER === 'true') {
+    throw new Error('experimental postgres+s3 requires Docker, but Docker is unavailable.');
+  }
   console.log('experimental postgres+s3 skipped (docker unavailable)');
   process.exit(0);
 }
@@ -16,7 +19,7 @@ const suffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 const postgresContainer = `fluent-pg-${suffix}`;
 // S3-compatible store for the test. MinIO's images are no longer anonymously pullable (Docker Hub
 // and quay.io both deny pulls), so this uses SeaweedFS's S3 gateway, pinned for reproducibility.
-// With no identity config, SeaweedFS S3 accepts any credentials.
+// An explicit identity makes bucket creation and runtime object reads validate the test keys.
 const S3_IMAGE = 'chrislusf/seaweedfs:4.05';
 const S3_ACCESS_KEY_ID = 'fluent-test';
 const S3_SECRET_ACCESS_KEY = 'fluent-test-secret';
@@ -34,6 +37,14 @@ main().catch((error) => {
 async function main() {
   let server: ReturnType<typeof spawn> | null = null;
   try {
+    const s3ConfigPath = path.join(rootDir, 'seaweedfs-s3.json');
+    writeFileSync(s3ConfigPath, JSON.stringify({
+      identities: [{
+        name: 'fluent-test',
+        credentials: [{ accessKey: S3_ACCESS_KEY_ID, secretKey: S3_SECRET_ACCESS_KEY }],
+        actions: ['Admin', 'Read', 'List', 'Write'],
+      }],
+    }));
     execDocker([
       'run',
       '-d',
@@ -54,16 +65,20 @@ async function main() {
       '-d',
       '--name',
       s3Container,
+      '--mount',
+      `type=bind,source=${s3ConfigPath},target=/etc/fluent-s3.json,readonly`,
       '-p',
       `${s3Port}:8333`,
       S3_IMAGE,
       'server',
       '-s3',
+      '-s3.config=/etc/fluent-s3.json',
       '-dir=/data',
     ]);
 
     await waitForPostgres();
     await waitForS3();
+    await rejectsInvalidS3Credentials();
 
     server = spawn(
       process.platform === 'win32' ? 'npx.cmd' : 'npx',
@@ -173,16 +188,41 @@ async function waitForPostgres(): Promise<void> {
   throw new Error('Timed out waiting for Postgres readiness.');
 }
 
-function s3Client(): S3Client {
+function s3Client(accessKeyId = S3_ACCESS_KEY_ID, secretAccessKey = S3_SECRET_ACCESS_KEY): S3Client {
   return new S3Client({
     credentials: {
-      accessKeyId: S3_ACCESS_KEY_ID,
-      secretAccessKey: S3_SECRET_ACCESS_KEY,
+      accessKeyId,
+      secretAccessKey,
     },
     endpoint: `http://127.0.0.1:${s3Port}`,
     forcePathStyle: true,
     region: 'us-east-1',
   });
+}
+
+// Fail closed if the identity file is ignored or the fixture stops checking SigV4.
+// Require actual S3 auth errors: a connection failure is not credential coverage.
+async function rejectsInvalidS3Credentials(): Promise<void> {
+  const anonymous = await fetch(`http://127.0.0.1:${s3Port}/`);
+  assert.equal(anonymous.status, 403, 'SeaweedFS must reject unsigned requests.');
+  assert.match(await anonymous.text(), /<Code>AccessDenied<\/Code>/);
+
+  for (const [accessKeyId, secretAccessKey, errorName] of [
+    ['invalid-access-key', S3_SECRET_ACCESS_KEY, 'InvalidAccessKeyId'],
+    [S3_ACCESS_KEY_ID, 'invalid-secret-key', 'SignatureDoesNotMatch'],
+  ]) {
+    const client = s3Client(accessKeyId, secretAccessKey);
+    try {
+      await assert.rejects(client.send(new ListBucketsCommand({})), (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.name, errorName);
+        assert.equal((error as Error & { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode, 403);
+        return true;
+      }, `SeaweedFS must reject ${errorName}.`);
+    } finally {
+      client.destroy();
+    }
+  }
 }
 
 // Ready when the S3 API itself answers, independent of any server-specific health URL.
@@ -223,7 +263,7 @@ async function waitForHttp(url: string): Promise<void> {
 async function fetchJson(url: string) {
   const response = await fetch(url);
   return {
-    body: await response.json(),
+    body: await response.json() as { storageBackend?: string },
     ok: response.ok,
     status: response.status,
   };
