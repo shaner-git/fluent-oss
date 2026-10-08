@@ -131,8 +131,8 @@ export function buildMealGroceryCoverage(
       ? `Groceries not verified for ${mealCountLabel(uncoveredMeals.length)}: ${uncoveredMeals.map((meal) => meal.recipeName).join(', ')}. ` +
         (needsResave
           ? 'This plan’s grocery-coverage record is from an older format or could not be read; save the meal plan again to refresh grocery coverage.'
-          : 'These meals are not saved recipes, so Fluent could not derive their ingredients; compare them with this list and confirm each one.')
-      : 'Groceries were confirmed for every meal that is not a saved recipe.',
+          : 'These meals have no saved ingredients in Fluent, so Fluent could not derive their groceries; compare them with this list and confirm each one.')
+      : 'Groceries were confirmed for every meal without saved ingredients.',
     uncoveredMeals,
   };
 }

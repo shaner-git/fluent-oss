@@ -213,9 +213,9 @@ export function buildMealsOnboardingCalibration(input: {
     groceryReadiness,
     hostGuidance: {
       answerMode: 'text_first',
-      broadPlanningFirstTool: 'fluent_get_context',
+      broadPlanningFirstTool: 'fluent_get_closet_context',
       copyGuardrails: [
-        'Start broad Meals planning, currentness checks, and "what Fluent knows" prompts with fluent_get_context(domain="meals", intent="planning") when available.',
+        'Start broad Meals planning, currentness checks, and "what Fluent knows" prompts with fluent_get_closet_context(domain="meals", intent="planning") when available.',
         'Use meals_get_onboarding_calibration for explicit setup/calibration details, not as the first broad planning read when vNext context is available.',
         'At-home food ownership is evidence, not preference. Say "your kitchen inventory suggests" for inventory-derived patterns.',
         'Meal history and accepted plans can suggest patterns, but do not say "you like" unless the user confirmed it.',

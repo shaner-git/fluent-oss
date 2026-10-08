@@ -4,6 +4,45 @@ All notable Fluent open-source runtime release-facing changes are documented her
 
 ## Unreleased
 
+### One operation per closet tool (contract `2026-10-08.fluent-core-v2.3`)
+
+- Photo arrangement is five tools: `fluent_set_closet_item_cover`, `fluent_reorder_closet_item_photos`, `fluent_hide_closet_item_photo` (the file is kept), `fluent_replace_closet_item_photo` and `fluent_undo_closet_item_photo_change`. `fluent_arrange_closet_item_photos` is removed before release.
+- `fluent_restore_closet_item` restores an archived item; `fluent_update_closet_item` only edits details and rejects a status change with a pointer.
+- `fluent_merge_closet_items` merges a confirmed duplicate (now requiring `merge_operation_id`); `fluent_archive_closet_item` only archives and rejects merge parameters with a pointer.
+- `fluent_add_closet_item_photo` adds a photo; `fluent_set_closet_item_photo` only sets a role slot and rejects `photo_action` with a pointer.
+- `fluent_undo_closet_item_merge` now requires an outstanding merge with the exact merge ID before any change; a never-merged item or a wrong ID changes nothing.
+- The frozen legacy closet widget resources (v7, v8, v20-v27, v33 and the v34 alias) are no longer public: they call removed tool names. Only `ui://widget/fluent-style-closet.html` is served.
+- `fluent_add_closet_item` only creates: `on_duplicate` is `warn` or `force`, and a former `"skip"` (use the existing item) is rejected with `fluent_add_closet_item_photo`, `fluent_set_closet_item_photo` and `fluent_merge_closet_items` named; nothing is saved. Its destructive hint is now false.
+- A photo-less item's first photo is set as its cover with `fluent_set_closet_item_photo` (`image_type="primary"`); `fluent_add_closet_item_photo` only adds further photos.
+- Public profile: 26 tools, 16 explicit writes, 1 render adapter, 1 resource. Every result matches the pre-split tools (`tests/fixtures/style-closet-writes-pre-split-expected.json`).
+
+### Public tools renamed to closet vocabulary (contract `2026-10-08.fluent-core-v2.3`)
+
+- Breaking: every public tool except `fluent_get_capabilities` and `fluent_get_account_status` is renamed, with no aliases. Cached clients calling an old name get "tool not found". Inputs and behavior are unchanged.
+- `fluent_get_account_profile` -> `fluent_get_account`; `fluent_get_shared_profile` -> `fluent_get_profile`; `fluent_update_shared_profile_patch` -> `fluent_update_profile`; `fluent_get_context` -> `fluent_get_closet_context`; `fluent_list_items` -> `fluent_list_closet_items`; `fluent_get_item` -> `fluent_get_closet_item`; `fluent_create_style_item` -> `fluent_add_closet_item`; `fluent_update_style_item_patch` -> `fluent_update_closet_item`; `fluent_archive_item` -> `fluent_archive_closet_item`; `fluent_set_style_item_image` -> `fluent_set_closet_item_photo`; `fluent_get_media_bundle` -> `fluent_get_closet_item_photos`; `fluent_refresh_style_item_profile` -> `fluent_record_closet_item_feedback`; `fluent_list_evidence` -> `fluent_list_closet_evidence`; `fluent_render_style_closet_surface` -> `fluent_show_closet`.
+- The three tools split out of the patch tool (below) ship as `fluent_arrange_closet_item_photos`, `fluent_save_closet_item_product_details` and `fluent_undo_closet_item_merge`.
+- Titles use plain language matching the names. The naming rule is in `tasks/tool-naming-taxonomy.md`.
+
+### Style item writes split into separate tools (contract `2026-10-08.fluent-core-v2.3`)
+
+- Adds `fluent_arrange_style_item_photos` (cover, reorder, remove, replace, undo for saved photos), `fluent_set_style_item_product_reference` (host-researched product reference with attributed facts) and `fluent_undo_style_duplicate_merge` (undo one duplicate combine by its exact merge cycle). Each keeps the behavior, guards and read-after-write proof it had as a `fluent_update_style_item_patch` parameter. The public profile is now 19 tools, 9 explicit writes, 1 render adapter, and 12 resources.
+- Breaking for cached clients: `fluent_update_style_item_patch` only edits item details and no longer declares `photo_library`, `product_enrichment` or `expected_duplicate_merge_id`. A call that still sends one of them is rejected with an error naming the replacement tool; nothing is saved.
+- The Style Closet widget calls the new tools; its resource URI is unchanged.
+
+### Meals retired (contract `2026-10-06.fluent-core-v2.2`)
+
+- Breaking: removes `fluent_save_recipe`, `fluent_update_recipe_patch`, `fluent_record_recipe_feedback`, `fluent_save_meal_plan`, `fluent_apply_grocery_list_change`, `fluent_apply_grocery_shopping_result`, `fluent_render_surface`, and the `ui://widget/fluent-grocery-list.html` resource. The public profile is now 16 tools, 6 explicit writes, 1 render adapter, and 12 resources. Cached clients calling a removed tool get "tool not found".
+- The shared tools keep accepting `domain="meals"`, the Meals item types (`meal_plan`, `recipe`, `grocery_list`, `inventory_item`) and the food profile-fact kinds, so cached clients still validate. Those calls return a plain `MealsRetired` result with no Meals data and write nothing.
+- `fluent_get_shared_profile` no longer returns food facts (allergies, dietary pattern, meal taste); capabilities and account status list Style as the only product domain.
+- No migration. Meals code, tables, account export and account purge are unchanged; saved Meals data stays stored and exportable.
+
+### Budgets retired (contract `2026-09-29.fluent-core-v2.1`)
+
+- Breaking: removes `fluent_get_purchase_context`, `fluent_set_budget_envelope`, `fluent_log_budget_spend`, `fluent_render_budgets_surface`, and the budget envelope-setup widget resource. The public profile is now 23 tools, 12 explicit writes, 2 render adapters, and 13 resources.
+- Style purchase context (`fluent_get_context` with `intent="purchase"`) returns the owned-closet comparison only. `amount` and `candidate.price_text` are still accepted but no longer drive budget arithmetic. Assistants bring finance context from the user's own tools, or ask.
+- Migration `0036` drops `budget_envelopes` and `budget_spend_events`, which deletes all saved budget data. Deploy the code first, then apply `0036`, because earlier builds query those tables.
+- Stated budget preferences (Style budget tiers, Meals budget sensitivity and per-meal price cap) are unchanged.
+
 ### Tenant isolation hardening
 
 - `domain_events` gains a `tenant_id` column (migration `0031`, expand-only with backfill); every writer sets it and every reader, including `fluent_list_evidence`, filters on it. Rows that cannot be attributed stay `NULL` and are never returned.

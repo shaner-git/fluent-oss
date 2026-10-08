@@ -13,8 +13,6 @@ export const TENANT_SCOPED_TABLES = [
   'health_training_plans',
   'health_weekly_reviews',
   'health_workout_logs',
-  'budget_spend_events',
-  'budget_envelopes',
   'meal_grocery_shopping_receipt_rows',
   'meal_grocery_shopping_receipts',
   'meal_confirmed_order_syncs',
@@ -44,6 +42,7 @@ export const TENANT_SCOPED_TABLES = [
   'style_profile',
   'person_facts',
   'person_consent_events',
+  'fluent_write_operations',
 ] as const;
 
 export type TenantScopedTable = (typeof TENANT_SCOPED_TABLES)[number];

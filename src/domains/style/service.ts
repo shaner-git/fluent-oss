@@ -1,7 +1,6 @@
 import { findApprovedStyleCatalogPhoto } from './onboarding-calibration';
 import {photoVersions,reconcilePhotoLibrary,changePhotoArrangement, type PhotoLibraryAction, type PhotoLibraryState} from './photo-library';
 import type { MutationProvenance } from '../../auth';
-import type { InternalPurchaseContext } from '../budgets/service';
 import path from 'node:path';
 import type { FluentBlobStore, FluentDatabase } from '../../storage';
 import { StylePhotoArtifactReleasedError, StyleRepository } from './repository';
@@ -45,7 +44,9 @@ import {
   buildStyleImageUrl,
   normalizeStyleRemoteImageSourceUrl,
   assertStyleImageDataUrl,
+  STYLE_SELF_HOSTED_IMAGE_LINK_REASON,
   StyleCatalogMediaUnusableError,
+  StyleImageInputError,
   styleImageNotAttachedReason,
   parseOwnedStyleAsset,
 } from './media';
@@ -91,7 +92,6 @@ import type {
   StylePurchaseAnalysis,
   StylePurchaseCandidate,
   StylePurchaseAnalysisItemMatch,
-  StylePurchaseBudgetContext,
   StylePurchaseVisualEvidence,
   StyleComparatorCoverage,
   StyleCalibrationSignalKind,
@@ -559,17 +559,23 @@ export class StyleService {
     private readonly db: FluentDatabase,
     private readonly options: {
       artifacts?: FluentBlobStore;
-      budgets?: {
-        getPurchaseContext: (input: {
-          amount?: number | null;
-          category: 'style-clothing';
-        }) => Promise<InternalPurchaseContext | StylePurchaseBudgetContext>;
-      } | null;
+      // True only on a runtime whose outbound fetch is strictly public after DNS resolution
+      // (CoreRuntimeBindings.strictPublicFetch, i.e. hosted Cloudflare). It gates EVERY server-side
+      // fetch of a caller-supplied, non-OpenAI image URL: copying a linked photo
+      // (copy_source_to_owned), a Catalog create from image_url, and legacy URL imports. Without it
+      // (Node/local/self-hosted), hostname checks alone cannot stop a name that resolves to a private
+      // address, so links stay references and a Catalog image must arrive as bytes.
+      strictPublicFetch?: boolean;
       imageDeliverySecret?: string | null;
       origin?: string | null;
     } = {},
   ) {
     this.repository = new StyleRepository(db);
+  }
+
+  // Whether this runtime may download a caller-supplied (non-OpenAI) image URL server-side.
+  fetchesCallerImageUrls(): boolean {
+    return this.options.strictPublicFetch === true;
   }
 
   async getProfile(): Promise<StyleProfileRecord> {
@@ -1176,12 +1182,12 @@ export class StyleService {
     const category = normalizeStyleCategoryStrict(raw.category);
     if (!category) {
       throw new Error(
-        `fluent_create_style_item: category ${JSON.stringify(asNullableString(raw.category))} is not canonical (expected one of TOP, BOTTOM, OUTERWEAR, SHOE, ACCESSORY).`,
+        `fluent_add_closet_item: category ${JSON.stringify(asNullableString(raw.category))} is not canonical (expected one of TOP, BOTTOM, OUTERWEAR, SHOE, ACCESSORY, ONE_PIECE).`,
       );
     }
     const subcategory = normalizeStyleSubcategory(raw.subcategory);
     if (!subcategory) {
-      throw new Error('fluent_create_style_item: subcategory is required (a short garment type such as Tee, Jean, Sneaker).');
+      throw new Error('fluent_add_closet_item: subcategory is required (a short garment type such as Tee, Jean, Sneaker).');
     }
     const brand = asNullableString(raw.brand);
     const name = asNullableString(raw.name);
@@ -1346,7 +1352,7 @@ export class StyleService {
       ? duplicateCandidates.find((candidate) => candidate.id === duplicateCandidateId) ?? null
       : null;
     if (onDuplicate !== 'warn' && !selectedDuplicate) {
-      throw new Error('fluent_create_style_item duplicate resolution requires duplicate_candidate_id matching a returned candidate.');
+      throw new Error('fluent_add_closet_item duplicate resolution requires duplicate_candidate_id matching a returned candidate.');
     }
     if (duplicateCandidates.length > 0 && onDuplicate !== 'force') {
       const matchedItem = onDuplicate === 'skip' && selectedDuplicate
@@ -1395,7 +1401,7 @@ export class StyleService {
 
     const onboardingSourceSnapshot = {
       ...(asRecord(parseJsonLike(input.sourceSnapshot)) ?? {}),
-      createdVia: 'fluent_create_style_item',
+      createdVia: 'fluent_add_closet_item',
       hostModel: input.hostModel ?? null,
       onboardingSource: profileMethod,
       source: hasImage ? 'host_vision' : 'host_text',
@@ -1873,10 +1879,10 @@ export class StyleService {
         if (hasInlineImage && hostedFileDownloadUrl) {
           throw new Error('Style photo input cannot combine inline image bytes with a hosted file download.');
         }
-        // Store-by-reference for host-inspected closet photos (the public fluent_set_style_item_image
+        // Store-by-reference for host-inspected closet photos (the public fluent_set_closet_item_photo
         // path): the host already has/inspected the image and the widget renders it via the
         // adapter CSP, so DO NOT server-side fetch the caller-supplied URL — that would be an SSRF
-        // surface on a public write. Mirrors fluent_get_media_bundle, which provides URLs, never
+        // surface on a public write. Mirrors fluent_get_closet_item_photos, which provides URLs, never
         // fetches pixels. A declared ChatGPT file parameter is the narrow exception: it goes
         // through the allowlisted, size-capped, signature-checked owned-asset importer below.
         const importedFrom = asNullableString(photo.imported_from ?? photo.importedFrom);
@@ -1886,7 +1892,11 @@ export class StyleService {
         if (presentationInputSha256 && !/^[a-f0-9]{64}$/.test(presentationInputSha256)) {
           throw new Error('Style presentation input fingerprint must be a lowercase SHA-256 value.');
         }
-        const referenceOnly = !hasInlineImage && !hostedFileDownloadUrl && (
+        // A linked image the caller asked to copy (fluent_set_closet_item_photo image_url) goes through
+        // the SSRF-guarded public importer into owned storage instead of staying a reference.
+        const copySourceToOwned = this.fetchesCallerImageUrls()
+          && asBoolean(photo.copy_source_to_owned ?? photo.copySourceToOwned);
+        const referenceOnly = !hasInlineImage && !hostedFileDownloadUrl && !copySourceToOwned && (
           asNullableString(photo.source) === 'host_inspected' || importedFrom?.startsWith('fluent_style_') === true
         );
         const ownedAsset = existingArtifact
@@ -1907,6 +1917,7 @@ export class StyleService {
               ),
               photoId,
               sourceUrl,
+              copyRequested: copySourceToOwned,
             });
         if (!ownedAsset && isHostedLocalUploadReference(sourceUrl)) {
           throw new Error(
@@ -2067,7 +2078,9 @@ export class StyleService {
       throw new Error('Style photo input cannot combine inline image bytes with a hosted file download.');
     }
     const importedFrom = asNullableString(photo.imported_from ?? photo.importedFrom);
-    const referenceOnly = !inlineDataUrl && !hostedFileDownloadUrl && (
+    const copySourceToOwned = this.fetchesCallerImageUrls()
+      && asBoolean(photo.copy_source_to_owned ?? photo.copySourceToOwned);
+    const referenceOnly = !inlineDataUrl && !hostedFileDownloadUrl && !copySourceToOwned && (
       asNullableString(photo.source) === 'host_inspected' || importedFrom?.startsWith('fluent_style_') === true
     );
     const ownedAsset = referenceOnly
@@ -2080,6 +2093,7 @@ export class StyleService {
           mimeType: asNullableString(photo.mime_type ?? photo.mimeType),
           photoId,
           sourceUrl,
+          copyRequested: copySourceToOwned,
         });
     if (!ownedAsset && !sourceUrl) {
       throw new Error('Style photo append requires image bytes or a direct image URL.');
@@ -3136,10 +3150,7 @@ export class StyleService {
         itemsById,
       }),
     ];
-    const budgetContext = await this.getStylePurchaseBudgetContext(candidate);
-
     const analysis: StylePurchaseAnalysis = {
-      budgetContext,
       calibration,
       candidate,
       candidateDescriptorSummary,
@@ -3208,43 +3219,6 @@ export class StyleService {
     }
 
     return analysis;
-  }
-
-  private async getStylePurchaseBudgetContext(candidate: StylePurchaseCandidate): Promise<StylePurchaseBudgetContext | null> {
-    const amount = purchaseCandidateAmount(candidate);
-    if (amount == null) {
-      return null;
-    }
-    try {
-      const context = await this.options.budgets?.getPurchaseContext({
-        amount,
-        category: 'style-clothing',
-      });
-      if (!context || context.purchaseSignal === 'no_signal') {
-        return null;
-      }
-      return {
-        category: 'style-clothing',
-        categoryPressure: context.categoryPressure,
-        caveats: context.caveats,
-        liquidityFloor: null,
-        projectedRatio: context.projectedRatio ?? null,
-        purchaseSignal: context.purchaseSignal,
-        targetSetup: context.targetSetup && context.targetSetup.category === 'style-clothing'
-          ? {
-              category: 'style-clothing',
-              currency: context.targetSetup.currency,
-              monthlyAmount: context.targetSetup.monthlyAmount,
-              periodStart: context.targetSetup.periodStart,
-              remainingThisPeriod: context.targetSetup.remainingThisPeriod,
-              spentThisPeriod: context.targetSetup.spentThisPeriod,
-              updatedAt: context.targetSetup.updatedAt,
-            }
-          : null,
-      };
-    } catch {
-      return null;
-    }
   }
 
   async getVisualBundle(input: {
@@ -4259,8 +4233,28 @@ export class StyleService {
     // Set by the atomic Catalog create: a failure to read or validate the image bytes is raised as
     // StyleCatalogMediaUnusableError so the caller can save the item text-first.
     unusableStage?: 'catalog' | 'source';
+    // Set when the caller asked for a linked image to be copied: a failed download is an
+    // outcome-neutral image-input error (the photo is not attached), never a silent reference.
+    copyRequested?: boolean;
   }): Promise<{ artifactId: string; mimeType: string; r2Key: string; sha256: string } | null> {
     if (!this.options.artifacts) {
+      return null;
+    }
+    // SSRF gate: a request whose only image source is an http(s) link would make
+    // parseOwnedStyleAsset download it. Without strict public fetch that never happens: an ordinary
+    // photo keeps the link as a reference, and a Catalog photo is unusable (the create saves text-first).
+    const onlyRemoteLink = !input.dataBase64?.trim()
+      && !input.dataUrl?.trim()
+      && !input.filePath?.trim()
+      && !input.hostedFileDownloadUrl?.trim()
+      && /^https?:\/\//i.test(input.sourceUrl?.trim() ?? '');
+    if (onlyRemoteLink && !this.fetchesCallerImageUrls()) {
+      if (input.unusableStage) {
+        throw new StyleCatalogMediaUnusableError(STYLE_SELF_HOSTED_IMAGE_LINK_REASON, input.unusableStage);
+      }
+      if (input.copyRequested) {
+        throw new StyleImageInputError(STYLE_SELF_HOSTED_IMAGE_LINK_REASON);
+      }
       return null;
     }
 
@@ -4275,12 +4269,20 @@ export class StyleService {
         sourceUrl: input.sourceUrl,
       });
     } catch (error) {
-      if (!input.unusableStage) throw error;
-      throw new StyleCatalogMediaUnusableError(styleImageNotAttachedReason(error), input.unusableStage);
+      if (input.unusableStage) {
+        throw new StyleCatalogMediaUnusableError(styleImageNotAttachedReason(error), input.unusableStage);
+      }
+      if (input.copyRequested) {
+        throw new StyleImageInputError(`the image link could not be copied into Fluent (${styleImageNotAttachedReason(error)})`);
+      }
+      throw error;
     }
     if (!ownedAsset) {
       if (input.unusableStage) {
         throw new StyleCatalogMediaUnusableError('the image reference is not a downloadable image', input.unusableStage);
+      }
+      if (input.copyRequested) {
+        throw new StyleImageInputError('the image link is not a downloadable image');
       }
       return null;
     }
@@ -5454,7 +5456,7 @@ function looksLikeTeeItem(item: StyleItemRecord): boolean {
 }
 
 function isBroadComparatorKey(key: string | null | undefined): boolean {
-  return key === 'unknown' || key === 'other_top' || key === 'other_bottom' || key === 'other_shoe';
+  return key === 'unknown' || key === 'other_top' || key === 'other_bottom' || key === 'other_shoe' || key === 'other_one_piece';
 }
 
 function descriptorDeltaNotes(input: {
@@ -6904,15 +6906,6 @@ function isAthleticStyleItem(item: StyleItemRecord): boolean {
     return true;
   }
   return (profile?.dressCode?.max ?? null) === 1 && (profile?.bestOccasions ?? []).includes('athletic');
-}
-
-function purchaseCandidateAmount(candidate: StylePurchaseCandidate): number | null {
-  const estimatedPrice = candidate.estimatedPrice;
-  if (!estimatedPrice) {
-    return null;
-  }
-  const amount = estimatedPrice.max ?? estimatedPrice.min;
-  return typeof amount === 'number' && Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
 function isCoherentPairingCandidate(input: {

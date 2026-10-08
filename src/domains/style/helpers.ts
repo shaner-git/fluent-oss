@@ -56,11 +56,15 @@ const STYLE_COMPARATOR_KEYS = [
   'sandal',
   'mule',
   'other_shoe',
+  'dress',
+  'jumpsuit',
+  'other_one_piece',
 ] as const satisfies readonly StyleComparatorKey[];
 
 // Onboarding canonical vocabularies (closet-onboarding-design.md §2). Closed sets so a host that ignores
 // the guidance still yields an item byte-identical to the imported 95.
-const STYLE_CATEGORIES = ['TOP', 'BOTTOM', 'OUTERWEAR', 'SHOE', 'ACCESSORY'] as const;
+// ONE_PIECE (next ChatGPT version): dresses, jumpsuits, rompers, overalls.
+const STYLE_CATEGORIES = ['TOP', 'BOTTOM', 'OUTERWEAR', 'SHOE', 'ACCESSORY', 'ONE_PIECE'] as const;
 
 // Color family vocabulary — lowercase (byte-parity with the imported closet; avoids splitting the
 // closet color facet into Navy/navy chips). Unmatched input normalizes to null; caller keeps the raw
@@ -711,6 +715,9 @@ function inferStylePurchaseCategory(record: Record<string, unknown>): string | n
   if (/(shoe|shoes|sneaker|sneakers|trainer|trainers|runner|runners|boot|boots|loafer|loafers|slides|sandals|air force|air max|stan smith|common projects)/.test(signals)) {
     return 'SHOE';
   }
+  if (ONE_PIECE_SIGNAL_PATTERN.test(signals)) {
+    return 'ONE_PIECE';
+  }
   if (/(jacket|coat|overshirt|hoodie|hooded)/.test(signals)) {
     return 'OUTERWEAR';
   }
@@ -723,6 +730,9 @@ function inferStylePurchaseCategory(record: Record<string, unknown>): string | n
 
   return null;
 }
+
+// A one-piece garment noun, excluding the dress-code sense (dress shirt/pants/shoes/boots/socks/code).
+const ONE_PIECE_SIGNAL_PATTERN = /\b(?:(?:shirt |slip |maxi |midi |mini |wrap |sun)?dress(?:es)?(?! (?:shirt|shirts|pant|pants|shoe|shoes|trouser|trousers|boot|boots|sock|socks|code|watch))|jumpsuits?|rompers?|playsuits?|overalls|dungarees|boiler ?suits?|gowns?)\b/;
 
 function buildPurchaseCandidateSignalText(record: Record<string, unknown>, candidateName: string | null): string {
   return [
@@ -1158,6 +1168,9 @@ export function inferStyleComparatorKey(input: {
   if (category === 'SHOE') {
     return 'other_shoe';
   }
+  if (category === 'ONE_PIECE') {
+    return 'other_one_piece';
+  }
   return 'unknown';
 }
 
@@ -1346,6 +1359,20 @@ export function normalizeStyleCategory(value: unknown): string | null {
     case 'accessory':
     case 'accessories':
       return 'ACCESSORY';
+    case 'one piece':
+    case 'one pieces':
+    case 'onepiece':
+    case 'dress':
+    case 'dresses':
+    case 'jumpsuit':
+    case 'jumpsuits':
+    case 'romper':
+    case 'rompers':
+    case 'playsuit':
+    case 'overalls':
+    case 'dresses & jumpsuits':
+    case 'dresses and jumpsuits':
+      return 'ONE_PIECE';
     default:
       return category.trim().toUpperCase();
   }
@@ -1577,6 +1604,15 @@ function inferComparatorKeyForCategory(category: string | null, signals: string[
     if (matchesComparatorAlias(signals, ['jean', 'jeans', 'denim'])) return 'jean';
     if (matchesComparatorAlias(signals, ['chino', 'chinos'])) return 'chino';
     if (matchesComparatorAlias(signals, ['trouser', 'trousers', 'slack', 'slacks', 'pant', 'pants'])) return 'trouser';
+  }
+
+  if (category === 'ONE_PIECE') {
+    if (matchesComparatorAlias(signals, ['jumpsuit', 'jumpsuits', 'romper', 'rompers', 'playsuit', 'playsuits', 'overalls', 'dungarees', 'boilersuit', 'boiler_suit', 'catsuit'])) {
+      return 'jumpsuit';
+    }
+    if (matchesComparatorAlias(signals, ['dress', 'dresses', 'gown', 'sundress', 'shirt_dress', 'shirtdress', 'slip_dress', 'maxi_dress', 'midi_dress', 'mini_dress', 'wrap_dress', 'sheath_dress', 'kaftan', 'caftan'])) {
+      return 'dress';
+    }
   }
 
   if (category === 'SHOE') {

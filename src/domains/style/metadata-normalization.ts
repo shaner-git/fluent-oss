@@ -135,7 +135,7 @@ function canonicalCategory(value: string | null): string | null {
   const cleaned = cleanScalar(value);
   if (!cleaned) return null;
   const upper = cleaned.toUpperCase();
-  if (upper === 'TOP' || upper === 'BOTTOM' || upper === 'OUTERWEAR' || upper === 'SHOE' || upper === 'ACCESSORY') {
+  if (upper === 'TOP' || upper === 'BOTTOM' || upper === 'OUTERWEAR' || upper === 'SHOE' || upper === 'ACCESSORY' || upper === 'ONE_PIECE') {
     return upper;
   }
   return cleaned;

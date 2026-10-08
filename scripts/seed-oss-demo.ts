@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runWithFluentAuthProps, type MutationProvenance } from '../src/auth';
-import { BudgetsService, type BudgetCategory } from '../src/domains/budgets/service';
 import { MealsService } from '../src/domains/meals/service';
 import { StyleService } from '../src/domains/style/service';
 import { FLUENT_OWNER_PROFILE_ID, FLUENT_PRIMARY_TENANT_ID } from '../src/fluent-identity';
@@ -43,15 +42,12 @@ async function main(): Promise<void> {
           imageDeliverySecret: runtime.env.imageDeliverySecret,
           origin,
         });
-        const budgets = new BudgetsService(runtime.env.db);
         const meals = new MealsService(runtime.env.db);
 
         const styleResult = await seedStyle(style, fixture.style, provenance);
-        const budgetResult = await seedBudgets(budgets, fixture.budgets, provenance);
         const mealsResult = await seedMeals(meals, fixture.meals, provenance);
 
         return {
-          budgets: budgetResult,
           meals: mealsResult,
           style: styleResult,
         };
@@ -64,7 +60,7 @@ async function main(): Promise<void> {
           ...result,
           fixtureId: fixture.id,
           fixturePath,
-          idempotency: 'safe-rerunnable: stable style, recipe, plan, inventory, and budget records are updated; budget spend is only topped up to the fixture target.',
+          idempotency: 'safe-rerunnable: stable style, recipe, plan, and inventory records are updated.',
           ok: true,
           root: runtime.paths.rootDir,
           sqliteDb: runtime.paths.dbPath,
@@ -114,39 +110,6 @@ async function seedStyle(style: StyleService, fixture: DemoFixture['style'], pro
     itemCount: items.length,
     items,
   };
-}
-
-async function seedBudgets(budgets: BudgetsService, fixture: DemoFixture['budgets'], provenance: MutationProvenance) {
-  const envelopes = [];
-  for (const envelope of fixture.envelopes) {
-    await budgets.setBudgetEnvelope({
-      category: envelope.category,
-      currency: envelope.currency,
-      monthlyAmount: envelope.monthlyAmount,
-      provenance,
-    });
-    const beforeSpend = await budgets.getPurchaseContext({ category: envelope.category });
-    const currentSpend = beforeSpend.targetSetup?.spentThisPeriod ?? 0;
-    const spendDelta = Number((envelope.targetSpent - currentSpend).toFixed(2));
-    let loggedSpend = 0;
-    if (spendDelta > 0) {
-      await budgets.logBudgetSpend({
-        amount: spendDelta,
-        category: envelope.category,
-        note: envelope.spendNote,
-        provenance,
-      });
-      loggedSpend = spendDelta;
-    }
-    const after = await budgets.getPurchaseContext({ category: envelope.category });
-    envelopes.push({
-      category: envelope.category,
-      loggedSpend,
-      monthlyAmount: after.targetSetup?.monthlyAmount ?? null,
-      spentThisPeriod: after.targetSetup?.spentThisPeriod ?? null,
-    });
-  }
-  return { envelopes };
 }
 
 async function seedMeals(meals: MealsService, fixture: DemoFixture['meals'], provenance: MutationProvenance) {
@@ -229,15 +192,6 @@ function addDaysIso(isoDate: string, days: number): string {
 }
 
 interface DemoFixture {
-  budgets: {
-    envelopes: Array<{
-      category: BudgetCategory;
-      currency: string;
-      monthlyAmount: number;
-      spendNote: string;
-      targetSpent: number;
-    }>;
-  };
   id: string;
   meals: {
     inventory: Array<{

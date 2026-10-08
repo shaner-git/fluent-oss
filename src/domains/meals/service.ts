@@ -11,7 +11,7 @@ import { getFluentIdentityContext } from '../../fluent-identity';
 import type { PcDomain, PcHost, PersonFact } from '../../personal-context';
 import type { FluentDatabase, FluentPreparedStatement } from '../../storage';
 import { shiftDateString } from '../../time';
-import { applyJsonPatch, deriveRecipeColumns, validateRecipeDocument } from './recipe-document';
+import { applyJsonPatch, deriveRecipeColumns, resolveRecipePatchOperations, validateRecipeDocument } from './recipe-document';
 import {
   asNonEmptyString,
   asNonNegativeNumber,
@@ -1256,6 +1256,39 @@ export class MealsService {
     return (result.results ?? []).map(mapMealFeedbackRow);
   }
 
+  private async getFeedbackRecord(feedbackId: string): Promise<MealFeedbackRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT id, meal_plan_id, meal_plan_entry_id, recipe_id, date, taste, difficulty, time_reality, repeat_again,
+                family_acceptance, notes, submitted_by, source_agent, source_skill, session_id, confidence, source_type, created_at
+         FROM meal_feedback WHERE tenant_id = ? AND id = ?`,
+      )
+      .bind(this.tenantId, feedbackId)
+      .first<Record<string, unknown>>();
+    if (!row) return null;
+    const text = (value: unknown) => (typeof value === 'string' ? value : null);
+    return {
+      confidence: typeof row.confidence === 'number' ? row.confidence : null,
+      createdAt: text(row.created_at),
+      date: String(row.date),
+      difficulty: text(row.difficulty) as MealFeedbackRecord['difficulty'],
+      familyAcceptance: text(row.family_acceptance) as MealFeedbackRecord['familyAcceptance'],
+      id: String(row.id),
+      mealPlanEntryId: text(row.meal_plan_entry_id),
+      mealPlanId: text(row.meal_plan_id),
+      notes: text(row.notes),
+      recipeId: String(row.recipe_id),
+      repeatAgain: text(row.repeat_again) as MealFeedbackRecord['repeatAgain'],
+      sessionId: text(row.session_id),
+      sourceAgent: text(row.source_agent),
+      sourceSkill: text(row.source_skill),
+      sourceType: text(row.source_type),
+      submittedBy: text(row.submitted_by),
+      taste: text(row.taste) as MealFeedbackRecord['taste'],
+      timeReality: text(row.time_reality) as MealFeedbackRecord['timeReality'],
+    };
+  }
+
   async logFeedback(input: LogFeedbackInput): Promise<MealFeedbackRecord> {
     const date = input.date ?? (await this.currentDateString());
     const resolvedEntry = await this.resolvePlanEntry({
@@ -1264,12 +1297,19 @@ export class MealsService {
       date,
     });
 
-    const feedbackId = `feedback:${input.recipeId}:${date}:${crypto.randomUUID()}`;
+    // With an operation_id the row id is deterministic, so a retry (even after lost bookkeeping or a
+    // concurrent attempt) finds the original row instead of inserting again; its side effects run once.
+    const operationId = input.operationId?.trim().toLowerCase() || null;
+    const feedbackId = operationId ? `feedback:op:${operationId}` : `feedback:${input.recipeId}:${date}:${crypto.randomUUID()}`;
+    if (operationId) {
+      const existing = await this.getFeedbackRecord(feedbackId);
+      if (existing) return { ...existing, replayed: true };
+    }
     const mealPlanId = input.mealPlanId ?? resolvedEntry?.mealPlanId ?? null;
     const mealPlanEntryId = input.mealPlanEntryId ?? resolvedEntry?.id ?? null;
     const createdAt = new Date().toISOString();
 
-    await this.db
+    const insertFeedback = this.db
       .prepare(
         `INSERT INTO meal_feedback (
           id, tenant_id, profile_id, meal_plan_id, meal_plan_entry_id, recipe_id, date, taste, difficulty, time_reality,
@@ -1297,8 +1337,14 @@ export class MealsService {
         input.provenance.sessionId,
         input.provenance.confidence,
         input.provenance.sourceType,
-      )
-      .run();
+      );
+    try {
+      await insertFeedback.run();
+    } catch (error) {
+      const raced = operationId ? await this.getFeedbackRecord(feedbackId) : null;
+      if (raced) return { ...raced, replayed: true };
+      throw error;
+    }
 
     const existingMemory = await this.getMealMemory(input.recipeId);
     const currentMemory = existingMemory[0] ?? null;
@@ -1485,7 +1531,7 @@ export class MealsService {
 
     // Soft-archive: flip status to 'removed' (getInventory filters status != 'removed', so the item leaves
     // the active list) WITHOUT touching quantity/unit/brand/etc., so an un-archive (status back to 'present')
-    // is lossless. This honors fluent_archive_item's reversible / destructiveHint:false contract, unlike the
+    // is lossless. This honors fluent_archive_closet_item's reversible / destructiveHint:false contract, unlike the
     // hard-delete deleteInventoryItem path. A targeted UPDATE is used (not updateInventory, whose upsert
     // rewrites every column from the input and would null omitted fields).
     await this.db
@@ -1738,7 +1784,7 @@ export class MealsService {
     }
 
     const currentRecipe = validateRecipeDocument(hydrateRecipeDocumentFromColumns(current));
-    const nextRecipe = validateRecipeDocument(applyJsonPatch(currentRecipe, input.operations));
+    const nextRecipe = validateRecipeDocument(applyJsonPatch(currentRecipe, resolveRecipePatchOperations(currentRecipe, input.operations)));
     if (nextRecipe.id !== input.recipeId) {
       throw new Error('Recipe patches may not change the recipe id.');
     }
@@ -5185,7 +5231,7 @@ export class MealsService {
     ]);
     if (this.personFactsReader) {
       const facts = await this.personFactsReader({ consumerDomain: 'meals', host: resolveHostFamily() });
-      // Canonical dietary-safety guidance for shipping hosts is fluent_get_context MealsHardConstraints, not this legacy planner overlay.
+      // Canonical dietary-safety guidance for shipping hosts is fluent_get_closet_context MealsHardConstraints, not this legacy planner overlay.
       preferences.raw.core_rules = overlayPersonFactsOntoCoreRules(asRecord(preferences.raw.core_rules) ?? {}, facts);
     }
 

@@ -14,6 +14,8 @@ import type {
 } from './types';
 
 export interface LogFeedbackInput {
+  /** Host idempotency key: the feedback row id is derived from it, so a retry can never insert twice. */
+  operationId?: string | null;
   recipeId: string;
   date?: string;
   mealPlanId?: string | null;

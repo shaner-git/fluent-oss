@@ -172,17 +172,6 @@
       }
     ]
   },
-  "budgets": {
-    "envelopes": [
-      {
-        "category": "style-clothing",
-        "currency": "CAD",
-        "monthlyAmount": 450,
-        "targetSpent": 185,
-        "spendNote": "Demo spend: linen shirt and socks."
-      }
-    ]
-  },
   "meals": {
     "recipes": [
       {

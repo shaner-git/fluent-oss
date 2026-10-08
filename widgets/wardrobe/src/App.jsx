@@ -4,7 +4,7 @@ import {MetadataEditor} from './MetadataEditor';
 import {FilterPanel} from './FilterPanel';
 import {InspectionPhoto} from './InspectionPhoto';
 import {ItemOverview} from './ItemOverview';
-import {categories} from './metadata.mjs';
+import {visibleCategories} from './metadata.mjs';
 import {emptyFacets,matches,facets,displayValue} from './facets.mjs';
 import {indexItem,savedItem,readView,findPayload,metadataPatch,initialFilters,applyMetadataPatch,requestFilter} from './model.mjs';
 import {saveMetadata} from './save.mjs';
@@ -83,14 +83,14 @@ export function App({host}){
  }
  async function loadIndex(){
   E('');Loading(true);hydration.current?.reset();
-  try{const result=await host.call('fluent_render_style_closet_surface',{filter:requestFilter(initialFilter.current),limit:1});if(mounted.current)ingest(result,true);}
+  try{const result=await host.call('fluent_show_closet',{filter:requestFilter(initialFilter.current),limit:1});if(mounted.current)ingest(result,true);}
   catch{if(mounted.current)E('The wardrobe could not load. Try again.');}
   finally{if(mounted.current)Loading(false);}
  }
  useEffect(()=>{
   mounted.current=true;
   hydration.current=createHydrator({
-   fetchItems:ids=>host.call('fluent_render_style_closet_surface',{filter:{status:'any',item_ids:ids},limit:ids.length}),
+   fetchItems:ids=>host.call('fluent_show_closet',{filter:{status:'any',item_ids:ids},limit:ids.length}),
    accept:result=>ingest(result).items.map(item=>item.id),
    onError:()=>E('Some pieces could not load. Try again.'),
   });
@@ -127,7 +127,7 @@ export function App({host}){
  function toggle(field,value){Choose(previous=>({...previous,[field]:previous[field].includes(value)?previous[field].filter(v=>v!==value):[...previous[field],value]}));}
  function open(id){horizontalPosition.current=collection.current?.scrollLeft||0;position.current=expanded?(collection.current?.scrollTop||0):window.scrollY;origin.current=id;imageTransition(()=>{S(id);F(false);Saved(false);E('');},()=>root.current?.querySelector('.detail-top button')?.focus({preventScroll:true}),document.getElementById('item-'+id)?.querySelector('img'),()=>root.current?.querySelector('.inspection-photo img'));}
  function back(){if(duplicate){Duplicate(false);return;}if(photoEdit||draft){transition(()=>{PhotoEdit(false);D(null);E('');});return;}if(draft){transition(()=>{D(null);E('');});return;}imageTransition(()=>{S(null);Saved(false);E('');},()=>{if(collection.current)collection.current.scrollLeft=horizontalPosition.current;if(expanded&&collection.current)collection.current.scrollTop=position.current;else window.scrollTo({top:position.current,behavior:'instant'});document.getElementById('item-'+origin.current)?.focus({preventScroll:true});},root.current?.querySelector('.inspection-photo img'),()=>document.getElementById('item-'+origin.current)?.querySelector('img'));}
- async function refreshItem(){hydration.current?.reset(Object.keys(cache));const result=await host.call('fluent_render_style_closet_surface',{filter:{status:'any',item_ids:[selected]},limit:1,presentation:{focused_item_id:selected,mode:'detail'}});const view=ingest(result);if(!view.items.some(item=>item.id===selected))throw new Error('The saved item could not be refreshed.');return view.items.find(item=>item.id===selected);}
+ async function refreshItem(){hydration.current?.reset(Object.keys(cache));const result=await host.call('fluent_show_closet',{filter:{status:'any',item_ids:[selected]},limit:1,presentation:{focused_item_id:selected,mode:'detail'}});const view=ingest(result);if(!view.items.some(item=>item.id===selected))throw new Error('The saved item could not be refreshed.');return view.items.find(item=>item.id===selected);}
  function changeStatus(status){initialFilter.current={...initialFilter.current,status};currentIndex.current=null;Index(null);S(null);P(0);void loadIndex();}
  function statusChanged(status){
   const previous=item;Cache(cache=>({...cache,[item.id]:{...item,status}}));
@@ -161,7 +161,7 @@ export function App({host}){
   {outcome?<CreateOutcome outcome={outcome}/>:!index?<div className="empty" role="status"><h1>Wardrobe</h1><p>{error||'Loading your wardrobe…'}</p>{error&&<button disabled={busy} onClick={loadIndex}>Retry</button>}</div>:!selected?<>
    {['comparison','ingestion_review'].includes(presentation.mode)&&<div className="presentation-context"><span>{presentation.mode==='comparison'?'Selected pieces':'Review new pieces'}</span><button onClick={fullWardrobe}>Full wardrobe</button></div>}
    <header><h1>Wardrobe</h1><WardrobeSearch value={query} change={Q}/><WardrobeSort value={sort} change={value=>{F(false);Sort(value);P(0);horizontalPosition.current=0;if(collection.current){collection.current.scrollLeft=0;collection.current.scrollTop=0;}}}/><button className="filter-button" aria-label={count?`Filters, ${count} active`:"Filters"} aria-expanded={filters} onClick={()=>filters?closeFilters():transition(()=>F(true),()=>root.current?.querySelector(".facet-search input")?.focus({preventScroll:true}))}><SlidersHorizontal size={19}/><span className="filter-label">Filters</span>{count?' · '+count:''}</button></header>
-   <div className="category-toolbar"><nav aria-label="Categories">{['All',...categories].map(value=><button key={value} aria-pressed={category===value} onClick={()=>transition(()=>C(value))}>{value}</button>)}</nav>
+   <div className="category-toolbar"><nav aria-label="Categories">{['All',...visibleCategories(index||[])].map(value=><button key={value} aria-pressed={category===value} onClick={()=>transition(()=>C(value))}>{value}</button>)}</nav>
    <div className="collection-tools">{initialFilter.current.status==='archived'&&<span>Archived</span>}<details><summary aria-label="Wardrobe options"><DotsThree size={21}/></summary><div><button disabled={busy} onClick={()=>changeStatus(initialFilter.current.status==='archived'?'active':'archived')}>{initialFilter.current.status==='archived'?'Active wardrobe':'Archived items'}</button><button disabled={busy} onClick={loadIndex}>Refresh</button></div></details></div></div>
    {count>0&&<div className="active-filters" aria-label="Active filters">{category!=='All'&&<button onClick={()=>C('All')} aria-label={'Remove category: '+category}>{category}<X size={12}/></button>}{Object.keys(facets).flatMap(field=>chosen[field].map(value=><button key={field+value} onClick={()=>toggle(field,value)} aria-label={'Remove '+facets[field]+': '+value}>{displayValue(value,field,category)}<X size={12}/></button>))}</div>}
    {filters&&<FilterPanel items={index} query={query} category={category} setCategory={C} selected={chosen} toggle={toggle} clear={()=>{Choose(emptyFacets());C('All');}} close={closeFilters} total={results.length}/>}

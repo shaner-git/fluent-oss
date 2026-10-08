@@ -116,9 +116,9 @@ async function verifyMcpSurface(token: string) {
         client.listResourceTemplates(),
         client.callTool({ name: 'fluent_get_capabilities', arguments: {} }),
         client.callTool({ name: 'fluent_get_account_status', arguments: {} }),
-        client.callTool({ name: 'fluent_get_shared_profile', arguments: {} }),
-        client.callTool({ name: 'fluent_get_context', arguments: { domain: 'style', intent: 'closet' } }),
-        client.callTool({ name: 'fluent_get_context', arguments: { domain: 'meals', intent: 'planning' } }),
+        client.callTool({ name: 'fluent_get_profile', arguments: {} }),
+        client.callTool({ name: 'fluent_get_closet_context', arguments: { domain: 'style', intent: 'closet' } }),
+        client.callTool({ name: 'fluent_get_closet_context', arguments: { domain: 'meals', intent: 'planning' } }),
       ]);
 
     return {

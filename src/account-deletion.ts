@@ -1,4 +1,4 @@
-import { FLUENT_SUPPORT_EMAIL, FLUENT_OSS_AVAILABLE_URL, FLUENT_CLOUD_WAITLIST_URL } from './cloud-early-access';
+import { FLUENT_SUPPORT_EMAIL, FLUENT_CLOUD_WAITLIST_URL } from './cloud-early-access';
 import { purgeCloudAccountData, type AccountPurgeBindings } from './account-purge';
 import { getHostedUserMembership, type HostedAuthUser, type HostedIdentityMembership } from './hosted-identity';
 import type { FluentDatabase } from './storage';
@@ -70,7 +70,7 @@ const WAITLIST_ONLY_DELETED_DATA = [
 
 const CLOUD_ACCOUNT_DELETED_DATA = [
   'The Fluent tenant, profile, domain lifecycle state, and Fluent-hosted identity membership for the confirmed account.',
-  'User-authored Fluent domain data across meals, health, and style, plus Fluent-hosted media artifacts tied to the account.',
+  'Your Fluent closet and shared profile facts, any data saved by retired features such as Meals and Health, plus Fluent-hosted media artifacts tied to the account.',
   'Better Auth sign-in data for the account, including linked sessions, accounts, and access tokens, once deletion is completed.',
 ];
 
@@ -740,12 +740,10 @@ function timestamp(): string {
 }
 
 export function getAccountDeletionSupportLinks(): {
-  ossUrl: string;
   supportEmail: string;
   waitlistUrl: string;
 } {
   return {
-    ossUrl: FLUENT_OSS_AVAILABLE_URL,
     supportEmail: FLUENT_SUPPORT_EMAIL,
     waitlistUrl: FLUENT_CLOUD_WAITLIST_URL,
   };

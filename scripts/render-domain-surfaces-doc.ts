@@ -12,18 +12,15 @@ export function renderDomainSurfacesMarkdown(): string {
   const list = (names: string[]) => names.filter((name) => tools.has(name)).map((name) => `- \`${name}\``);
   return [
     '# Fluent Domain Surfaces', '', `Current contract: \`${snapshot.contractVersion}\``, '',
-    'Fluent exposes one cross-host product contract. Meals and Style are current; Budgets is a narrow shared seam; Health and Wellbeing are reserved.', '',
+    'Fluent exposes one cross-host product contract. Style is current; Meals, Health, Wellbeing and budgets are retired.', '',
     '<!-- current-tools:start -->',
-    '## Shared context and evidence', '', ...list(['fluent_get_capabilities','fluent_get_account_status','fluent_get_context','fluent_get_shared_profile','fluent_update_shared_profile_patch','fluent_list_items','fluent_get_item','fluent_list_evidence','fluent_get_media_bundle','fluent_archive_item']), '',
-    '## Meals', '', ...list(['fluent_save_recipe','fluent_update_recipe_patch','fluent_record_recipe_feedback','fluent_save_meal_plan','fluent_apply_grocery_list_change','fluent_apply_grocery_shopping_result','fluent_render_surface']), '',
-    'Meals supports assistant-drafted plans, saved recipes, the current grocery list, confirmed post-shopping updates, and the Grocery List MCP App. It does not browse retailers, fill carts, or check out.', '',
-    '## Style', '', ...list(['fluent_update_style_item_patch','fluent_create_style_item','fluent_refresh_style_item_profile','fluent_set_style_item_image','fluent_render_style_closet_surface']), '',
+    '## Shared context and evidence', '', ...list(['fluent_get_capabilities','fluent_get_account_status','fluent_get_closet_context','fluent_get_profile','fluent_update_profile','fluent_list_closet_items','fluent_get_closet_item','fluent_list_closet_evidence','fluent_get_closet_item_photos','fluent_archive_closet_item']), '',
+    '## Style', '', ...list(['fluent_update_closet_item','fluent_set_closet_item_cover','fluent_reorder_closet_item_photos','fluent_hide_closet_item_photo','fluent_replace_closet_item_photo','fluent_undo_closet_item_photo_change','fluent_add_closet_item_photo','fluent_restore_closet_item','fluent_merge_closet_items','fluent_save_closet_item_product_details','fluent_undo_closet_item_merge','fluent_add_closet_item','fluent_record_closet_item_feedback','fluent_set_closet_item_photo','fluent_show_closet']), '',
     'Style supplies saved closet context and media. The assistant owns visual interpretation and stylist judgment. Fluent does not extract arbitrary product pages.', '',
-    '## Budgets', '', ...list(['fluent_get_purchase_context','fluent_set_budget_envelope','fluent_log_budget_spend','fluent_render_budgets_surface']), '',
-    'Budgets is limited to manual `meals-groceries` and `style-clothing` monthly envelopes and explicit spend corrections. It is not a banking or finance-data product.', '',
     '<!-- current-tools:end -->',
-    '## Reserved', '',
-    'Health and Wellbeing are not currently supported. Earlier Health tools and the old Home dashboard are not available.', '',
+    '## Retired', '',
+    'Meals was retired on 2026-10-06. Its recipe, meal-plan and grocery tools and the Grocery List MCP App are no longer available; the shared tools return a retirement notice for Meals requests. Saved Meals data is kept and included in the account export.', '',
+    'Health, Wellbeing and budgets are not currently supported. Earlier Health and budget tools and the old Home dashboard are not available; assistants bring finance context from tools the user has connected.', '',
     '## Resources', '', ...snapshot.resources.map((resource) => `- \`${resource}\``), '',
   ].join('\n');
 }

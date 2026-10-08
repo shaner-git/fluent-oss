@@ -6740,6 +6740,7 @@ function categoryLabel(category: string): string {
     ACCESSORY: 'Accessories',
     BOTTOM: 'Bottoms',
     BOTTOMS: 'Bottoms',
+    ONE_PIECE: 'Dresses & jumpsuits',
     OUTERWEAR: 'Outerwear',
     SHOE: 'Shoes',
     SHOES: 'Shoes',

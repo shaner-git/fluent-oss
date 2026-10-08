@@ -1,0 +1,92 @@
+// Runs the closet write scenario against the PRE-SPLIT source (a46f33e4) through its MCP server and the
+// former multiplexed tools (fluent_update_style_item_patch with photo_library / product_enrichment /
+// expected_duplicate_merge_id / status:"active", fluent_archive_item with merge_into_item_id), and prints
+// the normalized structuredContent of each call.
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { runWithFluentAuthProps, type MutationProvenance } from './src/auth';
+import { productReferenceSchema } from './src/domains/style/product-reference';
+import { StyleService } from './src/domains/style/service';
+import { createLocalRuntime } from './src/local/runtime';
+import { createFluentMcpServer } from './src/mcp';
+
+const APPROVAL = 'explicit_user_approved';
+const TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn2G8kAAAAASUVORK5CYII=';
+const auth = { email: 'split@example.invalid', scope: ['style:read', 'style:write'], tenantId: 'primary', userId: 'local-user' };
+const VOLATILE = new Set(['revision', 'operationId', 'undoToken', 'token', 'fingerprint', 'observedAt', 'checkedAt', 'generatedAt', 'sourceSnapshot', 'provenance', 'actionJson', 'artifactId', 'tenantId', 'mergeId']);
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+function normalize(value: unknown): unknown {
+  const walk = (node: unknown): unknown => {
+    // Rows written in the same millisecond have no stable read order: compare id-keyed rows as a set.
+    if (Array.isArray(node)) {
+      const mapped = node.map(walk);
+      return mapped.every((entry) => entry && typeof entry === 'object' && typeof (entry as { id?: unknown }).id === 'string')
+        ? [...mapped].sort((x, y) => String((x as { id: string }).id).localeCompare(String((y as { id: string }).id)))
+        : mapped;
+    }
+    if (typeof node === 'string') return ISO.test(node) ? '<time>' : node.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<uuid>');
+    if (!node || typeof node !== 'object') return node;
+    return Object.fromEntries(Object.entries(node as Record<string, unknown>)
+      .filter(([key]) => !VOLATILE.has(key) && !key.endsWith('At'))
+      .map(([key, child]) => [key, walk(child)]));
+  };
+  return walk(JSON.parse(JSON.stringify(value ?? null)));
+}
+
+async function main() {
+  const root = mkdtempSync(path.join(tmpdir(), 'fluent-presplit-'));
+  const runtime = createLocalRuntime({ origin: 'http://127.0.0.1:8788', rootDir: root });
+  const server = createFluentMcpServer(runtime.env as never, 'http://127.0.0.1:8788', { profile: 'chatgpt_app' });
+  const client = new Client({ name: 'pre-split', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  const style = new StyleService(runtime.env.db, { artifacts: runtime.env.ARTIFACTS, origin: runtime.env.PUBLIC_BASE_URL });
+  const provenance: MutationProvenance = { actorEmail: auth.email, actorName: null, confidence: null, scopes: auth.scope, sessionId: null, sourceAgent: 'split-test', sourceSkill: null, sourceType: 'user_confirmation' };
+  const as = <T>(fn: () => Promise<T>) => runWithFluentAuthProps(auth as never, fn);
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const result = await as(() => client.callTool({ arguments: args, name })) as { isError?: boolean; structuredContent?: Record<string, unknown>; content?: unknown };
+    if (result.isError) throw new Error(`${name} failed: ${JSON.stringify(result.content)}`);
+    return result.structuredContent;
+  };
+  const out: Record<string, unknown> = {};
+  await as(() => style.upsertItem({ item: { id: 'style-item:twin', category: 'TOP', name: 'Twin tee', size: 'M', status: 'active', subcategory: 'Tee' }, provenance }));
+  await as(() => style.upsertItemPhotos({ itemId: 'style-item:twin', photos: [1, 2, 3].map((n) => ({ data_url: TINY_PNG, id: `style-photo:twin-${n}`, is_primary: n === 1 })), provenance } as never));
+  await as(() => style.upsertItem({ item: { id: 'style-item:keeper', category: 'TOP', name: 'Keeper tee', status: 'active', subcategory: 'Tee' }, provenance }));
+  let undoToken = '';
+  const photo = async (label: string, action: unknown) => {
+    const revision = (await as(() => style.getPhotoLibrary('style-item:twin'))).revision;
+    const ack = await call('fluent_update_style_item_patch', { approval: APPROVAL, item_id: 'style-item:twin', patch: {}, photo_library: { action, expected_revision: revision, operation_id: crypto.randomUUID() } });
+    undoToken = ((ack as Record<string, any>).readAfterWrite?.undoToken as string | undefined) ?? undoToken;
+    out[label] = normalize(ack);
+  };
+  await photo('cover', { type: 'cover', photoId: 'style-photo:twin-2' });
+  await photo('reorder', { type: 'reorder', ids: ['style-photo:twin-2', 'style-photo:twin-3', 'style-photo:twin-1'] });
+  await photo('hide', { type: 'remove', photoId: 'style-photo:twin-3' });
+  await photo('undoPhotoChange', { type: 'undo', token: undoToken });
+  await photo('replace', { type: 'replace', photoId: 'style-photo:twin-1', replacementId: 'style-photo:twin-3' });
+  await photo('hideCover', { type: 'remove', photoId: 'style-photo:twin-2', coverId: 'style-photo:twin-3' });
+  out.photoLibraryState = normalize((await as(() => style.getPhotoLibrary('style-item:twin'))).state);
+  const reference = productReferenceSchema.parse({ brand: 'COS', facts: { composition: { source_id: 'listing', value: '100% cotton' } }, match_basis: 'user_confirmed', name: 'Textured Knitted Cotton T-Shirt', product_code: '1273306003', product_url: 'https://www2.hm.com/pt_pt/productpage.1273306003.html', sources: [{ id: 'listing', kind: 'retailer', observed_at: '2026-09-18T12:00:00Z', url: 'https://www2.hm.com/pt_pt/productpage.1273306003.html' }], status: 'confirmed' });
+  out.productDetails = normalize(await call('fluent_update_style_item_patch', { approval: APPROVAL, item_id: 'style-item:twin', patch: {}, product_enrichment: { expected_revision: 0, operation_id: crypto.randomUUID(), reference } }));
+  const mergeId = '11111111-1111-4111-8111-111111111111';
+  out.merge = normalize(await call('fluent_archive_item', { approval: APPROVAL, disposition: 'duplicate', domain: 'style', item_id: 'style-item:twin', merge_into_item_id: 'style-item:keeper', merge_operation_id: mergeId }));
+  out.undoMerge = normalize(await call('fluent_update_style_item_patch', { approval: APPROVAL, expected_duplicate_merge_id: mergeId, item_id: 'style-item:twin', patch: { status: 'active' } }));
+  out.archive = normalize(await call('fluent_archive_item', { approval: APPROVAL, disposition: 'donated', domain: 'style', item_id: 'style-item:twin', reason: 'gave it away' }));
+  out.restore = normalize(await call('fluent_update_style_item_patch', { approval: APPROVAL, item_id: 'style-item:twin', patch: { status: 'active' } }));
+  out.updateDetails = normalize(await call('fluent_update_style_item_patch', { approval: APPROVAL, item_id: 'style-item:twin', patch: { brand: 'COS' } }));
+  const OTHER_PNG = `data:image/png;base64,${Buffer.from([...Buffer.from(TINY_PNG.split(',')[1]!, 'base64').subarray(0, 24), 7, 7, 7, ...Buffer.from(TINY_PNG.split(',')[1]!, 'base64').subarray(24)]).toString('base64')}`;
+  out.addPhoto = normalize(await call('fluent_set_style_item_image', { approval: APPROVAL, image_data_url: OTHER_PNG, image_type: 'fit', item_id: 'style-item:twin', photo_action: 'add' }));
+  out.setPhoto = normalize(await call('fluent_set_style_item_image', { approval: APPROVAL, image_data_url: TINY_PNG, image_type: 'primary', item_id: 'style-item:twin', photo_action: 'replace' }));
+  out.finalItem = normalize(await as(() => style.getItem('style-item:twin')));
+  out.finalKeeper = normalize(await as(() => style.getItem('style-item:keeper')));
+  await client.close();
+  await server.close();
+  runtime.sqliteDb.close();
+  rmSync(root, { force: true, recursive: true });
+  process.stdout.write(JSON.stringify({ source: 'a46f33e4: pre-split MCP server, former multiplexed tools (fluent_update_style_item_patch, fluent_archive_item)', results: out }, null, 2) + '\n');
+}
+main().catch((error) => { console.error(error); process.exitCode = 1; });

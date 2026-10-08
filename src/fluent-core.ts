@@ -44,6 +44,7 @@ import {
   evaluateSubscriptionLifecycle,
 } from './subscription-lifecycle';
 import { torontoTimeZone } from './time';
+import { MEALS_RETIRED_ON, MEALS_RETIREMENT_MESSAGE } from './meals-retirement';
 
 export {
   FLUENT_OSS_DEFAULT_PROFILE_ID,
@@ -155,7 +156,7 @@ export interface FluentAccountStatus {
 }
 
 export interface FluentToolDiscoveryGroup {
-  id: 'core' | 'health_fitness' | 'meals_planning' | 'meals_shopping' | 'meals_cooking' | 'style';
+  id: 'core' | 'health_fitness' | 'meals_retired' | 'style';
   label: string;
   domainId: 'health' | 'meals' | 'style' | null;
   guidanceResourceUris: string[];
@@ -1235,7 +1236,7 @@ function canonicalDomainSkill(domainId: string, metadata: Record<string, unknown
 }
 
 function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDiscovery'] {
-  const isReady = (domainId: 'meals' | 'style') => readyDomains.includes(domainId);
+  const isReady = (domainId: 'style') => readyDomains.includes(domainId);
 
   return {
     canonicalRegistry: 'mcp_tools_list',
@@ -1249,77 +1250,33 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         domainId: null,
         guidanceResourceUris: [],
         toolPrefixes: ['fluent_'],
-        starterReadTools: ['fluent_get_capabilities', 'fluent_get_account_status', 'fluent_get_context', 'fluent_get_shared_profile'],
-        detailReadTools: ['fluent_list_items', 'fluent_get_item', 'fluent_list_evidence', 'fluent_get_media_bundle'],
-        starterWriteTools: ['fluent_update_shared_profile_patch'],
+        starterReadTools: ['fluent_get_capabilities', 'fluent_get_account_status', 'fluent_get_closet_context', 'fluent_get_profile'],
+        detailReadTools: ['fluent_list_closet_items', 'fluent_get_closet_item', 'fluent_list_closet_evidence', 'fluent_get_closet_item_photos'],
+        starterWriteTools: ['fluent_update_profile'],
         whenToUse: 'Account status, shared profile context, capability checks, or cross-domain routing.',
         domainReady: true,
       },
       {
         id: 'health_fitness',
-        label: 'Wellbeing (Reserved)',
+        label: 'Wellbeing (Retired)',
         domainId: 'health',
         guidanceResourceUris: [],
         toolPrefixes: ['fluent_'],
         starterReadTools: ['fluent_get_capabilities'],
         starterWriteTools: [],
-        whenToUse: 'Wellbeing is reserved in the 2.0 public contract. Check capabilities, then continue from user-provided context without claiming Fluent has Health tools or state.',
+        whenToUse: 'Wellbeing is retired from the public contract (D23). Check capabilities, then continue from user-provided context without claiming Fluent has Health tools or state.',
         domainReady: false,
       },
       {
-        id: 'meals_planning',
-        label: 'Meals Planning',
+        id: 'meals_retired',
+        label: 'Meals (Retired)',
         domainId: 'meals',
         guidanceResourceUris: [],
         toolPrefixes: ['fluent_'],
-        starterReadTools: ['fluent_get_context', 'fluent_list_items', 'fluent_get_item'],
-        detailReadTools: ['fluent_get_shared_profile', 'fluent_list_evidence'],
-        starterWriteTools: [
-          'fluent_save_recipe',
-          'fluent_update_recipe_patch',
-          'fluent_record_recipe_feedback',
-          'fluent_save_meal_plan',
-          'fluent_archive_item',
-        ],
-        whenToUse:
-          'Meals planning, saved recipes, meal-plan reads, and explicit approved saves. Start broad planning and currentness from fluent_get_context(domain="meals", intent="planning").',
-        domainReady: isReady('meals'),
-      },
-      {
-        id: 'meals_shopping',
-        label: 'Meals Shopping',
-        domainId: 'meals',
-        guidanceResourceUris: [],
-        toolPrefixes: ['fluent_'],
-        starterReadTools: [
-          'fluent_get_context',
-          'fluent_list_items',
-          'fluent_get_item',
-          'fluent_render_surface',
-          'fluent_get_purchase_context',
-          'fluent_render_budgets_surface',
-        ],
-        starterWriteTools: [
-          'fluent_apply_grocery_list_change',
-          'fluent_apply_grocery_shopping_result',
-          'fluent_set_budget_envelope',
-          'fluent_log_budget_spend',
-        ],
-        whenToUse:
-          'The living grocery list, explicit list changes, shopping-result reconciliation, or the narrow meals-groceries budget envelope. Use fluent_render_surface only when the host can mount MCP Apps; otherwise answer from current structured data.',
-        domainReady: isReady('meals'),
-      },
-      {
-        id: 'meals_cooking',
-        label: 'Meals Cooking',
-        domainId: 'meals',
-        guidanceResourceUris: [],
-        toolPrefixes: ['fluent_'],
-        starterReadTools: ['fluent_list_items', 'fluent_get_item'],
-        detailReadTools: ['fluent_get_shared_profile'],
-        starterWriteTools: ['fluent_record_recipe_feedback'],
-        whenToUse: 'Reading a saved recipe for cooking or recording explicit recipe feedback.',
-        domainReady: isReady('meals'),
+        starterReadTools: [],
+        starterWriteTools: [],
+        whenToUse: `Meals is retired (D30, ${MEALS_RETIRED_ON}). Fluent has no Meals tools or data in the public product; answer meal questions without Fluent.`,
+        domainReady: false,
       },
       {
         id: 'style',
@@ -1328,25 +1285,31 @@ function buildToolDiscovery(readyDomains: string[]): FluentCapabilities['toolDis
         guidanceResourceUris: [],
         toolPrefixes: ['fluent_'],
         starterReadTools: [
-          'fluent_get_context',
-          'fluent_list_items',
-          'fluent_get_item',
-          'fluent_get_media_bundle',
-          'fluent_list_evidence',
-          'fluent_get_purchase_context',
-          'fluent_render_style_closet_surface',
-          'fluent_render_budgets_surface',
+          'fluent_get_closet_context',
+          'fluent_list_closet_items',
+          'fluent_get_closet_item',
+          'fluent_get_closet_item_photos',
+          'fluent_list_closet_evidence',
+          'fluent_show_closet',
         ],
         starterWriteTools: [
-          'fluent_update_style_item_patch',
-          'fluent_create_style_item',
-          'fluent_refresh_style_item_profile',
-          'fluent_set_style_item_image',
-          'fluent_archive_item',
-          'fluent_set_budget_envelope',
-          'fluent_log_budget_spend',
+          'fluent_update_closet_item',
+          'fluent_set_closet_item_cover',
+          'fluent_reorder_closet_item_photos',
+          'fluent_hide_closet_item_photo',
+          'fluent_replace_closet_item_photo',
+          'fluent_undo_closet_item_photo_change',
+          'fluent_add_closet_item_photo',
+          'fluent_restore_closet_item',
+          'fluent_merge_closet_items',
+          'fluent_save_closet_item_product_details',
+          'fluent_undo_closet_item_merge',
+          'fluent_add_closet_item',
+          'fluent_record_closet_item_feedback',
+          'fluent_set_closet_item_photo',
+          'fluent_archive_closet_item',
         ],
-        whenToUse: 'Owned closet reads and edits, host-grounded Style context, inspectable media, or the narrow style-clothing budget envelope. The closet renderer manages saved items; it does not make purchase verdicts.',
+        whenToUse: 'Owned closet reads and edits, host-grounded Style context, or inspectable media. The closet renderer manages saved items; it does not make purchase verdicts.',
         domainReady: isReady('style'),
       },
     ],
@@ -1381,7 +1344,7 @@ function buildNextActions(input: {
     ? true
     : domain === 'unknown'
       ? null
-      : domain === 'health'
+      : domain === 'health' || domain === 'meals'
         ? false
         : Boolean(domainRecord && isDomainReady(domainRecord));
   const baseWarnings = buildHostWarnings(hostFamily);
@@ -1390,7 +1353,7 @@ function buildNextActions(input: {
   if (domain === 'health') {
     const actions: FluentRecommendedAction[] = [{
       kind: 'read',
-      reason: 'Health and Wellbeing are reserved in the public contract. Check current capabilities, then continue only from context the user provides.',
+      reason: 'Health and Wellbeing are retired from the public contract. Check current capabilities, then continue only from context the user provides.',
       tool: 'fluent_get_capabilities',
     }];
 
@@ -1403,12 +1366,36 @@ function buildNextActions(input: {
       primaryAction: actions[0]!,
       recommendedActions: actions,
       routingNotes: ['Do not claim Fluent has Health or Wellbeing tools, state, or medical authority.'],
-      warnings: [...baseWarnings, 'Health and Wellbeing are reserved and expose no domain tools in the public product.'],
+      warnings: [...baseWarnings, 'Health and Wellbeing are retired and expose no domain tools in the public product.'],
       writePolicy,
     };
   }
 
-  if ((domain === 'meals' || domain === 'style') && !domainReady) {
+  if (domain === 'meals') {
+    const actions: FluentRecommendedAction[] = [{
+      kind: 'read',
+      reason: `Meals is retired (D30, ${MEALS_RETIRED_ON}). Fluent no longer reads or saves meals, recipes, meal plans, or grocery lists. Check current capabilities only if the user asks what Fluent does now.`,
+      tool: 'fluent_get_capabilities',
+    }];
+
+    return {
+      domain,
+      domainReady: false,
+      guidanceResources: [],
+      hostProfile,
+      hostFamily,
+      primaryAction: actions[0]!,
+      recommendedActions: actions,
+      routingNotes: [
+        'Do not claim Fluent has Meals tools, recipes, meal plans, grocery lists, or food preferences.',
+        `If asked, say: ${MEALS_RETIREMENT_MESSAGE}`,
+      ],
+      warnings: [...baseWarnings, 'Meals is retired and exposes no domain tools or data in the public product.'],
+      writePolicy,
+    };
+  }
+
+  if (domain === 'style' && !domainReady) {
     const actions: FluentRecommendedAction[] = [{
       kind: 'read',
       reason: `${domain} is not currently ready. Re-read the public capability state before attempting a domain workflow.`,
@@ -1466,34 +1453,6 @@ function readyDomainActions(input: {
   const goal = input.goal ?? '';
   const chatgpt = input.hostFamily === 'chatgpt_app';
 
-  if (isBudgetGoal(goal)) {
-    return [
-      {
-        kind: 'read',
-        reason: 'Read the matching meals-groceries or style-clothing envelope before presenting budget pressure or recording a change.',
-        tool: 'fluent_get_purchase_context',
-      },
-      ...(chatgpt
-        ? [{
-            kind: 'render' as const,
-            reason: 'Open the promoted budget-envelope surface when the host can mount MCP Apps.',
-            tool: 'fluent_render_budgets_surface' as const,
-          }]
-        : []),
-      ...(input.intent === 'write'
-        ? [{
-            kind: 'write' as const,
-            reason: /log|spent|purchase|bought/i.test(goal)
-              ? 'Record an explicit user-confirmed grocery or clothing spend only.'
-              : 'Set an explicit user-confirmed grocery or clothing envelope only.',
-            tool: (/log|spent|purchase|bought/i.test(goal)
-              ? 'fluent_log_budget_spend'
-              : 'fluent_set_budget_envelope') as FluentPublicToolName,
-          }]
-        : []),
-    ];
-  }
-
   if (input.domain === 'core' && isAccountStatusGoal(goal)) {
     return [
       {
@@ -1510,134 +1469,31 @@ function readyDomainActions(input: {
     ];
   }
 
-  if (input.domain === 'meals') {
-    if (isMealsSetupGoal(goal) || input.intent === 'onboard') {
-      return [
-        {
-          kind: 'read',
-          reason: 'Read compact Meals setup context and currentness before asking for corrections or durable preferences.',
-          tool: 'fluent_get_context',
-        },
-        {
-          kind: 'read',
-          reason: 'Read confirmed shared facts separately from inferred or session-only setup details.',
-          tool: 'fluent_get_shared_profile',
-        },
-        ...(input.intent === 'write'
-          ? [{
-              kind: 'write' as const,
-              reason: 'Save only an explicit user-approved durable shared or Meals fact, then rely on read-after-write proof.',
-              tool: 'fluent_update_shared_profile_patch' as const,
-            }]
-          : []),
-      ];
-    }
-    if (/grocery|shopping|shop|buy|pantry|cart|order|receipt|ingredient/i.test(goal)) {
-      return [
-        chatgpt
-          ? {
-              kind: 'render',
-              reason: 'Open the promoted living grocery-list surface when the host can mount MCP Apps.',
-              tool: 'fluent_render_surface',
-            }
-          : {
-              kind: 'read',
-              reason: 'Read the current living grocery-list item and answer from structured data in text.',
-              tool: 'fluent_list_items',
-            },
-        {
-          kind: 'read',
-          reason: 'Read compact Meals context when planning state, freshness, or grocery provenance matters.',
-          tool: 'fluent_get_context',
-        },
-        ...(input.intent === 'write'
-          ? [{
-              kind: 'write' as const,
-              reason: /receipt|bought|purchased|shopped/i.test(goal)
-                ? 'Apply an explicit user-confirmed shopping result to the living list.'
-                : 'Apply an explicit user-approved grocery-list change.',
-              tool: (/receipt|bought|purchased|shopped/i.test(goal)
-                ? 'fluent_apply_grocery_shopping_result'
-                : 'fluent_apply_grocery_list_change') as FluentPublicToolName,
-            }]
-          : []),
-      ];
-    }
-    if (/recipe|cook|make|ingredients|steps|card/i.test(goal)) {
-      return [
-        {
-          kind: 'read',
-          reason: 'Find the saved recipe by title or stable ID before relying on it.',
-          tool: 'fluent_list_items',
-        },
-        {
-          kind: 'read',
-          reason: 'Read the exact saved recipe before deriving steps, ingredients, or grocery changes.',
-          tool: 'fluent_get_item',
-        },
-        ...(input.intent === 'write'
-          ? [{
-              kind: 'write' as const,
-              reason: /feedback|rating|liked|disliked|cooked/i.test(goal)
-                ? 'Record explicit recipe feedback without inventing a household preference.'
-                : /update|edit|change/i.test(goal)
-                  ? 'Patch an existing saved recipe after explicit approval.'
-                  : 'Save the recipe after explicit approval.',
-              tool: (/feedback|rating|liked|disliked|cooked/i.test(goal)
-                ? 'fluent_record_recipe_feedback'
-                : /update|edit|change/i.test(goal)
-                  ? 'fluent_update_recipe_patch'
-                  : 'fluent_save_recipe') as FluentPublicToolName,
-            }]
-          : []),
-      ];
-    }
-    return [
-      {
-        kind: 'read',
-        reason: 'Start broad Meals planning from the compact context packet so facts, freshness, evidence gaps, and write boundaries stay together.',
-        tool: 'fluent_get_context',
-      },
-      {
-        kind: 'read',
-        reason: 'List the current saved meal-plan item when the user asks for plan detail.',
-        tool: 'fluent_list_items',
-      },
-      ...(input.intent === 'write' || input.intent === 'plan'
-        ? [{
-            kind: 'write' as const,
-            reason: 'Save a meal plan only after the user explicitly approves the plan to persist.',
-            tool: 'fluent_save_meal_plan' as const,
-          }]
-        : []),
-    ];
-  }
-
   if (input.domain === 'style') {
     if (isStyleSetupGoal(goal) || input.intent === 'onboard') {
       return [
         {
           kind: 'read',
           reason: 'Read current Style closet/setup context before proposing any durable item changes.',
-          tool: 'fluent_get_context',
+          tool: 'fluent_get_closet_context',
         },
         {
           kind: 'read',
           reason: 'List owned Style items to ground setup in the actual saved closet.',
-          tool: 'fluent_list_items',
+          tool: 'fluent_list_closet_items',
         },
         ...(chatgpt
           ? [{
               kind: 'render' as const,
               reason: 'Open the promoted Style Closet Manager when the host can mount MCP Apps.',
-              tool: 'fluent_render_style_closet_surface' as const,
+              tool: 'fluent_show_closet' as const,
             }]
           : []),
         ...(input.intent === 'write'
           ? [{
               kind: 'write' as const,
               reason: 'Create a starter closet item only after explicit user approval of the host-produced profile.',
-              tool: 'fluent_create_style_item' as const,
+              tool: 'fluent_add_closet_item' as const,
             }]
           : []),
       ];
@@ -1647,12 +1503,12 @@ function readyDomainActions(input: {
         {
           kind: 'read',
           reason: 'Read compact Style purchase context first; the host owns visual judgment and the final verdict.',
-          tool: 'fluent_get_context',
+          tool: 'fluent_get_closet_context',
         },
         {
           kind: 'read',
           reason: 'Fetch a host-provided direct candidate image, upload, or saved closet media when visual evidence is needed. Never pass a product-page URL for extraction; ask for a direct image when pixels are unavailable.',
-          tool: 'fluent_get_media_bundle',
+          tool: 'fluent_get_closet_item_photos',
         },
       ];
     }
@@ -1660,23 +1516,23 @@ function readyDomainActions(input: {
       {
         kind: 'read',
         reason: 'Start broad Style asks from compact closet context.',
-        tool: 'fluent_get_context',
+        tool: 'fluent_get_closet_context',
       },
       {
         kind: 'read',
         reason: 'List the saved closet items relevant to the user request.',
-        tool: 'fluent_list_items',
+        tool: 'fluent_list_closet_items',
       },
       ...(chatgpt
         ? [{
             kind: 'render' as const,
             reason: 'Open Style Closet Manager for saved-item browsing or management, never for a purchase verdict.',
-            tool: 'fluent_render_style_closet_surface' as const,
+            tool: 'fluent_show_closet' as const,
           }]
         : [{
             kind: 'read' as const,
             reason: 'Use inspectable saved-item media when the answer depends on owned closet images.',
-            tool: 'fluent_get_media_bundle' as const,
+            tool: 'fluent_get_closet_item_photos' as const,
           }]),
       ...(input.intent === 'write'
         ? [{
@@ -1692,7 +1548,7 @@ function readyDomainActions(input: {
     return [
       {
         kind: 'read',
-        reason: 'Health and Wellbeing are reserved. Check current capabilities and continue only from user-provided context.',
+        reason: 'Health and Wellbeing are retired. Check current capabilities and continue only from user-provided context.',
         tool: 'fluent_get_capabilities',
       },
     ];
@@ -1707,29 +1563,26 @@ function readyDomainActions(input: {
     {
       kind: 'read',
       reason: 'Read confirmed shared profile context when the user asks broadly what Fluent knows.',
-      tool: 'fluent_get_shared_profile',
+      tool: 'fluent_get_profile',
     },
   ];
 }
 
-function isBudgetGoal(goal: string): boolean {
-  return /\b(budget|envelope|spend|spending)\b/i.test(goal);
-}
-
 function styleWriteToolForGoal(goal: string): FluentPublicToolName {
-  if (/\b(add|create|save|new)\b/i.test(goal)) return 'fluent_create_style_item';
-  if (/\b(archive|remove|sold|donat(?:e|ed)|return(?:ed)?|no longer)\b/i.test(goal)) return 'fluent_archive_item';
-  if (/\b(photo|image|picture)\b/i.test(goal)) return 'fluent_set_style_item_image';
-  if (/\b(refresh|re-?analy[sz]e)\b/i.test(goal)) return 'fluent_refresh_style_item_profile';
-  return 'fluent_update_style_item_patch';
+  if (/\b(add|create|save|new)\b/i.test(goal)) return 'fluent_add_closet_item';
+  if (/\b(archive|remove|sold|donat(?:e|ed)|return(?:ed)?|no longer)\b/i.test(goal)) return 'fluent_archive_closet_item';
+  if (/\b(photo|image|picture)\b/i.test(goal)) return 'fluent_set_closet_item_photo';
+  if (/\b(refresh|re-?analy[sz]e)\b/i.test(goal)) return 'fluent_record_closet_item_feedback';
+  return 'fluent_update_closet_item';
 }
 
 function isChatGptAppDomain(value: string): value is 'health' | 'meals' | 'style' {
   return value === 'health' || value === 'meals' || value === 'style';
 }
 
-function isPublicProductDomain(value: string): value is 'meals' | 'style' {
-  return value === 'meals' || value === 'style';
+// Meals is retired (D30); only Style is a public product domain.
+function isPublicProductDomain(value: string): value is 'style' {
+  return value === 'style';
 }
 
 function guidanceForDomain(_domain: FluentNextActionDomain): string[] {
@@ -1767,12 +1620,6 @@ function isGroceryShoppingGoal(text: string): boolean {
 function isAccountStatusGoal(text: string): boolean {
   return /\b(account|access|billing|subscription|export|deletion|delete|reactivat(?:e|ion)|support|ready|enabled)\b/.test(text)
     && /\b(fluent|account|access|billing|subscription|export|deletion|delete|reactivat(?:e|ion)|support)\b/.test(text);
-}
-
-function isMealsSetupGoal(text: string): boolean {
-  return /\b(set ?up|onboard(?:ing)?|calibrat(?:e|ion)|preferences?|household|allerg(?:y|ies)|dietary|recipe book|recipes? we'd actually try|starter meals?)\b/i.test(
-    text,
-  );
 }
 
 function isStyleSetupGoal(text: string): boolean {

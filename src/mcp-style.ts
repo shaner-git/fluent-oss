@@ -748,17 +748,8 @@ function buildStylePurchasePreparation(input: {
           input: hostVisionTask,
         },
       ];
-  // D16 feed-before-judging: surface the proven budget signal to the host BEFORE it forms a
-  // verdict. Fluent will not override the host's judgment; this is how the host gets informed.
-  const budgetContext = analysis.budgetContext ?? null;
-  const budgetInstruction = budgetContext && budgetContext.targetSetup
-    ? `Budget context (Fluent-verified): ${budgetContext.purchaseSignal} - $${budgetContext.targetSetup.spentThisPeriod} of $${budgetContext.targetSetup.monthlyAmount} ${budgetContext.category} spent this month, $${budgetContext.targetSetup.remainingThisPeriod} remaining. Factor this into your buy/wait/skip judgment; Fluent will not override your verdict.`
-    : null;
-
   return {
     analysisSummary: summarizeStylePurchaseAnalysis(analysis),
-    budgetContext,
-    budgetInstruction,
     calibrationAsk: calibrationContext.opportunisticCalibrationPrompt
       ? {
           prompt: calibrationContext.opportunisticCalibrationPrompt,
@@ -1004,9 +995,10 @@ async function buildStyleVisualBundleToolResult(input: {
   bundle: StyleVisualBundleRecord;
   includeInlineImages?: boolean | null;
   maxInlineImages?: number | null;
+  strictPublicFetch: boolean;
 }) {
   const inlineFetches = input.includeInlineImages
-    ? await fetchStyleVisualBundleInlineImages(input.bundle, clampStyleVisualBundleInlineImageCount(input.maxInlineImages))
+    ? await fetchStyleVisualBundleInlineImages(input.bundle, clampStyleVisualBundleInlineImageCount(input.maxInlineImages), input.strictPublicFetch)
     : { images: [] as StyleVisualBundleInlineImageFetch[], warnings: [] as string[] };
   const inlineImageContent = inlineFetches.images.map(({ data: _data, ...metadata }) => metadata);
   const hasCandidateAsset = input.bundle.assets.some((asset) => asset.role === 'candidate');
@@ -1167,12 +1159,14 @@ async function buildStylePurchaseVisionPacketToolResult(input: {
   candidate: unknown;
   maxInlineImages?: number | null;
   preparation: StylePurchasePreparation;
+  strictPublicFetch: boolean;
 }) {
   const inlineFetches =
     input.preparation.hostVisionTask.status === 'ready_for_host_vision'
       ? await fetchStyleVisualBundleInlineImages(
           input.bundle,
           clampStyleVisualBundleInlineImageCount(input.maxInlineImages),
+          input.strictPublicFetch,
         )
       : { images: [] as StyleVisualBundleInlineImageFetch[], warnings: [] as string[] };
   const inlineImageContent = inlineFetches.images.map(({ data: _data, ...metadata }) => metadata);
@@ -1499,6 +1493,7 @@ function recallStylePurchaseVisualEvidence(input: {
 async function fetchStyleVisualBundleInlineImages(
   bundle: StyleVisualBundleRecord,
   maxImages: number,
+  strictPublicFetch: boolean,
 ): Promise<{ images: StyleVisualBundleInlineImageFetch[]; warnings: string[] }> {
   const images: StyleVisualBundleInlineImageFetch[] = [];
   const warnings: string[] = [];
@@ -1520,7 +1515,7 @@ async function fetchStyleVisualBundleInlineImages(
         continue;
       }
       try {
-        const fetched = await fetchStyleVisualBundleImage(publicUrl.toString());
+        const fetched = await fetchStyleVisualBundleImage(publicUrl.toString(), { strictPublicFetch });
         images.push({
           ...fetched,
           assetIndex,
@@ -1544,11 +1539,17 @@ async function fetchStyleVisualBundleInlineImages(
   return { images, warnings };
 }
 
-export async function fetchStyleVisualBundleImage(url: string, signal?: AbortSignal): Promise<{
+export async function fetchStyleVisualBundleImage(url: string, options: { signal?: AbortSignal; strictPublicFetch: boolean }): Promise<{
   byteLength: number;
   data: string;
   mimeType: string;
 }> {
+  const signal = options.signal;
+  // A runtime without strict public fetch (self-hosted Node) never downloads a stored image link:
+  // hostname checks cannot stop a name that resolves to a private address. Callers degrade to text.
+  if (!options.strictPublicFetch) {
+    throw new Error('this self-hosted Fluent runtime does not download image links');
+  }
   // SSRF boundary: never server-fetch a non-public URL. Caller-/host-supplied photo URLs can be arbitrary
   // (retailer or user-provided), so reject localhost / private / link-local hosts BEFORE fetching. Mirrors
   // the write-path boundary at domains/style/service.ts (store-by-reference; never fetch host-inspected
@@ -2611,7 +2612,7 @@ export function registerStyleMcpSurface(
     {
       title: 'Get Style Onboarding Calibration',
       description:
-        'Required first and sufficient read model for Style setup/calibration. Fetch closet status, active evidence count, photo and category coverage, presentation-readiness counts, a bounded exact-item repair queue, inferred versus confirmed taste signals, unresolved questions, suggested next action, and purchase-analysis readiness. Presentation ready requires the exact current Catalog asset to have a durable quality approval bound to its retained source and required identity, appearance, pose, crop, background, centering, scale, and matte checks. Needs normalization or recoverable source means an Original/source exists but is not normalized; photo unavailable and no photo yet require an owned attachment/file for the exact returned item ID. Nothing in this read call writes automatically. Every repair must preserve retained Original/source evidence; use the merge-preserving fluent_set_style_item_image path, never a replace-all photo path, and only generate a Catalog asset when the host supports image generation and exact garment identity is preserved. Category counts are coverage evidence, not taste or aesthetic signals. Use this for Style setup, closet import calibration, stale/accidental calibration, widget rendering, confirm/correct prompts, starter closet additions, and any purchase answer that depends on closet confidence. For ordinary setup/calibration summaries, do not call style_get_context; this read model owns the onboarding state. For inferred signals, say "your closet suggests" and avoid second-person taste phrasing such as "you prefer", "you lean", or "you are going for" unless the user confirmed it. If the user marks a named item/phrase stale or accidental so it should not count as preference, and you cannot match a stable item ID, record phrase-level calibration with style_record_calibration_response instead of asking to use style_upsert_item.',
+        'Required first and sufficient read model for Style setup/calibration. Fetch closet status, active evidence count, photo and category coverage, presentation-readiness counts, a bounded exact-item repair queue, inferred versus confirmed taste signals, unresolved questions, suggested next action, and purchase-analysis readiness. Presentation ready requires the exact current Catalog asset to have a durable quality approval bound to its retained source and required identity, appearance, pose, crop, background, centering, scale, and matte checks. Needs normalization or recoverable source means an Original/source exists but is not normalized; photo unavailable and no photo yet require an owned attachment/file for the exact returned item ID. Nothing in this read call writes automatically. Every repair must preserve retained Original/source evidence; use the merge-preserving fluent_set_closet_item_photo path, never a replace-all photo path, and only generate a Catalog asset when the host supports image generation and exact garment identity is preserved. Category counts are coverage evidence, not taste or aesthetic signals. Use this for Style setup, closet import calibration, stale/accidental calibration, widget rendering, confirm/correct prompts, starter closet additions, and any purchase answer that depends on closet confidence. For ordinary setup/calibration summaries, do not call style_get_context; this read model owns the onboarding state. For inferred signals, say "your closet suggests" and avoid second-person taste phrasing such as "you prefer", "you lean", or "you are going for" unless the user confirmed it. If the user marks a named item/phrase stale or accidental so it should not count as preference, and you cannot match a stable item ID, record phrase-level calibration with style_record_calibration_response instead of asking to use style_upsert_item.',
       inputSchema: {
         view: readViewSchema,
       },
@@ -3329,6 +3330,7 @@ export function registerStyleMcpSurface(
         candidate: preparation.candidate,
         maxInlineImages: max_inline_images,
         preparation,
+        strictPublicFetch: style.fetchesCallerImageUrls(),
       });
     },
   );
@@ -3727,18 +3729,18 @@ export function registerStyleMcpSurface(
   };
 
   server.registerTool(
-    'fluent_render_style_closet_surface',
+    'fluent_show_closet',
     withAppsSecurity({
-      title: 'Show or Compare Fluent Style Closet',
+      title: 'Show Closet',
       description:
-        'Promoted render adapter for the Fluent Closet v8 MCP Apps surface. Reads owned Style items and returns one collection-to-detail experience plus compact structured fallback data. When the user asks to review, compare, or resolve a possible duplicate between two saved closet records, call this tool with exactly those two saved IDs in filter.item_ids, filter.status="active", and presentation.mode="comparison"; omit focused_item_id. Do not claim that the comparison is open unless this tool was actually called and returned. After an outfit or shoe recommendation names one winning owned item, render the conversational payoff with filter.item_ids containing only its exact saved ID, presentation.mode="recommendation", focused_item_id set to the same ID, and one concise recommendation_reason; never substitute a category/subcategory/query filter or the whole closet. For an outfit of 3 to 5 exact owned items, render only those selected saved IDs with presentation.mode="comparison" and omit focused_item_id; the model must name the exact items and may offer at most one exact-owned replacement. Recommendation mode is a compact responsive card with progressive disclosure into full item detail. Use presentation.mode="ingestion_review" only as the text-only/non-UI fallback when fluent_create_style_item could not attach its create-owned review app: follow fluent_create_style_item payload.reviewHandoff with filter.status="active", exact filter.item_ids, and the exact focused_item_id. Newly created items are active; pending_review is not a valid lifecycle or filter status. Exact filter.item_ids otherwise default to comparison and always provide an in-app route back to the full closet. Use mode="detail" with focused_item_id only when the user explicitly asks to inspect or manage the complete saved item. Category/type/brand/color/size/query filters are for deliberate collection browsing; status="archived" shows archived items. This surface manages saved closet state and hands exact stored item IDs to outfit creation; it does not invent garments or make purchase judgments.',
+        'Show the Fluent Closet of the user as an MCP Apps view. Reads owned Style items and returns one collection-to-detail experience plus compact structured fallback data. When the user asks to review, compare, or resolve a possible duplicate between two saved closet records, call this tool with exactly those two saved IDs in filter.item_ids, filter.status="active", and presentation.mode="comparison"; omit focused_item_id. Do not claim that the comparison is open unless this tool was actually called and returned. After an outfit or shoe recommendation names one winning owned item, render the conversational payoff with filter.item_ids containing only its exact saved ID, presentation.mode="recommendation", focused_item_id set to the same ID, and one concise recommendation_reason; never substitute a category/subcategory/query filter or the whole closet. For an outfit of 3 to 5 exact owned items, render only those selected saved IDs with presentation.mode="comparison" and omit focused_item_id; the model must name the exact items and may offer at most one exact-owned replacement. Use presentation.mode="ingestion_review" only as the text-only/non-UI fallback when fluent_add_closet_item could not attach its create-owned review app: follow fluent_add_closet_item payload.reviewHandoff with filter.status="active", exact filter.item_ids, and the exact focused_item_id. Newly created items are active; pending_review is not a valid lifecycle or filter status. Exact filter.item_ids otherwise default to comparison and always provide an in-app route back to the full closet. Use mode="detail" with focused_item_id only when the user explicitly asks to inspect or manage the complete saved item. Category/type/brand/color/size/query filters are for deliberate collection browsing; status="archived" shows archived items. This surface manages saved closet state and hands exact stored item IDs to outfit creation; it does not invent garments or make purchase judgments.',
       inputSchema: {
         cursor: z.string().optional(),
         filter: styleClosetFilterSchema,
         limit: z.number().int().min(1).max(120).optional(),
         presentation: styleClosetPresentationSchema,
       },
-      annotations: { title: 'Show or Compare Fluent Style Closet', readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Show Closet', readOnlyHint: true, idempotentHint: true },
       _meta: {
         ui: {
           csp: closetWidgetMeta.ui.csp,
@@ -3782,7 +3784,7 @@ export function registerStyleMcpSurface(
     withAppsSecurity({
       title: 'Legacy Style Purchase Card (deprecated)',
       description:
-        'Legacy/compatibility render adapter only — do NOT use in the Phase 1/2 public Style purchase flow. A buy/skip/consider/wait verdict is PROSE from one fluent_get_context(domain="style", intent="purchase", candidate, amount) read; to show the user the owned items that compare to the candidate, render fluent_render_style_closet_surface with filter.item_ids set to those comparator ids — NEVER this tool. Retained only for older hosts still driving the deprecated evidence flow; if somehow used, answer from the structured fallback data in text.',
+        'Legacy/compatibility render adapter only — do NOT use in the Phase 1/2 public Style purchase flow. A buy/skip/consider/wait verdict is PROSE from one fluent_get_closet_context(domain="style", intent="purchase", candidate, amount) read; to show the user the owned items that compare to the candidate, render fluent_show_closet with filter.item_ids set to those comparator ids — NEVER this tool. Retained only for older hosts still driving the deprecated evidence flow; if somehow used, answer from the structured fallback data in text.',
       inputSchema: stylePurchaseAnalysisWidgetInputSchema,
       annotations: { title: 'Legacy Style Purchase Card (deprecated)', readOnlyHint: true, idempotentHint: true },
       _meta: {
@@ -3964,6 +3966,7 @@ export function registerStyleMcpSurface(
         bundle,
         includeInlineImages: include_inline_images,
         maxInlineImages: max_inline_images,
+        strictPublicFetch: style.fetchesCallerImageUrls(),
       });
     },
   );

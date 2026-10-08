@@ -3,7 +3,7 @@ export const validSort=value=>sortOptions.some(([key])=>key===value)?value:'rece
 const collator=new Intl.Collator('en',{numeric:true,sensitivity:'base'});
 const compare=(a,b)=>!a?(!b?0:1):!b?-1:collator.compare(a,b);
 const date=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?Date.parse(value):0;
-const categories=['Tops','Bottoms','Outerwear','Shoes','Accessories'];
+const categories=['Tops','Bottoms','Dresses & jumpsuits','Outerwear','Shoes','Accessories'];
 const typeGroup=item=>{
  const type=item.subcategory?.trim()||'';
  // Preserve saved descriptions while grouping explicit shorts types together.

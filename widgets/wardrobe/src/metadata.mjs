@@ -1,4 +1,7 @@
-export const categories=['Tops','Bottoms','Outerwear','Shoes','Accessories'];
+export const categories=['Tops','Bottoms','Dresses & jumpsuits','Outerwear','Shoes','Accessories'];
+// Newer categories appear as tabs only when the closet has an item in them; the editor always offers every category.
+const optionalCategories=new Set(['Dresses & jumpsuits']);
+export const visibleCategories=(items=[])=>categories.filter(value=>!optionalCategories.has(value)||items.some(item=>item?.category===value));
 export const cleanValue=value=>String(value??'').trim().replace(/\s+/g,' ');
 export const identity=value=>cleanValue(value).toLocaleLowerCase();
 export function metadataOptions(items,key,category){

@@ -20,7 +20,7 @@ const MEDIA_REFERENCE_KEY_PATTERNS = [
 
 const MAX_ARRAY_ITEMS = 8;
 const MAX_RECIPE_INGREDIENT_ITEMS = 40;
-// A list/enumeration response (fluent_list_items) must let the host SEE every item on the page. The
+// A list/enumeration response (fluent_list_closet_items) must let the host SEE every item on the page. The
 // 8-item array cap silently hid the rest — a host auditing a 99-item closet saw only 8 and gave up.
 // Style list payloads are compacted per item (see vnext-read-layer compactStyleListItem) so a full page
 // fits under MAX_TEXT_LENGTH; this cap applies only to the top-level `items` array of a list page.

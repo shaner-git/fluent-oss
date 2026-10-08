@@ -10,12 +10,10 @@ import {
   styleUploadedPhotoDataUrlStep,
   unusableStyleImageReason,
 } from './domains/style/media';
-import { photoLibraryActionSchema } from './domains/style/photo-library';
+import type { PhotoLibraryAction } from './domains/style/photo-library';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { accountProfileSchema, buildAccountProfile, FLUENT_ACCOUNT_PROFILE_TOOL } from './account-profile';
-import { buildCurrentGroceryWidgetMetadata } from './mcp-meals';
-import type { CurrentGroceryListRecord } from './domains/meals/types';
 import {
   buildMutationProvenance,
   FLUENT_HEALTH_READ_SCOPE,
@@ -28,13 +26,7 @@ import {
   requireAnyScope,
   requireScopes,
 } from './auth';
-import type { BudgetCategory, BudgetsService } from './domains/budgets/service';
-import {
-  BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
-  buildBudgetsEnvelopeSetupWidgetMeta,
-  getBudgetsEnvelopeSetupWidgetHtml,
-} from './domains/budgets/envelope-setup';
-import { recipeDocumentSchema, recipeIngredientSchema, recipeInstructionSchema } from './domains/meals/recipe-document';
+import type { WriteOperationsStore } from './write-operations';
 import { summarizeDomainEvents, type MealsService } from './domains/meals/service';
 import { STYLE_CLOSET_TEMPLATE_URI, type StyleClosetStructuredContent } from './domains/style/closet-manager';
 import { STYLE_ITEM_FIT_FIELDS, type StyleDuplicateCandidate, type StyleDuplicateCandidateSignals, type StyleService } from './domains/style/service';
@@ -51,7 +43,6 @@ import {
   getFluentVNextContext,
   getFluentVNextItem,
   getFluentVNextMediaBundle,
-  getFluentVNextPurchaseContext,
   getFluentVNextSharedProfile,
   listFluentVNextEvidence,
   listFluentVNextItemsPage,
@@ -59,44 +50,40 @@ import {
 } from './vnext-read-layer';
 import {
   archiveFluentVNextItem,
-  applyFluentVNextGroceryListChange,
-  applyFluentVNextGroceryShoppingResult,
-  logFluentBudgetSpend,
   createFluentStyleItem,
   refreshFluentStyleItemProfile,
-  recordFluentVNextRecipeFeedback,
   recordFluentVNextEvent,
-  saveFluentVNextMealPlan,
-  saveFluentVNextRecipe,
-  setFluentBudgetEnvelope,
   setFluentStyleItemImage,
   styleImagePhotoId,
   updateFluentStyleItemPatch,
+  arrangeFluentStyleItemPhotos,
+  mergeFluentStyleDuplicateItems,
+  restoreFluentStyleItem,
+  styleArchiveRequestsDuplicateMerge,
+  undoFluentStyleDuplicateMerge,
+  saveFluentStyleItemProductReference,
   updateFluentVNextSharedProfilePatch,
-  updateFluentVNextRecipePatch,
   upsertFluentVNextItem,
   type FluentVNextWriteAck,
   type FluentVNextWriteServices,
 } from './vnext-write-layer';
 import { buildVNextModelText, toVNextModelVisibleValue } from './vnext-model-text';
+import { isMealsRetiredProfilePatch, isMealsRetiredReadRequest, mealsRetiredToolResult, withoutMealsRetiredPersonFacts } from './meals-retirement';
 
 const fluentVNextDomainSchema = z.enum(['shared', 'meals', 'style', 'wellbeing', 'finance']).describe(
-  'Fluent domain to read. Use meals for food, recipes, groceries, or pantry state; style for closet or purchase evidence; shared for cross-domain profile facts. Wellbeing and finance are reserved for broader profiles.',
+  'Fluent domain to read. Use style for closet or purchase evidence; shared for cross-domain profile facts. Meals and Wellbeing are retired and return no data; finance is reserved.',
 );
 const fluentVNextArchiveDomainSchema = z.enum(['meals', 'style']).describe(
-  'Public Fluent domain containing the saved item to archive. Only Meals and Style items are archivable in the current contract.',
+  'Public Fluent domain containing the saved item to archive. Use style; Meals is retired and archives nothing.',
 );
 const fluentVNextIntentSchema = z.enum(['readiness', 'setup', 'planning', 'today', 'closet', 'purchase', 'budget_signal', 'unknown']).describe(
   'Why the host model is reading context. This helps Fluent choose compact relevant context; it does not make Fluent perform planning or judgment.',
 );
 const fluentVNextItemTypeSchema = z.enum(['meal_plan', 'recipe', 'grocery_list', 'inventory_item', 'style_item', 'goal', 'budget_signal']).describe(
-  'Optional item class to narrow the read. For meals use meal_plan, recipe, grocery_list, or inventory_item. For style use style_item.',
+  'Optional item class to narrow the read. For style use style_item. The Meals item types (meal_plan, recipe, grocery_list, inventory_item) are retired and return no data.',
 );
 const fluentVNextItemQuerySchema = z.string().min(1).max(120).describe(
-  'Optional saved-item search text. For Meals recipes, pass a recipe title or stable recipe ID before fetching the exact recipe with fluent_get_item.',
-);
-const fluentVNextSurfaceSchema = z.literal('meals_grocery_list').describe(
-  'Candidate app surface to render. Only meals_grocery_list is implemented in the full runtime, and it is intentionally omitted from the curated public profile until host proof passes.',
+  'Optional saved-item search text, such as a brand, garment, color, category, or stable item ID.',
 );
 const fluentVNextMediaBundlePurposeSchema = z.enum(['saved_item_review', 'style_purchase_advice', 'visual_evidence_check', 'catalog_repair_source']).describe(
   'Reason media is being fetched. Use style_purchase_advice for shopping/style advice, saved_item_review for an existing saved item, visual_evidence_check when checking what images are available, or catalog_repair_source to retrieve only retained source evidence for an ordinary Catalog repair.',
@@ -119,13 +106,10 @@ const fluentVNextPurchaseCandidateSchema = z.object({
   category: z.string().optional().describe('Optional candidate category as supplied by the host, for example outerwear. Fluent resolves it before claiming category completeness.'),
   image_urls: z.array(z.string().url()).optional().describe('Optional direct candidate image URLs inspected by the host. Fluent does not sign retailer URLs or inspect candidate pixels.'),
   name: z.string().min(1).describe('Candidate product or item name supplied by the host.'),
-  price_text: z.string().optional().describe('Exact listing price text the host saw. For Style purchase budget arithmetic, pass amount only when it matches the number in this text, or falls within its cited range.'),
+  price_text: z.string().optional().describe('Optional exact listing price text the host saw, kept as candidate context. Fluent does not track budgets or compare prices.'),
   subcategory: z.string().optional().describe('Optional candidate subcategory, for example Harrington jacket.'),
 }).strict().describe(
   'Optional candidate metadata for a one-read Style purchase context. Used only with domain="style" and intent="purchase"; Fluent supplies owned-category evidence, not a verdict.',
-);
-const fluentVNextBudgetCategorySchema = z.enum(['style-clothing', 'meals-groceries']).describe(
-  'Budget envelope category. Use style-clothing only for clothing/style purchases and meals-groceries only for grocery spend. Do not use this for dashboards, Plaid imports, or retailer automation.',
 );
 const fluentStyleClosetWriteResponseModeSchema = z.enum(['read_after_write', 'validated', 'ack', 'full']).optional();
 const fluentStyleItemProfileSourceSchema = z.enum([
@@ -161,7 +145,7 @@ const fluentStyleItemFeedbackSchema = z.object({
 }).strict().optional().describe('Typed natural-language feedback for one exact saved Style item. User-stated feedback outranks inferred signals.');
 const fluentStyleItemPatchSchema = z.object({
   brand: z.string().nullable().optional(),
-  care: z.string().nullable().optional().describe('Legacy field: rejected without saving any part of the patch. Use product_enrichment with an empty patch for attributed care facts.'),
+  care: z.string().nullable().optional().describe('Legacy field: rejected without saving any part of the patch. Use fluent_save_closet_item_product_details for attributed care facts.'),
   category: z.string().nullable().optional(),
   color: z.string().nullable().optional(),
   formality: z.number().nullable().optional(),
@@ -169,11 +153,10 @@ const fluentStyleItemPatchSchema = z.object({
   name: z.string().nullable().optional(),
   notes: z.string().nullable().optional().describe('Legacy field: not supported by this patch; the entire patch is rejected without saving.'),
   size: z.string().nullable().optional(),
-  status: z.enum(['active']).optional().describe('Set to "active" to restore (un-archive) an item to the active closet. Only "active" is accepted here; archiving must use fluent_archive_item with an explicit disposition.'),
   subcategory: z.string().nullable().optional(),
-  tags: z.array(z.string()).optional().describe('Legacy field: rejected without saving any part of the patch. Use fluent_refresh_style_item_profile for tags.'),
-  use_case: z.array(z.string()).optional().describe('Legacy field: rejected without saving any part of the patch. Use fluent_refresh_style_item_profile for styling descriptors.'),
-}).strict().describe('Sparse Style closet item patch. Omitted fields are not changed. Unsupported fields reject the entire patch before saving. Set status:"active" to restore an archived item.');
+  tags: z.array(z.string()).optional().describe('Legacy field: rejected without saving any part of the patch. Use fluent_record_closet_item_feedback for tags.'),
+  use_case: z.array(z.string()).optional().describe('Legacy field: rejected without saving any part of the patch. Use fluent_record_closet_item_feedback for styling descriptors.'),
+}).passthrough().describe('Sparse closet item detail edit. Omitted fields are not changed. Unsupported fields, including status, reject the entire edit before saving.');
 const fluentStyleImageTypeSchema = z.enum(['primary', 'alternate', 'fit']).optional().describe(
   'Image role to store: primary/alternate are clean catalog/product display photos for the closet tile; fit is a worn/on-model photo for fit assessment.',
 );
@@ -200,7 +183,7 @@ const nestedProvenanceSchema = z.object({
   source_type: z.string().nullable().optional(),
 }).passthrough().optional();
 const fluentVNextEvidenceSubjectSchema = z.string().describe(
-  'Optional evidence target. For meals, pass a saved recipe ID, exact saved recipe title, grocery-list ID, or meal-memory subject returned by Fluent. For style, pass a saved style item ID returned by fluent_list_items or fluent_get_item. Omit when the user asks for general evidence gaps.',
+  'Optional evidence target. For style, pass a saved style item ID returned by fluent_list_closet_items or fluent_get_closet_item. Omit when the user asks for general evidence gaps.',
 );
 const fluentVNextEvidenceClaimSchema = z.string().describe(
   'Optional natural-language claim to check against Fluent evidence, for example "user dislikes mushrooms" or "this jacket matches saved closet context". Use only when the user asks to verify a specific claim.',
@@ -260,7 +243,7 @@ const fluentVNextSharedProfileFactKindSchema = z.enum([
   'timezone',
   'display_name',
 ]).describe(
-  'The single explicit shared or Meals fact the user approved saving. Use meals kinds for food/planning memory and timezone or display_name for shared.',
+  'The single explicit shared fact the user approved saving: timezone or display_name. The food and meal-planning kinds are retired with Meals and save nothing.',
 );
 const fluentVNextSharedProfilePatchSchema = z.object({
   kind: fluentVNextSharedProfileFactKindSchema,
@@ -272,30 +255,47 @@ const fluentVNextSharedProfilePatchSchema = z.object({
   status: z.enum(['confirmed', 'corrected', 'rejected']).describe(
     'User-approved status for this fact. Use rejected only to save that a proposed fact should not be treated as true.',
   ),
-  value: z.string().describe('The user-confirmed shared or Meals value, such as "Sunday", "30", "mushrooms", or "America/Toronto".'),
+  value: z.string().describe('The user-confirmed shared value, such as "America/Toronto" or a display name.'),
 }).strict().describe(
   'One explicit user-approved Fluent memory fact. Required shape: patch.kind, patch.value, and patch.status. Do not send inferred facts, plans, transcripts, or arbitrary JSON.',
 );
 const fluentVNextStyleCoveragePatchSchema = z.object({
-  kind: z.literal('closet_coverage').describe('The only public Style profile fact available through this tool.'),
+  kind: z.literal('closet_coverage').describe('Public Style closet-coverage fact.'),
   note: z.string().optional().describe('Optional short provenance note, preferably in the user\'s words. Do not include transcripts or hidden reasoning.'),
   status: z.enum(['confirmed', 'corrected']).describe('Whether the user explicitly confirmed or corrected the saved Closet coverage.'),
   value: z.enum(['representative', 'partial', 'out_of_date', 'unknown']).describe('The exact user-confirmed coverage of the current saved Fluent closet.'),
 }).strict().describe('One explicit user-confirmed Style closet-coverage fact.');
+// Plan #7: Style taste, size and price facts, stored as canonical person facts visible to Style.
+const fluentVNextStyleFactKindSchema = z.enum([
+  'style_aesthetic',
+  'style_avoid',
+  'size_note',
+  'fit_preference',
+  'preferred_store',
+  'price_band',
+]);
+const FLUENT_STYLE_FACT_KIND_GUIDE =
+  'style_aesthetic (look or palette the user likes), style_avoid (cuts, fabrics or styles to avoid), size_note (a size, optionally with brand or garment), fit_preference, preferred_store, price_band (a usual price range; include the currency)';
+const fluentVNextStyleFactPatchSchema = z.object({
+  kind: fluentVNextStyleFactKindSchema,
+  note: z.string().optional().describe('Optional short provenance note, preferably in the user\'s words. Do not include transcripts or hidden reasoning.'),
+  status: z.enum(['confirmed', 'corrected', 'rejected']).describe('confirmed or corrected saves the fact; rejected removes that exact saved fact.'),
+  value: z.string().min(1).max(240).describe('The fact in the user\'s words, such as "earth tones", "no skinny fits", "32x32 in Levi\'s", or "usually under 150 CAD".'),
+}).strict().describe('One explicit user-confirmed Style taste, size or price fact.');
 const fluentVNextSharedProfileExactInputSchema = z.discriminatedUnion('domain', [
   z.object({
-    domain: z.literal('style').describe('Style coverage confirmation for the current saved Fluent closet.'),
-    patch: fluentVNextStyleCoveragePatchSchema,
+    domain: z.literal('style').describe('Style closet coverage or a Style taste, size or price fact.'),
+    patch: z.union([fluentVNextStyleCoveragePatchSchema, fluentVNextStyleFactPatchSchema]),
     response_mode: writeResponseModeSchema,
     ...provenanceInputSchema,
   }).strict(),
   z.object({
-    domain: z.enum(['shared', 'meals']).describe('Shared or Meals domain for this explicit public memory write.'),
+    domain: z.enum(['shared', 'meals']).describe('Shared domain for this explicit public memory write. Meals is retired and saves nothing.'),
     patch: fluentVNextSharedProfilePatchSchema,
     response_mode: writeResponseModeSchema,
     ...provenanceInputSchema,
   }).strict(),
-]).describe('Exact domain-discriminated public Fluent profile write. Style exposes only closet_coverage; arbitrary Style profile patches are not accepted.');
+]).describe('Exact domain-discriminated public Fluent profile write. Style accepts closet_coverage and the Style facts style_aesthetic, style_avoid, size_note, fit_preference, preferred_store and price_band; arbitrary Style profile patches are not accepted.');
 
 // The cached ChatGPT 1.0.0 registration requires patch.pattern and sends null for every kind other
 // than dietary_pattern. null carries no fact, so it is treated as omitted.
@@ -314,11 +314,11 @@ function withoutNullSharedProfilePattern(input: unknown): unknown {
 // exact domain-discriminated union in a refinement, so validation stays as strict as before.
 const fluentVNextSharedProfileToolInputSchema = z.object({
   domain: z.enum(['shared', 'meals', 'style']).describe(
-    'Domain for this explicit profile write. Use shared only for timezone or display_name; meals for confirmed food, grocery, routine, and meal-planning facts; style only for kind="closet_coverage".',
+    'Domain for this explicit profile write. Use shared only for timezone or display_name; style for kind="closet_coverage" and the Style taste, size and price kinds. Meals is retired: meals writes save nothing.',
   ),
   patch: z.object({
-    kind: z.enum([...fluentVNextSharedProfileFactKindSchema.options, 'closet_coverage']).describe(
-      'The single explicit fact the user approved saving. Meals kinds for food/planning memory; timezone or display_name with domain="shared"; closet_coverage only with domain="style".',
+    kind: z.enum([...fluentVNextSharedProfileFactKindSchema.options, 'closet_coverage', ...fluentVNextStyleFactKindSchema.options]).describe(
+      `The single explicit fact the user approved saving. timezone or display_name with domain="shared"; with domain="style": closet_coverage or ${FLUENT_STYLE_FACT_KIND_GUIDE}. The food and meal-planning kinds are retired with Meals and save nothing.`,
     ),
     note: z.string().optional().describe('Optional short provenance note, preferably in the user\'s words. Do not include transcripts or hidden reasoning.'),
     pattern: z.enum(['vegetarian', 'vegan', 'pescatarian']).nullable().optional().describe(
@@ -329,7 +329,7 @@ const fluentVNextSharedProfileToolInputSchema = z.object({
       'User-approved status for this fact. Use rejected only to save that a proposed fact should not be treated as true. closet_coverage accepts only confirmed or corrected.',
     ),
     value: z.string().describe(
-      'The user-confirmed value, such as "Sunday", "30", "mushrooms", or "America/Toronto". For closet_coverage use exactly representative, partial, out_of_date, or unknown.',
+      'The user-confirmed value, such as "America/Toronto" or "32x32 in Levi\'s". For closet_coverage use exactly representative, partial, out_of_date, or unknown.',
     ),
   }).strict().describe(
     'One explicit user-approved Fluent memory fact: patch.kind, patch.value, and patch.status. Do not send inferred facts, plans, transcripts, or arbitrary JSON.',
@@ -343,166 +343,9 @@ const fluentVNextSharedProfileToolInputSchema = z.object({
       context.addIssue({ code: 'custom', message: issue.message, path: issue.path });
     }
   }
-}).describe('Exact domain-discriminated public Fluent profile write. Style exposes only closet_coverage; arbitrary Style profile patches are not accepted.');
+}).describe('Exact domain-discriminated public Fluent profile write. Style accepts closet_coverage, style_aesthetic, style_avoid, size_note, fit_preference, preferred_store and price_band; arbitrary Style profile patches are not accepted.');
 const fluentVNextRecipeWriteApprovalSchema = z.literal('explicit_user_approved').describe(
   'Required marker that the user explicitly approved this Fluent write in the current conversation. Do not send this for inferred, tentative, or assistant-only changes.',
-);
-const fluentVNextIsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('ISO calendar date formatted exactly as YYYY-MM-DD.');
-const fluentVNextMealPlanEntrySchema = z.object({
-  date: fluentVNextIsoDateSchema.optional().describe('Planned meal date, formatted exactly as YYYY-MM-DD.'),
-  day_label: z.string().optional().describe('Optional user-facing day label, such as Monday.'),
-  instructions: z.array(z.string()).optional().describe('Optional user-approved instructions snapshot for this meal.'),
-  leftovers_expected: z.boolean().optional().describe('Whether leftovers are expected from this meal.'),
-  meal_type: z.enum(['breakfast', 'lunch', 'dinner', 'snack']).describe('Meal slot for this plan entry.'),
-  notes: z.record(z.string(), z.unknown()).optional().describe('Optional bounded notes for this plan entry. Do not include hidden reasoning.'),
-  prep_minutes: z.number().int().min(0).max(1440).optional().describe('Optional prep minutes when supplied or user-approved.'),
-  recipe_id: z.string().optional().describe('Optional saved Fluent recipe ID returned by fluent_list_items/fluent_get_item.'),
-  recipe_name: z.string().min(1).describe('Recipe or meal name selected by the user and host model.'),
-  selection_status: z.enum(['planned', 'candidate', 'approved', 'substituted']).optional().describe('Selection status for this meal slot.'),
-  serves: z.number().positive().optional().describe('Optional serving count when supplied or approved.'),
-  status: z.enum(['planned', 'approved', 'cooked', 'skipped']).optional().describe('Lifecycle status for this entry.'),
-  total_minutes: z.number().int().min(0).max(1440).optional().describe('Optional total minutes when supplied or user-approved.'),
-}).strict().describe('One meal slot in an approved host-authored meal plan.');
-const fluentVNextMealPlanGroceryItemSchema = z.object({
-  display_name: z.string().min(1).describe('Grocery item name derived by the host model from the approved meal plan.'),
-  notes: z.string().optional().describe('Optional user-visible note, such as the meals this item supports.'),
-  quantity: z.number().positive().optional().describe('Optional approved or recipe-derived quantity.'),
-  unit: z.string().min(1).optional().describe('Optional approved or recipe-derived unit.'),
-}).strict().describe('One grocery item derived from the approved meal plan.');
-const fluentVNextMealPlanSchema = z.object({
-  entries: z.array(fluentVNextMealPlanEntrySchema).min(1).max(28).describe('Approved meal-plan entries. Keep this to the user-approved planning horizon.'),
-  generated_at: z.string().optional().describe('Optional ISO timestamp for when the host drafted the plan.'),
-  grocery_items: z.array(fluentVNextMealPlanGroceryItemSchema).min(1).max(100).optional().describe('Host-derived groceries for the approved plan. Include these whenever any plan entry is not linked to a saved Fluent recipe.'),
-  id: z.string().optional().describe('Optional stable meal-plan ID. Omit to let Fluent create one.'),
-  profile_owner: z.string().optional().describe('Optional owner label when the user supplied it.'),
-  requirements: z.record(z.string(), z.unknown()).optional().describe('Optional user-facing requirements and constraints used for the plan.'),
-  source_snapshot: z.record(z.string(), z.unknown()).optional().describe('Optional compact source snapshot. Do not include hidden reasoning, raw logs, credentials, or transcripts.'),
-  status: z.enum(['approved', 'active', 'draft']).optional().describe('Plan lifecycle status. Use approved or active only after explicit user approval.'),
-  summary: z.record(z.string(), z.unknown()).optional().describe('Optional compact plan summary for future readback.'),
-  week_end: fluentVNextIsoDateSchema.optional().describe('Optional week end date formatted exactly as YYYY-MM-DD.'),
-  week_start: fluentVNextIsoDateSchema.describe('Start date for the planned week, formatted exactly as YYYY-MM-DD.'),
-}).strict().describe(
-  'An approved host-authored Meals plan. Fluent stores the plan and proof; the host model owns planning judgment. Do not use for tentative drafts or hidden generated plans.',
-);
-const fluentVNextRecipePatchSchema = z.object({
-  active_time: z.number().int().min(0).optional().describe('Updated active cooking minutes.'),
-  cost_per_serving_cad: z.number().min(0).optional().describe('Updated estimated cost per serving in CAD.'),
-  ingredients: z.array(recipeIngredientSchema).min(1).optional().describe('Complete replacement ingredients list.'),
-  instructions: z.array(recipeInstructionSchema).min(1).optional().describe('Complete replacement instruction list.'),
-  kid_friendly: z.boolean().optional().describe('Whether this saved recipe is kid-friendly.'),
-  macros: z.object({
-    calories: z.number(),
-    fiber_g: z.number(),
-    protein_g: z.number(),
-    sodium_mg: z.number(),
-  }).optional().describe('Updated nutrition estimate for the saved recipe.'),
-  meal_type: z.enum(['breakfast', 'lunch', 'dinner', 'snack']).optional().describe('Updated recipe meal type.'),
-  mise_en_place: z.array(z.string()).optional().describe('Complete replacement prep checklist.'),
-  mode: z.literal('merge').optional().describe('Legacy merge marker accepted for cached clients. Optional; sparse patch behavior is always merge.'),
-  name: z.string().min(1).optional().describe('Updated recipe name.'),
-  prep_notes: z.string().nullable().optional().describe('Updated prep notes, or null to clear them.'),
-  reheat_guidance: z.string().nullable().optional().describe('Updated reheating guidance, or null to clear it.'),
-  serving_notes: z.string().nullable().optional().describe('Updated serving notes, or null to clear them.'),
-  servings: z.number().int().min(1).optional().describe('Updated number of servings.'),
-  source_url: z.string().url().optional().describe('Optional source URL for provenance only. Fluent does not browse it.'),
-  status: z.enum(['active', 'draft', 'retired', 'archived']).optional().describe('Updated saved-recipe lifecycle status.'),
-  tags: z.array(z.string()).optional().describe('Complete replacement tags for this saved recipe.'),
-  total_time: z.number().int().min(1).optional().describe('Updated total cooking minutes.'),
-}).strict().describe(
-  'Sparse patch for an existing saved recipe. It cannot include id or recipe_id; Fluent applies it only to the recipe_id argument.',
-);
-const fluentVNextRecipeFeedbackSchema = z.object({
-  date: z.string().optional().describe('Optional ISO date for when the recipe was made or reviewed.'),
-  difficulty: z.enum(['good', 'okay', 'bad']).optional().describe('How hard the recipe felt to execute.'),
-  family_acceptance: z.enum(['good', 'okay', 'bad']).optional().describe('How well the recipe landed with the household.'),
-  meal_plan_entry_id: z.string().optional().describe('Optional meal plan entry ID, when feedback came from a plan.'),
-  meal_plan_id: z.string().optional().describe('Optional meal plan ID, when feedback came from a plan.'),
-  notes: z.string().optional().describe('Short user-confirmed feedback notes. Do not save inferred preferences here.'),
-  repeat_again: z.boolean().optional().describe('Whether the user wants this recipe repeated.'),
-  submitted_by: z.string().optional().describe('Optional person or role that supplied the feedback.'),
-  taste: z.enum(['good', 'okay', 'bad']).optional().describe('Taste feedback for this recipe.'),
-  time_reality: z.enum(['good', 'okay', 'bad']).optional().describe('Whether the actual timing matched expectations.'),
-}).strict().describe(
-  'Recipe-specific feedback only. This does not create global preferences, hard avoids, allergies, grocery state, or shopping actions.',
-);
-const fluentVNextGroceryListAddItemChangeSchema = z.object({
-  kind: z.literal('add_item').describe('Add a user-approved manual item to the current living grocery list.'),
-  display_name: z.string().min(1).optional().describe('User-approved grocery item name to add. Do not invent brands, quantities, or stores.'),
-  displayName: z.string().min(1).optional().describe('Camel-case alias for display_name accepted for host ergonomics.'),
-  name: z.string().min(1).optional().describe('Alias for display_name. Prefer display_name, but accept name from hosts that use generic item naming.'),
-  item: z.object({
-    display_name: z.string().min(1).optional().describe('Wrapped user-approved grocery item name. Prefer top-level display_name when possible.'),
-    displayName: z.string().min(1).optional().describe('Wrapped camel-case alias for display_name.'),
-    name: z.string().min(1).optional().describe('Wrapped alias for display_name.'),
-    notes: z.string().optional().describe('Wrapped optional user-approved note.'),
-    quantity: z.number().positive().optional().describe('Wrapped optional user-approved quantity.'),
-    target_window: z.string().optional().describe('Wrapped optional target window.'),
-    unit: z.string().optional().describe('Wrapped optional user-approved unit.'),
-  }).strict().optional().describe('Optional host wrapper for add-item payloads. Fluent still treats this as one manual grocery item.'),
-  notes: z.string().optional().describe('Optional user-approved note for this grocery item.'),
-  quantity: z.number().positive().optional().describe('Optional user-approved quantity. Omit when the user did not supply it.'),
-  target_window: z.string().optional().describe('Optional user-approved target window such as "this shop" or "next order".'),
-  unit: z.string().optional().describe('Optional user-approved unit. Omit when the user did not supply it.'),
-}).strict().describe('Add one explicit manual item to the living grocery list.');
-const fluentVNextGroceryListMarkPlanItemChangeSchema = z.object({
-  kind: z.literal('mark_plan_item').describe('Update the status of an existing grocery-plan item shown in the current grocery list.'),
-  item_key: z.string().min(1).describe('Existing grocery-plan item key from a current grocery-list readback. Do not invent this value.'),
-  notes: z.string().optional().describe('Optional user-approved note for the list item status update.'),
-  purchased_at: z.string().optional().describe('Optional ISO timestamp/date for a bought item when the user supplied it.'),
-  remember_inventory: z.boolean().optional().describe(
-    'Set true only when the user explicitly approves saving this status as durable kitchen memory. Omit for normal checklist progress.',
-  ),
-  status: z.enum([
-    'bought',
-    'skipped',
-    'deferred',
-    'confirmed',
-    'needs_purchase',
-    'already_have_enough',
-    'have_some_need_to_buy',
-    'dont_have_it',
-  ]).describe('User-approved list status. This does not operate a retailer cart or checkout.'),
-}).strict().describe('Mark one existing current-list plan item with a bounded grocery-list status.');
-const fluentVNextGroceryListSubstitutePlanItemChangeSchema = z.object({
-  kind: z.literal('substitute_plan_item').describe('Record a user-approved substitution for an existing grocery-plan item.'),
-  create_substitute_intent: z.boolean().optional().describe(
-    'Set true only when the user explicitly wants the substitute added as a pending grocery-list item.',
-  ),
-  intent_notes: z.string().optional().describe('Optional note for a substitute intent when create_substitute_intent is true.'),
-  item_key: z.string().min(1).describe('Existing grocery-plan item key from a current grocery-list readback. Do not invent this value.'),
-  notes: z.string().optional().describe('Optional user-approved note for this substitution.'),
-  substitute: z.object({
-    display_name: z.string().min(1).optional().describe('Wrapped user-approved substitute item name. Prefer top-level substitute_display_name when possible.'),
-    name: z.string().min(1).optional().describe('Wrapped alias for substitute_display_name.'),
-    notes: z.string().optional().describe('Wrapped optional user-approved substitution note.'),
-    quantity: z.number().positive().optional().describe('Wrapped optional user-approved substitute quantity.'),
-    unit: z.string().optional().describe('Wrapped optional user-approved substitute unit.'),
-  }).strict().optional().describe('Optional host wrapper for substitute payloads. Fluent still treats this as one bounded substitution.'),
-  substitute_display_name: z.string().min(1).optional().describe('User-approved substitute item name.'),
-  substituteDisplayName: z.string().min(1).optional().describe('Camel-case alias for substitute_display_name accepted for host ergonomics.'),
-  substitute_item_key: z.string().optional().describe('Optional known substitute item key from Fluent state. Do not invent it.'),
-  substitute_quantity: z.number().positive().optional().describe('Optional user-approved substitute quantity.'),
-  substitute_unit: z.string().optional().describe('Optional user-approved substitute unit.'),
-}).strict().describe('Substitute one existing current-list plan item without browsing, cart, checkout, or order execution.');
-const fluentVNextGroceryListUpdateManualItemChangeSchema = z.object({
-  kind: z.literal('update_manual_item').describe('Update one manual grocery-list item/intent already present on the current grocery list.'),
-  display_name: z.string().min(1).optional().describe('Optional corrected item name. Omit to keep the current name.'),
-  displayName: z.string().min(1).optional().describe('Camel-case alias for display_name accepted for host ergonomics.'),
-  intent_id: z.string().min(1).optional().describe('Existing manual grocery intent ID from a current grocery-list readback. Do not invent this value.'),
-  item_id: z.string().min(1).optional().describe('Alias for intent_id from hosts that use generic item identifiers.'),
-  notes: z.string().optional().describe('Optional user-approved note. Omit to keep the current note.'),
-  quantity: z.number().positive().optional().describe('Optional corrected quantity. Omit to keep the current quantity.'),
-  status: z.enum(['pending', 'completed', 'deleted']).optional().describe('Manual item lifecycle status. Omit to keep the current status. Use deleted only when the user explicitly removes the item.'),
-  target_window: z.string().optional().describe('Optional corrected target window. Omit to keep the current target window.'),
-  unit: z.string().optional().describe('Optional corrected unit. Omit to keep the current unit.'),
-}).strict().describe('Update one manual item on the living grocery list.');
-const fluentVNextGroceryListChangeSchema = z.discriminatedUnion('kind', [
-  fluentVNextGroceryListAddItemChangeSchema,
-  fluentVNextGroceryListMarkPlanItemChangeSchema,
-  fluentVNextGroceryListSubstitutePlanItemChangeSchema,
-  fluentVNextGroceryListUpdateManualItemChangeSchema,
-]).describe(
-  'One bounded current grocery-list change. This schema cannot mutate retailer carts, checkout, orders, recipes, meal-plan truth, broad preferences, or arbitrary pantry quantities.',
 );
 const fluentVNextOperationValueObjectSchema = z.object({
   id: z.string().optional(),
@@ -541,60 +384,6 @@ const fluentVNextSourceSnapshotSchema = z.object({
   title: z.string().optional().describe('Source title, if relevant.'),
   url: z.string().url().optional().describe('Source URL for provenance only. Fluent will not browse it.'),
 }).strict().describe('Optional compact provenance snapshot for the write.');
-const fluentVNextGroceryShoppingItemSchema = z.object({
-  item_key: z.string().min(1).describe('A plan-item itemKey or manual-intent id from the current grocery-list readback.'),
-  status: z.enum(['bought', 'skipped']).optional().describe('Optional result for this item. Omit to mark it bought.'),
-}).strict().describe('One current-list item included in the completed shopping result.');
-const fluentVNextGroceryShoppingSelectionSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('item_checkbox'),
-    item_key: z.string().min(1),
-    checked: z.boolean(),
-    purchase_id: z.string().min(1).optional().describe('Required when unchecking: exact purchaseId from checkboxPurchases readback.'),
-  }).strict(),
-  z.object({
-    kind: z.literal('selected_items').describe('Reconcile only the explicitly listed current-list items.'),
-    bought_items: z.array(fluentVNextGroceryShoppingItemSchema).min(1).describe('Required non-empty current-list item selection.'),
-  }).strict(),
-  z.object({
-    kind: z.literal('all_to_buy').describe('Mark every current to-buy item as bought.'),
-  }).strict(),
-]).describe('Required shopping-result selection. Choose exactly one kind: selected_items, all_to_buy, or item_checkbox. item_checkbox saves one purchase or reverses its exact purchase_id; requires list_id, list_version, week_start and idempotency_key.');
-const fluentVNextGroceryShoppingResultPublicInputSchema = z.object({
-  approval: fluentVNextRecipeWriteApprovalSchema,
-  selection: fluentVNextGroceryShoppingSelectionSchema.optional(),
-  currentness_confirmed: z.boolean().optional().describe(
-    'Required only when the current grocery list is stale or incomplete and the user explicitly confirms they still want to reconcile that list.',
-  ),
-  idempotency_key: z.string().min(1).optional().describe(
-    'Stable retry identity for this exact shopping-result selection. Required for selection.kind="all_to_buy"; reuse it only when retrying the same list and selection.',
-  ),
-  list_id: z.string().optional().describe('Optional current grocery-list ID from a recent readback; used to prevent target mismatches.'),
-  list_version: z.string().optional().describe('Optional current grocery-list version from a recent readback; used to prevent stale writes.'),
-  response_mode: writeResponseModeSchema,
-  week_start: z.string().optional().describe('Optional selected meal-plan week start from the current grocery-list readback.'),
-  ...provenanceInputSchema,
-}).passthrough().superRefine((input, context) => {
-  const legacyBoughtItems = fluentVNextGroceryShoppingItemSchema.array().min(1).safeParse(input.bought_items);
-  const legacyMarkAll = input.mark_all_to_buy_bought === true;
-  if (input.selection && (input.bought_items !== undefined || input.mark_all_to_buy_bought !== undefined)) {
-    context.addIssue({
-      code: 'custom',
-      message: 'fluent_apply_grocery_shopping_result accepts only selection; do not combine it with legacy selection fields.',
-    });
-  }
-  if (!input.selection && legacyBoughtItems.success && legacyMarkAll) {
-    context.addIssue({ code: 'custom', message: 'Cached widget payload must choose bought_items or mark_all_to_buy_bought, not both.' });
-  }
-  if (!input.selection && !legacyBoughtItems.success && !legacyMarkAll) {
-    context.addIssue({ code: 'custom', message: 'fluent_apply_grocery_shopping_result requires selection.' });
-  }
-}).describe('Reconcile one completed shopping result using exactly one explicit selection mode.');
-const fluentVNextGroceryShoppingResultInputSchema = fluentVNextGroceryShoppingResultPublicInputSchema.meta({
-  // Runtime parsing keeps selection optional so already-mounted legacy widgets remain callable.
-  // The generated public JSON Schema advertises only the canonical selection-required contract.
-  required: ['approval', 'selection'],
-});
 const fluentVNextEventInputSchema = z.object({
   date: z.string().optional().describe('Optional ISO date for an outcome, feedback, or observation event.'),
   difficulty: z.string().optional().describe('Optional user-reported difficulty, especially for Meals feedback.'),
@@ -725,13 +514,31 @@ export function buildFluentAccountStatusToolText(status: FluentAccountStatus): s
 }
 
 export const STYLE_ITEM_NEEDS_PHOTO_GUIDANCE =
-  `Some saved closet items here have no photo yet. They are complete saved items, so keep using them. When the user is discussing one of them, offer once to add a photo (a product shot or an on-you photo) and save it with fluent_set_style_item_image for that exact item_id; the first photo becomes its cover. Never create a new item just to add a photo, and do not ask repeatedly. ${STYLE_UPLOADED_PHOTO_DATA_URL_STEP}`;
+  `Some saved closet items here have no photo yet. They are complete saved items, so keep using them. When the user is discussing one of them, offer once to add a photo for that exact item_id: save a product shot as its cover with fluent_set_closet_item_photo (image_type "primary"); an on-you photo goes in with fluent_add_closet_item_photo (image_type "fit"), which only adds photos and never sets the cover. Never create a new item just to add a photo, and do not ask repeatedly. ${STYLE_UPLOADED_PHOTO_DATA_URL_STEP}`;
 
-// The published ChatGPT app caches a URL-only fluent_set_style_item_image schema (no image_file,
-// no photo_action), so hosts decline to add photos to an item that already has a cover unless
-// the data-URL route is spelled out. An omitted photo_action adds a fit/alternate photo.
+// Hosts decline to add photos to an item that already has a cover unless the route is spelled out,
+// including the data-URL route for hosts without image_file.
 export function styleItemAddMorePhotosGuidance(itemId?: string | null): string {
-  return `To add an on-you fit photo or another photo to ${itemId ? 'this saved item' : 'a saved item that already has photos'}, call fluent_set_style_item_image for ${itemId ? 'this' : 'that exact'} item_id, one photo per call; a fit or alternate photo is added alongside the cover and every saved photo and never replaces them. If your fluent_set_style_item_image accepts image_file, pass the upload there with photo_action "add". Only if it has no image_file: ${styleUploadedPhotoDataUrlStep(itemId)}`;
+  return `To add an on-you fit photo or another photo to ${itemId ? 'this saved item' : 'a saved item that already has photos'}, call fluent_add_closet_item_photo for ${itemId ? 'this' : 'that exact'} item_id, one photo per call; it is added alongside the cover and every saved photo and never replaces them. If fluent_add_closet_item_photo accepts image_file, pass the upload there. Only if it has no image_file: ${styleUploadedPhotoDataUrlStep(itemId)}`;
+}
+
+// Closet-first cold start (2026-10-02): almost every new account connects and saves nothing. While the
+// active closet is small, reads carry a one-time offer of the fastest ways to add clothes. This rides on
+// tool-result text (a live host channel) rather than frozen tool descriptions.
+export const STYLE_CLOSET_IMPORT_THRESHOLD = 5;
+
+export function styleClosetImportGuidance(activeItemCount: number): string {
+  const state = activeItemCount === 0
+    ? "The user's active Fluent closet is empty."
+    : `The user's active Fluent closet has only ${activeItemCount} item${activeItemCount === 1 ? '' : 's'}.`;
+  return [
+    `${state} Fluent becomes useful once a handful of their clothes are saved, so offer once, briefly, the quickest ways to add several at a time and let them choose; do not repeat the offer in this conversation.`,
+    '1) Photos: they can upload several photos at once (camera-roll pictures, mirror selfies, product shots or screenshots). Inspect each photo yourself; save one item per distinct garment the user owns with fluent_add_closet_item, passing the uploaded photo as image_file when that parameter is available (otherwise save the item, then save the photo as its cover with fluent_set_closet_item_photo and image_type "primary"). Treat several views of the same garment as one item, and skip clothes worn by other people. If you can edit images, prefer a faithful transparent cutout of the garment as the cover: pass it as image_file with catalog_ready=true and image_origin="host_generated", and the original photo as source_image_file.',
+    '2) Retailer images and links: pasting the product image itself (or a screenshot) is the most reliable way to keep a product photo; treat it as an uploaded photo. They can also paste links to clothes they own: read each page yourself (Fluent does not browse), then save each item with its name, brand, category and colour, and when you found the exact product image, pass its URL as image_url with catalog_ready=true and image_type="primary" so Fluent copies it. If the save result says the photo was not attached (some retailers block the copy), the item is saved without a photo; ask them to paste the image.',
+    '3) Order confirmations: they can paste the text or a screenshot of an order confirmation; list the clothing in it and save only the items they confirm. Fluent never reads email.',
+    '4) A quick list: they can name items in words (for example "navy chinos, white leather sneakers"); save each without a photo.',
+    'When the user asks you to add clothes, that request is their approval: save them right away, one call at a time with approval="explicit_user_approved", without asking them to confirm again. Check first only for items they did not name themselves, such as clothing found in an order confirmation. If a save reports possible duplicates, keep saving the rest and settle all the matches in one short question, as that save result describes. If a save is rate-limited, pause briefly and continue with only the unsaved items. Report how many were saved and anything skipped. A photo is optional; never invent details you did not see or read.',
+  ].join(' ');
 }
 
 function styleItemHasPhotos(item: unknown): boolean {
@@ -746,6 +553,40 @@ function styleItemHasNoPhoto(item: unknown): boolean {
   if (!payload || payload.status !== 'active') return false;
   if (typeof payload.photosCount === 'number') return payload.photosCount === 0;
   return Array.isArray(payload.photos) && payload.photos.length === 0;
+}
+
+// Active closet size when it is below the import threshold, otherwise null. Prefers the activeItemCount
+// the Style context packet already carries (no extra read); falls back to listing items. A read failure
+// never blocks the context packet; it just skips the offer.
+async function smallActiveClosetCount(services: FluentVNextReadServices, packet?: unknown): Promise<number | null> {
+  try {
+    const fromPacket = findActiveItemCount(packet);
+    const active = fromPacket ?? await (async () => {
+      const items = (await services.style?.listItems?.()) ?? null;
+      return Array.isArray(items) ? items.filter((item) => recordOrNull(item)?.status === 'active').length : null;
+    })();
+    return active != null && active < STYLE_CLOSET_IMPORT_THRESHOLD ? active : null;
+  } catch {
+    return null;
+  }
+}
+
+function findActiveItemCount(value: unknown, depth = 0): number | null {
+  if (depth > 4 || !value || typeof value !== 'object') return null;
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findActiveItemCount(entry, depth + 1);
+      if (found != null) return found;
+    }
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.activeItemCount === 'number') return record.activeItemCount;
+  for (const key of ['compactFacts', 'payload', 'summary']) {
+    const found = findActiveItemCount(record[key], depth + 1);
+    if (found != null) return found;
+  }
+  return null;
 }
 
 function vNextToolResult(
@@ -791,7 +632,7 @@ type VNextToolResult = {
   structuredContent: Record<string, unknown>;
 };
 
-// Render the MODEL-FACING text for a fluent_create_style_item result. The duplicate candidates Fluent
+// Render the MODEL-FACING text for a fluent_add_closet_item result. The duplicate candidates Fluent
 // already computed ride in ack.payload.duplicateCandidates (structuredContent), but the host primarily
 // reads this text — so on a duplicate it must NAME the candidates, surface the concrete discriminators
 // (brand/color/type/size/tags), and the force/skip escape hatches. Fluent SURFACES; the host DECIDES
@@ -849,7 +690,7 @@ export function buildStyleItemCreateText(
     const review = exactReviewHandoff
       ? options.reviewSurfaceAttached
         ? ` The authoritative readback confirms lifecycle status active. The attached app shows the exact saved item directly. Text-only or non-UI clients can follow payload.reviewHandoff. pending_review is not a lifecycle or render-filter status.`
-        : ` The authoritative readback confirms lifecycle status active. The attached presentation was unavailable; follow payload.reviewHandoff exactly through fluent_render_style_closet_surface with filter.item_ids=["${createdId}"], filter.status="active", presentation.mode="ingestion_review", and presentation.focused_item_id="${createdId}". pending_review is not a lifecycle or render-filter status.`
+        : ` The authoritative readback confirms lifecycle status active. The attached presentation was unavailable; follow payload.reviewHandoff exactly through fluent_show_closet with filter.item_ids=["${createdId}"], filter.status="active", presentation.mode="ingestion_review", and presentation.focused_item_id="${createdId}". pending_review is not a lifecycle or render-filter status.`
       : ' No ingestion review handoff was returned because an exact active-state readback was unavailable.';
     const photo = p.photoStatus === 'needs_photo' && p.idempotentReplay !== true
       ? p.photosCount && p.photosCount > 0
@@ -865,8 +706,8 @@ export function buildStyleItemCreateText(
   }
   if (p.status === 'duplicate_warning' && candidates.length > 0) {
     return `Not created. Fluent flagged ${candidates.length === 1 ? 'a possible existing match' : 'possible existing matches'} but does NOT decide sameness — you do. Compare these signals (and the user's photo, if you have it) against the garment being added: ${candidates.map(describe).join('; ')}. `
-      + 'To see a candidate\'s photo, call fluent_get_media_bundle with its id (or render fluent_render_style_closet_surface filtered to it). '
-      + 'If it is genuinely different, call again with on_duplicate:"force" and duplicate_candidate_id set to that candidate; if it is the same item, use on_duplicate:"skip" with its exact duplicate_candidate_id. For a batch, keep processing unrelated garments and collect all unresolved matches for one concise decision turn; this warned item remains unsaved until resolved. The imported image is then retained on the chosen item. If the user wants it saved without a photo and this app requires catalog_ready, send catalog_ready:true with no image field: Fluent saves the item without a photo (photoStatus "needs_photo") and does not apply Catalog approval, so that call is truthful.';
+      + 'To see a candidate\'s photo, call fluent_get_closet_item_photos with its id (or render fluent_show_closet filtered to it). '
+      + 'If it is genuinely different, call again with on_duplicate:"force" and duplicate_candidate_id set to that candidate. If it is the same garment, do not create it: keep the photo on that existing item with fluent_add_closet_item_photo (a product, detail or on-you photo), or with fluent_set_closet_item_photo (image_type "primary") when it has no photo yet. If two saved records turn out to be the same garment, combine them with fluent_merge_closet_items. For a batch, keep processing unrelated garments and collect all unresolved matches for one concise decision turn; this warned item remains unsaved until resolved. If the user wants it saved without a photo and this app requires catalog_ready, send catalog_ready:true with no image field: Fluent saves the item without a photo (photoStatus "needs_photo") and does not apply Catalog approval, so that call is truthful.';
   }
   if (p.status === 'acceptance_test_non_durable') {
     return [p.userMessage, p.nextAction].filter((line): line is string => typeof line === 'string' && line.length > 0).join(' ');
@@ -911,12 +752,12 @@ function styleCreateAckSupersededItemId(ack: FluentVNextWriteAck): string | null
 }
 
 export const STYLE_CREATE_NEXT_PHOTO_STEP =
-  `Offer once, in plain language, to add a photo of this item (a product shot or an on-you photo). If the user shares one, save it with fluent_set_style_item_image for this item_id; the first photo becomes the cover. ${STYLE_UPLOADED_PHOTO_DATA_URL_STEP} Saving without a photo is fine, so do not ask again in this turn.`;
+  `Offer once, in plain language, to add a photo of this item (a product shot or an on-you photo). If the user shares one, save a product shot as its cover with fluent_set_closet_item_photo (image_type "primary"); an on-you photo goes in with fluent_add_closet_item_photo (image_type "fit"), which only adds photos and never sets the cover. ${STYLE_UPLOADED_PHOTO_DATA_URL_STEP} Saving without a photo is fine, so do not ask again in this turn.`;
 
 // A saved item whose only photos are fit/alternate (for example a published-app catalog_ready
 // create downgraded to an ordinary fit photo) has photos but no cover.
 export const STYLE_CREATE_NEXT_COVER_STEP =
-  'Offer once to add a clean primary product photo of this item as its cover with fluent_set_style_item_image for this item_id (image_type "primary"); the saved photos are kept. Do not ask again in this turn.';
+  'Offer once to add a clean primary product photo of this item as its cover with fluent_set_closet_item_photo for this item_id (image_type "primary"); the saved photos are kept. Do not ask again in this turn.';
 
 // D24: an ordinary photo is optional, so an unusable ordinary image reference (an app-internal
 // handle, a local path, or non-image bytes) does not block the create. The receipt says plainly
@@ -925,7 +766,7 @@ const STYLE_CATALOG_REQUIRES_PRIMARY_REASON = 'a Catalog image must be the prima
 
 // catalog_ready=true with a fit/alternate photo (the published app always sends catalog_ready=true).
 function styleCreateCatalogDowngradeNote(imageType: 'alternate' | 'fit'): string {
-  return `The photo was saved as ${imageType === 'fit' ? 'a fit' : 'an alternate'} photo, and the Catalog approval (catalog_ready) was NOT applied: ${STYLE_CATALOG_REQUIRES_PRIMARY_REASON}. To give the item a Catalog cover later, save a clean primary product photo with fluent_set_style_item_image (image_type "primary").`;
+  return `The photo was saved as ${imageType === 'fit' ? 'a fit' : 'an alternate'} photo, and the Catalog approval (catalog_ready) was NOT applied: ${STYLE_CATALOG_REQUIRES_PRIMARY_REASON}. To give the item a Catalog cover later, save a clean primary product photo with fluent_set_closet_item_photo (image_type "primary").`;
 }
 
 function styleCreateUnusableImageStep(reason: string, itemId: string | null, options: { catalogNotApplied?: boolean } = {}): string {
@@ -1458,7 +1299,7 @@ function singleStyleFocusItemId(subject: unknown, itemIds: unknown): string | nu
 async function appendStyleReanalyzeInlinePhotoFromBundle(
   result: VNextToolResult,
   bundle: unknown,
-  options: { reanalyzePending: boolean },
+  options: { reanalyzePending: boolean; strictPublicFetch: boolean },
 ): Promise<void> {
   const candidates = styleRequestedPrimaryPhotoCandidateUrls(bundle);
   const failures: string[] = [];
@@ -1468,7 +1309,10 @@ async function appendStyleReanalyzeInlinePhotoFromBundle(
   const inlineFetchDeadline = candidates.length > 0 ? createFetchTimeoutSignal(15_000) : undefined;
   for (const url of candidates) {
     try {
-      const fetched = await fetchStyleVisualBundleImage(url, inlineFetchDeadline);
+      const fetched = await fetchStyleVisualBundleImage(url, {
+        signal: inlineFetchDeadline,
+        strictPublicFetch: options.strictPublicFetch,
+      });
       if (isViewableInlineImageMimeType(fetched.mimeType)) {
         result.content.push({ type: 'image', data: fetched.data, mimeType: fetched.mimeType });
         return;
@@ -1499,6 +1343,7 @@ async function appendStyleReanalyzePrimaryPhotoInlineContent(
   result: VNextToolResult,
   services: FluentVNextReadServices,
   itemId: string,
+  strictPublicFetch: boolean,
 ): Promise<void> {
   try {
     const media = await getFluentVNextMediaBundle(services, {
@@ -1508,10 +1353,37 @@ async function appendStyleReanalyzePrimaryPhotoInlineContent(
       purpose: 'saved_item_review',
       subject: itemId,
     });
-    await appendStyleReanalyzeInlinePhotoFromBundle(result, media, { reanalyzePending: true });
+    await appendStyleReanalyzeInlinePhotoFromBundle(result, media, { reanalyzePending: true, strictPublicFetch });
   } catch {
     // Defensive: a media-bundle load failure must not break the get_item read.
   }
+}
+
+// fluent_add_closet_item only creates. The former "use the existing item" resolution (on_duplicate "skip")
+// is done with the single-operation photo and merge tools instead.
+const STYLE_ADD_ITEM_SKIP_REJECTION = 'fluent_add_closet_item only creates new items and no longer accepts on_duplicate "skip". Nothing was saved. If the garment is the same as an existing item, save the photo on that item with fluent_add_closet_item_photo (a product, detail or on-you photo) or fluent_set_closet_item_photo (image_type "primary" when it has no cover yet), and combine two saved records with fluent_merge_closet_items. Use on_duplicate "force" with duplicate_candidate_id only to create a genuinely different item.';
+
+// Operations that fluent_update_closet_item used to multiplex, now separate model-visible tools. A call that
+// still sends one is rejected with the replacement tool named, so nothing is saved and nothing is
+// silently dropped.
+const MOVED_STYLE_ITEM_PATCH_OPERATIONS = [
+  ['photo_library', 'Photo arrangement now uses fluent_set_closet_item_cover, fluent_reorder_closet_item_photos, fluent_hide_closet_item_photo, fluent_replace_closet_item_photo and fluent_undo_closet_item_photo_change.'],
+  ['product_enrichment', 'Product details now use fluent_save_closet_item_product_details.'],
+  ['expected_duplicate_merge_id', 'Undoing a duplicate merge now uses fluent_undo_closet_item_merge.'],
+] as const;
+
+export function rejectMovedStyleItemPatchOperations(args: Record<string, unknown>): void {
+  const patch = args.patch && typeof args.patch === 'object' && !Array.isArray(args.patch) ? args.patch as Record<string, unknown> : {};
+  const moved: Array<[string, string]> = MOVED_STYLE_ITEM_PATCH_OPERATIONS
+    .filter(([key]) => args[key] !== undefined && args[key] !== null)
+    .map(([key, pointer]) => [key, pointer]);
+  if (patch.status !== undefined) moved.push(['patch.status', 'Restoring an archived item now uses fluent_restore_closet_item; archiving uses fluent_archive_closet_item.']);
+  if (moved.length === 0) return;
+  throw new Error(
+    `fluent_update_closet_item no longer accepts ${moved.map(([key]) => key).join(', ')}. No changes were saved. `
+    + moved.map(([, pointer]) => pointer).join(' ')
+    + ' fluent_update_closet_item only edits item details.',
+  );
 }
 
 function buildStyleClosetMutationProvenance(
@@ -1543,15 +1415,15 @@ export function resolveArchiveItemTarget(args: {
   const targetValue = target.by === 'id' ? target.item_id : target.item_name;
   const otherTargetValue = target.by === 'id' ? target.item_name : target.item_id;
   if (!targetValue?.trim()) {
-    throw new Error(`fluent_archive_item target.by="${target.by}" requires target.${target.by === 'id' ? 'item_id' : 'item_name'}.`);
+    throw new Error(`fluent_archive_closet_item target.by="${target.by}" requires target.${target.by === 'id' ? 'item_id' : 'item_name'}.`);
   }
   if (otherTargetValue !== undefined) {
-    throw new Error(`fluent_archive_item target.by="${target.by}" accepts only target.${target.by === 'id' ? 'item_id' : 'item_name'}.`);
+    throw new Error(`fluent_archive_closet_item target.by="${target.by}" accepts only target.${target.by === 'id' ? 'item_id' : 'item_name'}.`);
   }
   const topLevel = target.by === 'id' ? args.item_id : args.item_name;
   const otherTopLevel = target.by === 'id' ? args.item_name : args.item_id;
   if ((topLevel !== undefined && topLevel !== targetValue) || otherTopLevel !== undefined) {
-    throw new Error('fluent_archive_item received both target and a different item_id/item_name. Send one exact target.');
+    throw new Error('fluent_archive_closet_item received both target and a different item_id/item_name. Send one exact target.');
   }
   return target.by === 'id'
     ? { itemId: targetValue, itemName: undefined }
@@ -1661,14 +1533,13 @@ export function registerCoreMcpSurface(
   fluentCore: FluentCoreService,
   meals: MealsService,
   style: StyleService,
-  budgets: BudgetsService,
   origin: string,
   options: {
     publicWriteRateLimiter?: FluentRateLimitBinding;
     styleClosetSurfaceBuilder?: StyleClosetSurfaceBuilder;
+    writeOperations?: WriteOperationsStore;
   } = {},
 ) {
-  const budgetsEnvelopeSetupWidgetMeta = buildBudgetsEnvelopeSetupWidgetMeta(origin);
   const vNextReadSecuritySchemes = oauth2SecuritySchemes([
     FLUENT_MEALS_READ_SCOPE,
     FLUENT_STYLE_READ_SCOPE,
@@ -1680,27 +1551,22 @@ export function registerCoreMcpSurface(
     FLUENT_MEALS_WRITE_SCOPE,
     FLUENT_STYLE_WRITE_SCOPE,
   ]);
-  const vNextBudgetWriteSecuritySchemes = oauth2AlternativeSecuritySchemes([
-    FLUENT_MEALS_WRITE_SCOPE,
-    FLUENT_STYLE_WRITE_SCOPE,
-  ]);
   const vNextStyleWriteSecuritySchemes = oauth2SecuritySchemes([FLUENT_STYLE_WRITE_SCOPE]);
   const vNextStyleReadSecuritySchemes = oauth2SecuritySchemes([FLUENT_STYLE_READ_SCOPE]);
   const withVNextReadSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextReadSecuritySchemes);
   const withVNextWriteSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextWriteSecuritySchemes);
   const withVNextSharedProfileWriteSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextSharedProfileWriteSecuritySchemes);
-  const withVNextBudgetWriteSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextBudgetWriteSecuritySchemes);
   const withVNextStyleClosetWriteSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextStyleWriteSecuritySchemes);
   const withVNextStyleReadSecurity = <T extends Record<string, unknown>>(config: T) => withToolSecurity(config, vNextStyleReadSecuritySchemes);
 
   server.registerTool(
     FLUENT_ACCOUNT_PROFILE_TOOL,
     withToolSecurity({
-      title: 'Get Fluent Account Profile',
+      title: 'Get Account',
       description: 'Return the account profile represented by the authenticated connection for account labeling. The opaque ID remains stable across reconnects, token refresh, and display-name changes.',
       inputSchema: z.object({}).strict(),
       outputSchema: accountProfileSchema,
-      annotations: { title: 'Get Fluent Account Profile', readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+      annotations: { title: 'Get Account', readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
       _meta: { 'openai/profile': true },
     }, oauth2AlternativeSecuritySchemes([FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE])),
     async () => {
@@ -1708,28 +1574,6 @@ export function registerCoreMcpSurface(
       const profile = buildAccountProfile(await fluentCore.getProfile());
       return { structuredContent: profile, content: [{ type: 'text' as const, text: JSON.stringify(profile) }] };
     },
-  );
-
-  server.registerResource(
-    'fluent-budgets-envelope-setup-widget-v1',
-    BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
-    {
-      title: 'Budget Envelopes Widget',
-      description: 'Rich Fluent setup surface for declared clothing and grocery budget envelopes.',
-      mimeType: 'text/html;profile=mcp-app',
-      icons: iconFor(origin),
-      _meta: budgetsEnvelopeSetupWidgetMeta,
-    },
-    async () => ({
-      contents: [
-        {
-          uri: BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
-          mimeType: 'text/html;profile=mcp-app',
-          text: getBudgetsEnvelopeSetupWidgetHtml(),
-          _meta: budgetsEnvelopeSetupWidgetMeta,
-        },
-      ],
-    }),
   );
 
   server.registerResource(
@@ -1856,28 +1700,16 @@ export function registerCoreMcpSurface(
     },
   );
 
-  server.registerTool(
-    'fluent_get_profile',
-    {
-      title: 'Get Fluent Profile',
-      description: 'Fetch the shared Fluent profile for the current Fluent deployment.',
-      annotations: { title: 'Get Fluent Profile', readOnlyHint: true, idempotentHint: true },
-    },
-    async () => {
-      requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
-      return toolResult(await fluentCore.getProfile());
-    },
-  );
-
-  const vNextReadServices = buildFluentVNextReadServices(fluentCore, meals, style, budgets);
-  const vNextWriteServices = buildFluentVNextWriteServices(fluentCore, meals, style, budgets, {
+  const vNextReadServices = buildFluentVNextReadServices(fluentCore, meals, style);
+  const vNextWriteServices = buildFluentVNextWriteServices(fluentCore, meals, style, {
     publicWriteRateLimiter: options.publicWriteRateLimiter,
+    writeOperations: options.writeOperations,
   });
 
   server.registerTool(
-    'fluent_get_shared_profile',
+    'fluent_get_profile',
     withVNextReadSecurity({
-      title: 'Get Fluent Shared Profile',
+      title: 'Get Profile',
       description:
         'Fetch the shared profile envelope: core profile facts, capabilities, boundaries, and provenance-ready fact slots. Domain-specific payloads stay typed and are not flattened into generic memory.',
       inputSchema: {
@@ -1885,28 +1717,28 @@ export function registerCoreMcpSurface(
         include_provenance: z.boolean().optional().describe('Set true only when the user asks where profile facts came from. Omit for a compact profile read.'),
       },
       annotations: {
-        title: 'Get Fluent Shared Profile',
+        title: 'Get Profile',
         readOnlyHint: true,
         idempotentHint: true,
         destructiveHint: false,
         openWorldHint: false,
       },
     }),
-    async () => {
+    async ({ domains }) => {
       requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
-      const profile = await getFluentVNextSharedProfile(vNextReadServices, { host: resolveHostFamily() });
+      const profile = await getFluentVNextSharedProfile(vNextReadServices, { domains: domains ?? null, host: resolveHostFamily() });
       return vNextToolResult(profile);
     },
   );
 
   server.registerTool(
-    'fluent_get_context',
+    'fluent_get_closet_context',
     withVNextReadSecurity({
-      title: 'Start Here: Fluent Context',
+      title: 'Get Closet Context',
       description:
-        'Fetch a compact context packet for a domain and intent. Use this first for broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal planning: call fluent_get_context with domain="meals" and intent="planning". Also use it before any closet-grounded "what should I wear?", "which shoes?", or owned-item outfit answer: call fluent_get_context with domain="style" and intent="closet" before naming items the user owns. The host model owns reasoning and final judgment; Fluent supplies durable context, typed items, evidence gaps, freshness, and suggested writeback boundaries.',
+        'Fetch a compact context packet for a domain and intent. Use domain="style" with intent="closet" before naming clothes the user owns in an outfit or "what should I wear?" answer. The host model owns reasoning and final judgment; Fluent supplies durable context, typed items, evidence gaps, freshness, and suggested writeback boundaries. Meals is retired; domain="meals" returns only a retirement notice.',
       inputSchema: {
-        amount: z.number().min(0).optional().describe('Required for domain="style", intent="purchase" with a candidate. Candidate purchase amount in CAD for budget arithmetic; it must match candidate.price_text or fall within its cited range. Fluent will not infer or default it.'),
+        amount: z.number().min(0).optional().describe('Optional candidate price for domain="style", intent="purchase", kept as context. Fluent does not track budgets or do purchase arithmetic.'),
         candidate: fluentVNextPurchaseCandidateSchema.optional(),
         detail: z
           .enum(['summary'])
@@ -1916,24 +1748,28 @@ export function registerCoreMcpSurface(
         intent: fluentVNextIntentSchema.optional(),
       },
       annotations: {
-        title: 'Start Here: Fluent Context',
+        title: 'Get Closet Context',
         readOnlyHint: true,
         idempotentHint: true,
         destructiveHint: false,
         openWorldHint: false,
       },
     }),
-    async ({ amount, candidate, detail, domain, intent }) => {
+    async ({ candidate, detail, domain, intent }) => {
       requireVNextReadScope(domain);
+      if (isMealsRetiredReadRequest({ domain })) return mealsRetiredToolResult();
       const context = await getFluentVNextContext(vNextReadServices, {
-        amount: amount ?? null,
         candidate,
         detail: detail ?? 'summary',
         domain,
         host: resolveHostFamily(),
         intent,
       });
+      const smallClosetCount = domain === 'style' && intent !== 'purchase' && !candidate
+        ? await smallActiveClosetCount(vNextReadServices, context)
+        : null;
       return vNextToolResult(context, {
+        ...(smallClosetCount != null ? { followUpGuidance: styleClosetImportGuidance(smallClosetCount) } : {}),
         compactContextSummaryText: context.detail === 'summary',
         includeMediaReferences: domain === 'style' && intent === 'purchase' && Boolean(candidate),
         preserveStylePurchaseOwnedSlice: domain === 'style' && intent === 'purchase' && Boolean(candidate),
@@ -1942,11 +1778,11 @@ export function registerCoreMcpSurface(
   );
 
   server.registerTool(
-    'fluent_list_items',
+    'fluent_list_closet_items',
     withVNextReadSecurity({
-      title: 'List Fluent Items',
+      title: 'List Closet Items',
       description:
-        'List typed domain items such as Meals recipes, the living grocery list, inventory items, and Style closet items. Results are incomplete whenever nextCursor is returned: never conclude that an item is absent until relevant pages are exhausted or a confident match is found. Prefer targeted query values before broad inventory traversal. For saved Meals recipe discovery, pass item_type="recipe" plus query for the recipe title or ID, then call fluent_get_item with the returned ID before deriving grocery-list deltas. For Style photo ingestion, search discriminating brand or graphic text, garment description, and category/color evidence before creating; a matching item without Catalog media is an incomplete existing item to repair, not a new item. For owned-item outfit or shoe advice, list the relevant active Style category before recommending a saved item, then visually inspect shortlisted items through focused fluent_get_media_bundle calls. The shared envelope is generic, but the payload remains the canonical typed domain record.',
+        'List typed domain items such as Style closet items. Results are incomplete whenever nextCursor is returned: never conclude that an item is absent until relevant pages are exhausted or a confident match is found. Prefer targeted query values before broad closet traversal. For Style photo ingestion, search discriminating brand or graphic text, garment description, and category/color evidence before creating; a matching item without Catalog media is an incomplete existing item to repair, not a new item. For owned-item outfit or shoe advice, list the relevant active Style category before recommending a saved item, then visually inspect shortlisted items through focused fluent_get_closet_item_photos calls.',
       inputSchema: {
         cursor: z.string().optional().describe('Opaque pagination cursor returned by a prior Fluent list call. Omit for the first page. When nextCursor is returned and no confident match exists, pass it to continue relevant pagination before concluding absence.'),
         domain: fluentVNextDomainSchema,
@@ -1954,11 +1790,11 @@ export function registerCoreMcpSurface(
         limit: z.number().int().min(1).max(50).optional().describe('Optional maximum number of items to return, from 1 to 50. Omit to use Fluent defaults.'),
         query: fluentVNextItemQuerySchema.optional(),
         status: z.enum(['active', 'archived', 'planned', 'completed', 'any']).optional().describe(
-          'Optional lifecycle filter. Use active for normal saved state, planned for future meal/grocery state, completed for done items, archived for inactive memory, or any when the user asks broadly.',
+          'Optional lifecycle filter. Use active for normal saved state, archived for inactive memory, or any when the user asks broadly. planned and completed are accepted for cached clients.',
         ),
       },
       annotations: {
-        title: 'List Fluent Items',
+        title: 'List Closet Items',
         readOnlyHint: true,
         idempotentHint: true,
         destructiveHint: false,
@@ -1967,6 +1803,7 @@ export function registerCoreMcpSurface(
     }),
     async ({ cursor, domain, item_type, limit, query, status }) => {
       requireVNextReadScope(domain);
+      if (isMealsRetiredReadRequest({ domain, itemType: item_type })) return mealsRetiredToolResult();
       const page = await listFluentVNextItemsPage(vNextReadServices, { cursor, domain, itemType: item_type, limit, query, status });
       // Style list items are compacted (see vnext-read-layer compactStyleListItem), so a full page fits the
       // model-visible text budget — let the host see every item on the page instead of the default 8-item
@@ -1977,11 +1814,15 @@ export function registerCoreMcpSurface(
           ? [
               'Required continuation for closet-grounded outfit or shoe advice:',
               'follow nextCursor until it is null whenever the user asks for an outfit from the whole saved closet; the first page is not collection completeness.',
-              'inspect plausible winners with separate focused fluent_get_media_bundle calls before making a visual choice.',
-              'For one winning owned item, call fluent_render_style_closet_surface with only that exact ID, presentation.mode="recommendation", the same focused_item_id, and one concise recommendation_reason.',
+              'inspect plausible winners with separate focused fluent_get_closet_item_photos calls before making a visual choice.',
+              'For one winning owned item, call fluent_show_closet with only that exact ID, presentation.mode="recommendation", the same focused_item_id, and one concise recommendation_reason.',
               'For a complete outfit, render only the 3 to 5 selected exact saved IDs with presentation.mode="comparison"; name every selected item and offer at most one exact-owned replacement.',
               'Reserve presentation.mode="detail" for an explicit request to inspect or manage the full saved item.',
               'Do not end with prose alone or substitute a category-filtered closet for the exact recommended-item detail.',
+              ...(!cursor && !query?.trim() && (status ?? 'active') === 'active' && (item_type == null || item_type === 'style_item')
+                && !page.nextCursor && page.items.length < STYLE_CLOSET_IMPORT_THRESHOLD
+                ? [styleClosetImportGuidance(page.items.length)]
+                : []),
               ...(page.items.some(styleItemHasNoPhoto)
                 ? [STYLE_ITEM_NEEDS_PHOTO_GUIDANCE]
                 // Only on targeted lookups (a search, as in the add-a-photo flow, or a short page), not on
@@ -1997,49 +1838,49 @@ export function registerCoreMcpSurface(
   );
 
   server.registerTool(
-    'fluent_get_item',
+    'fluent_get_closet_item',
     withVNextReadSecurity({
-      title: 'Get Fluent Item',
+      title: 'Get Closet Item',
       description:
-        'Fetch one typed domain item with its canonical payload and provenance hooks. For Meals meal plans, use item_type="meal_plan" with item_id="current_meal_plan", a saved plan ID, or a week-start date returned by fluent_list_items. For Meals recipes, use the stable recipe ID returned by fluent_list_items; an exact saved recipe title is accepted as a fallback lookup, but do not invent IDs.',
+        'Fetch one typed domain item with its canonical payload and provenance hooks. Use the stable item ID returned by fluent_list_closet_items; do not invent IDs. Meals is retired; Meals items return only a retirement notice.',
       inputSchema: {
         domain: fluentVNextDomainSchema,
-        item_id: z.string().describe('Stable saved item ID returned by fluent_list_items. For Meals meal plans, current_meal_plan and week-start dates are accepted. For Meals recipes, an exact saved recipe title is accepted when no ID is available.'),
+        item_id: z.string().describe('Stable saved item ID returned by fluent_list_closet_items.'),
         item_type: fluentVNextItemTypeSchema.optional(),
         view: readViewSchema,
       },
-      annotations: { title: 'Get Fluent Item', readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Closet Item', readOnlyHint: true, idempotentHint: true },
     }),
-    async ({ domain, item_id, item_type, view }) => {
+    async ({ domain, item_id, item_type }) => {
       requireVNextReadScope(domain);
+      if (isMealsRetiredReadRequest({ domain, itemType: item_type })) return mealsRetiredToolResult();
       const item = await getFluentVNextItem(vNextReadServices, { domain, itemId: item_id, itemType: item_type });
       const result = vNextToolResult(item, {
         followUpGuidance: domain === 'style' && styleItemHasNoPhoto(item)
-          ? `This saved closet item has no photo yet. It is a complete saved item. Offer once to add a photo (a product shot or an on-you photo) and save it with fluent_set_style_item_image for this item_id; the first photo becomes its cover. Do not ask repeatedly. ${styleUploadedPhotoDataUrlStep(item_id)}`
+          ? `This saved closet item has no photo yet. It is a complete saved item. Offer once to add a photo for this item_id: save a product shot as its cover with fluent_set_closet_item_photo (image_type "primary"); an on-you photo goes in with fluent_add_closet_item_photo (image_type "fit"), which only adds photos and never sets the cover. Do not ask repeatedly. ${styleUploadedPhotoDataUrlStep(item_id)}`
           : domain === 'style' && styleItemHasPhotos(item)
             ? styleItemAddMorePhotosGuidance(item_id)
             : undefined,
-        preserveRecipeIngredients: domain === 'meals' && item_type === 'recipe' && view === 'full',
       }) as VNextToolResult;
       if (domain === 'style' && activeReanalyzeDirective(item)) {
-        await appendStyleReanalyzePrimaryPhotoInlineContent(result, vNextReadServices, item_id);
+        await appendStyleReanalyzePrimaryPhotoInlineContent(result, vNextReadServices, item_id, style.fetchesCallerImageUrls());
       }
       return result;
     },
   );
 
   server.registerTool(
-    'fluent_list_evidence',
+    'fluent_list_closet_evidence',
     withVNextReadSecurity({
-      title: 'List Fluent Evidence',
+      title: 'List Closet Evidence',
       description:
-        'List evidence, provenance, source snapshots, event history, or evidence gaps for a subject or claim. For Meals recipe-to-grocery reasoning, pass the saved recipe ID or exact saved recipe title as subject to ground ingredients before proposing a grocery-list delta. Evidence can inform host reasoning, but it is not a final plan, style verdict, medical judgment, or checkout action.',
+        'List evidence, provenance, source snapshots, event history, or evidence gaps for a subject or claim. Evidence can inform host reasoning, but it is not a final plan, style verdict, medical judgment, or checkout action.',
       inputSchema: {
         claim: fluentVNextEvidenceClaimSchema.optional(),
         domain: fluentVNextDomainSchema.optional(),
         subject: fluentVNextEvidenceSubjectSchema.optional(),
       },
-      annotations: { title: 'List Fluent Evidence', readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'List Closet Evidence', readOnlyHint: true, idempotentHint: true },
     }),
     async ({ claim, domain, subject }) => {
       if (domain) {
@@ -2047,30 +1888,31 @@ export function registerCoreMcpSurface(
       } else {
         requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
       }
+      if (isMealsRetiredReadRequest({ domain })) return mealsRetiredToolResult();
       const evidence = await listFluentVNextEvidence(vNextReadServices, { claim, domain, subject });
-      return vNextToolResult(evidence, { preserveRecipeIngredients: domain === 'meals' });
+      return vNextToolResult(evidence);
     },
   );
 
   server.registerTool(
-    'fluent_get_media_bundle',
+    'fluent_get_closet_item_photos',
     withVNextStyleReadSecurity({
-      title: 'Get Fluent Media Bundle',
+      title: 'Get Closet Item Photos',
       description:
-        'Fetch host-inspectable media references and constraints for a subject. Fluent provides media provenance and delivery; the host model must inspect images before making visual claims. For visual outfit or shoe advice in ChatGPT, call this separately for each shortlisted saved item using subject or a singleton item_ids array so the focused item can include model-visible pixels; multi-item bundles are references-only. Never rank visual color, proportion, texture, or silhouette from item text or image URLs alone.',
+        'Fetch host-inspectable photos and their constraints for saved closet items. Fluent provides photo provenance and delivery; the host model must inspect images before making visual claims. For visual outfit or shoe advice in ChatGPT, call this separately for each shortlisted saved item using subject or a singleton item_ids array so the focused item can include model-visible pixels; multi-item bundles are references-only. Never rank visual color, proportion, texture, or silhouette from item text or image URLs alone.',
       inputSchema: {
         candidate: fluentVNextMediaCandidateSchema.optional(),
         delivery_mode: fluentVNextMediaBundleDeliveryModeSchema.optional(),
         domain: z.enum(['style']).describe('Only style media bundles are implemented in the public profile.'),
         item_ids: z.array(z.string()).max(10).optional().describe(
-          'Optional saved Fluent style item IDs to include as visual references or comparators. Use IDs returned by fluent_list_items or fluent_get_item.',
+          'Optional saved Fluent style item IDs to include as visual references or comparators. Use IDs returned by fluent_list_closet_items or fluent_get_closet_item.',
         ),
         purpose: fluentVNextMediaBundlePurposeSchema.optional(),
         subject: z.string().optional().describe(
-          'Optional saved Fluent style item ID that is the main subject of the media request. Use an ID returned by fluent_list_items or fluent_get_item.',
+          'Optional saved Fluent style item ID that is the main subject of the media request. Use an ID returned by fluent_list_closet_items or fluent_get_closet_item.',
         ),
       },
-      annotations: { title: 'Get Fluent Media Bundle', readOnlyHint: true, idempotentHint: true },
+      annotations: { title: 'Get Closet Item Photos', readOnlyHint: true, idempotentHint: true },
       // Kept widget-callable for transition safety: a host still running a CACHED v1 closet widget may call
       // this read tool on flip. Hosts gate component-initiated calls on this flag; dropping it would
       // make those cached widgets' fit-photo reads fail. The current widget fetches the fit photo
@@ -2088,7 +1930,7 @@ export function registerCoreMcpSurface(
           subject,
         });
       // Re-analysis rides on THIS path too: the style-enrichment guidance steers the model to call
-      // fluent_get_media_bundle (not fluent_get_item) to load a saved item's photo, so a queued
+      // fluent_get_closet_item_photos (not fluent_get_closet_item) to load a saved item's photo, so a queued
       // re-analysis must surface the firm directive + inline pixels here as well. Gated on a SINGLE
       // focused style item that is reanalyzePending (TTL); non-pending or multi-item comparator
       // bundles are returned unchanged (no directive, no inline-photo fetch, no payload bloat).
@@ -2107,7 +1949,10 @@ export function registerCoreMcpSurface(
           ? { ...bundle, reanalyzeDirective: directive, ...(responseGuidance ? { responseGuidance } : {}) }
           : bundle;
         const result = vNextToolResult(enriched, { includeMediaReferences: true }) as VNextToolResult;
-        await appendStyleReanalyzeInlinePhotoFromBundle(result, bundle, { reanalyzePending: Boolean(directive) });
+        await appendStyleReanalyzeInlinePhotoFromBundle(result, bundle, {
+          reanalyzePending: Boolean(directive),
+          strictPublicFetch: style.fetchesCallerImageUrls(),
+        });
         return result;
       }
       return vNextToolResult(bundle, { includeMediaReferences: true });
@@ -2115,39 +1960,18 @@ export function registerCoreMcpSurface(
   );
 
   server.registerTool(
-    'fluent_get_purchase_context',
-    withVNextReadSecurity({
-      title: 'Get Fluent Purchase Context',
-      description:
-        'Fetch the reduced Fluent budget signal for a style clothing or meals grocery purchase. Returns declared envelope pressure and caveats only; the host model still owns purchase judgment, planning, and user-facing reasoning. For a Style purchase verdict, prefer fluent_get_context(domain="style", intent="purchase", candidate, amount), which returns the owned-category slice AND a budget over/under fact in one read; this tool returns only a category budget summary and does not reconcile a candidate price unless you pass amount.',
-      inputSchema: {
-        amount: z.number().min(0).optional().describe('Optional candidate purchase amount in CAD. Omit when no price is known; Fluent will not infer a price.'),
-        category: fluentVNextBudgetCategorySchema,
-      },
-      annotations: { title: 'Get Fluent Purchase Context', readOnlyHint: true, idempotentHint: true },
-    }),
-    async ({ amount, category }) => {
-      requireBudgetReadScope(category);
-      const context = await getFluentVNextPurchaseContext(vNextReadServices, {
-        amount: amount ?? null,
-        category,
-      });
-      return vNextToolResult(context);
-    },
-  );
-
-  server.registerTool(
-    'fluent_update_shared_profile_patch',
+    'fluent_update_profile',
     withVNextSharedProfileWriteSecurity({
-      title: 'Update Fluent Shared Profile Patch',
+      title: 'Update Profile',
       description:
-        'Apply an explicit, provenance-backed profile patch through the canonical shared or domain profile service. Use only when the user intends to change durable Fluent memory.',
+        'Save one explicit, provenance-backed fact about the user (for example their timezone, a size note or a style preference) through the canonical shared or domain profile service. Use only when the user intends to change durable Fluent memory.',
       inputSchema: fluentVNextSharedProfileToolInputSchema,
-      annotations: { title: 'Update Fluent Shared Profile Patch', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Update Profile', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
     }),
     async (args) => {
       const exact = fluentVNextSharedProfileExactInputSchema.parse(withoutNullSharedProfilePattern(args));
       const authProps = requireVNextWriteScope(exact.domain);
+      if (isMealsRetiredProfilePatch({ domain: exact.domain, kind: exact.patch.kind })) return mealsRetiredToolResult();
       return vNextToolResult(
         await updateFluentVNextSharedProfilePatch(vNextWriteServices, {
           domain: exact.domain,
@@ -2159,346 +1983,278 @@ export function registerCoreMcpSurface(
     },
   );
 
-  server.registerTool(
-    'fluent_set_budget_envelope',
-    withVNextBudgetWriteSecurity({
-      title: 'Set Fluent Budget Envelope',
-      description:
-        'Set one declared monthly budget envelope for style clothing or meals groceries and return read-after-write purchase context. Use only when the user explicitly asks Fluent to remember the envelope. This does not import transactions, connect Plaid, build dashboards, browse retailers, or make purchase decisions.',
-      inputSchema: {
-        approval: fluentVNextRecipeWriteApprovalSchema,
-        category: fluentVNextBudgetCategorySchema,
-        currency: z.literal('CAD').optional().describe('Currency for this R-1 envelope. CAD is the only supported public currency.'),
-        monthly_amount: z.number().positive().describe('Declared monthly envelope amount in CAD.'),
-        response_mode: writeResponseModeSchema,
-        ...provenanceInputSchema,
-      },
-      annotations: { title: 'Set Fluent Budget Envelope', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
-      // The envelope-setup MCP App writes through the app->host bridge; hosts gate
-      // widget-initiated tool calls on this flag.
-      _meta: { 'openai/widgetAccessible': true },
-    }),
-    async (args) => {
-      await requireExplicitPublicWriteApproval(
-        args.approval,
-        'fluent_set_budget_envelope',
-        options.publicWriteRateLimiter,
-      );
-      const authProps = requireBudgetWriteScope(args.category);
-      return vNextToolResult(
-        await setFluentBudgetEnvelope(vNextWriteServices, {
-          category: args.category,
-          currency: args.currency ?? 'CAD',
-          monthlyAmount: args.monthly_amount,
-          provenance: buildMutationProvenance(authProps, args),
-        }),
-      );
-    },
-  );
+  // Shared input fields for the closet write tools that act on one existing saved item.
+  // source_snapshot is offered only where the write path records it (detail edits and duplicate Undo).
+  const styleClosetItemWriteInputFields = () => ({
+    approval: fluentVNextRecipeWriteApprovalSchema,
+    item_id: z.string().min(1).describe('Existing saved Fluent Style item ID.'),
+    provenance: nestedProvenanceSchema.describe('Who/what initiated this explicit user-approved closet edit; acceptance_test provenance stays non-durable.'),
+    response_mode: fluentStyleClosetWriteResponseModeSchema,
+    ...provenanceInputSchema,
+  });
+  const styleItemWriteResult = (ack: FluentVNextWriteAck, itemId: string, savedText: string) => toolResult(ack, {
+    structuredContent: ack,
+    textData: ack.durable === true && ack.status === 'applied'
+      ? ack.readbackStatus === 'unavailable'
+        ? `${savedText} ${ack.recovery}`
+        : savedText
+      : `Style item ${itemId} was not saved; inspect the returned write result.`,
+  });
 
   server.registerTool(
-    'fluent_log_budget_spend',
-    withVNextBudgetWriteSecurity({
-      title: 'Log Fluent Budget Spend',
-      description:
-        'Log one explicit user-approved budget spend event or correction for style clothing or meals groceries and return read-after-write purchase context. This is manual declared spend only; it does not import transactions, connect accounts, sync cards, browse retailers, or create category taxonomies.',
-      inputSchema: {
-        approval: fluentVNextRecipeWriteApprovalSchema,
-        amount: z.number().describe('Spend amount in CAD. Use a negative amount only for an explicit correction or reversal approved by the user.'),
-        category: fluentVNextBudgetCategorySchema,
-        note: z.string().max(240).optional().describe('Optional short user-facing note for this manual spend event.'),
-        occurred_on: fluentVNextIsoDateSchema.optional().describe('Optional date the spend occurred, formatted YYYY-MM-DD. Omit to use today in the Fluent profile timezone.'),
-        response_mode: writeResponseModeSchema,
-        ...provenanceInputSchema,
-      },
-      annotations: { title: 'Log Fluent Budget Spend', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
-    }),
-    async (args) => {
-      await requireExplicitPublicWriteApproval(args.approval, 'fluent_log_budget_spend', options.publicWriteRateLimiter);
-      const authProps = requireBudgetWriteScope(args.category);
-      return vNextToolResult(
-        await logFluentBudgetSpend(vNextWriteServices, {
-          amount: args.amount,
-          category: args.category,
-          note: args.note ?? null,
-          occurredOn: args.occurred_on ?? null,
-          provenance: buildMutationProvenance(authProps, args),
-        }),
-      );
-    },
-  );
-
-  server.registerTool(
-    'fluent_save_recipe',
-    withVNextWriteSecurity({
-      title: 'Save Fluent Recipe',
-      description:
-        'Save one complete, user-approved Meals recipe through the recipe validator and return read-after-write proof. Use only after the user explicitly approves saving the recipe.',
-      inputSchema: {
-        approval: fluentVNextRecipeWriteApprovalSchema,
-        recipe: recipeDocumentSchema.describe(
-          'User-approved recipe document to save. Include only fields the user supplied or explicitly approved; do not invent missing quantities, servings, nutrition, cost, or timing.',
-        ),
-        response_mode: writeResponseModeSchema,
-        ...provenanceInputSchema,
-      },
-      annotations: { title: 'Save Fluent Recipe', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
-    }),
-    async (args) => {
-      const authProps = requireVNextWriteScope('meals');
-      return vNextToolResult(
-        await saveFluentVNextRecipe(vNextWriteServices, {
-          approval: args.approval,
-          provenance: buildMutationProvenance(authProps, args),
-          recipe: args.recipe,
-        }),
-      );
-    },
-  );
-
-  server.registerTool(
-    'fluent_update_recipe_patch',
-    withVNextWriteSecurity({
-      title: 'Update Fluent Recipe Patch',
-      description:
-        'Apply a typed sparse patch to an existing saved Meals recipe and return read-after-write proof. This cannot change recipe identity or create grocery/cart/order state.',
-      inputSchema: {
-        approval: fluentVNextRecipeWriteApprovalSchema,
-        patch: fluentVNextRecipePatchSchema,
-        recipe_id: z.string().min(1).describe('Existing saved Fluent recipe ID returned by fluent_list_items or fluent_get_item.'),
-        response_mode: writeResponseModeSchema,
-        ...provenanceInputSchema,
-      },
-      annotations: { title: 'Update Fluent Recipe Patch', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
-    }),
-    async (args) => {
-      const authProps = requireVNextWriteScope('meals');
-      // The cached ChatGPT 1.0.0 schema requires patch.mode="merge"; it is a marker, not a field.
-      const { mode: _legacyMergeMode, ...patch } = args.patch;
-      return vNextToolResult(
-        await updateFluentVNextRecipePatch(vNextWriteServices, {
-          approval: args.approval,
-          patch,
-          provenance: buildMutationProvenance(authProps, args),
-          recipeId: args.recipe_id,
-        }),
-      );
-    },
-  );
-
-  server.registerTool(
-    'fluent_record_recipe_feedback',
-    withVNextWriteSecurity({
-      title: 'Record Fluent Recipe Feedback',
-      description:
-        'Record explicit feedback for one saved Meals recipe and return read-after-write proof. This is recipe evidence, not a global preference, allergy, inventory, grocery, cart, or order update.',
-      inputSchema: {
-        approval: fluentVNextRecipeWriteApprovalSchema,
-        feedback: fluentVNextRecipeFeedbackSchema,
-        recipe_id: z.string().min(1).describe('Existing saved Fluent recipe ID that this feedback is about.'),
-        response_mode: writeResponseModeSchema,
-        ...provenanceInputSchema,
-      },
-      annotations: { title: 'Record Fluent Recipe Feedback', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
-    }),
-    async (args) => {
-      const authProps = requireVNextWriteScope('meals');
-      return vNextToolResult(
-        await recordFluentVNextRecipeFeedback(vNextWriteServices, {
-          approval: args.approval,
-          feedback: args.feedback,
-          provenance: buildMutationProvenance(authProps, args),
-          recipeId: args.recipe_id,
-        }),
-      );
-    },
-  );
-
-  server.registerTool(
-    'fluent_save_meal_plan',
-    withVNextWriteSecurity({
-      title: 'Save Fluent Meal Plan',
-      description:
-        'Save one explicit user-approved, host-authored Meals plan, derive its grocery plan from the referenced saved recipes, and return read-after-write proof for both the meal plan and living grocery list. Use only after the host model drafts the plan in conversation and the user approves saving it. This does not browse retailers, mutate carts, save recipes, or infer pantry/inventory truth.',
-      inputSchema: {
-        approval: fluentVNextRecipeWriteApprovalSchema,
-        plan: fluentVNextMealPlanSchema,
-        response_mode: writeResponseModeSchema,
-        ...provenanceInputSchema,
-      },
-      annotations: { title: 'Save Fluent Meal Plan', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
-    }),
-    async (args) => {
-      const authProps = requireVNextWriteScope('meals');
-      return vNextToolResult(
-        await saveFluentVNextMealPlan(vNextWriteServices, {
-          approval: args.approval,
-          plan: args.plan,
-          provenance: buildMutationProvenance(authProps, args),
-        }),
-      );
-    },
-  );
-
-  server.registerTool(
-    'fluent_apply_grocery_list_change',
-    withVNextWriteSecurity({
-      title: 'Apply Fluent Grocery List Change',
-      description:
-        'Apply one explicit user-approved change to the current living Meals grocery list and return read-after-write proof. Use change.kind exactly as one of add_item, mark_plan_item, substitute_plan_item, or update_manual_item. This does not browse retailers, mutate carts, place orders, save recipes, or write broad preferences.',
-      inputSchema: {
-        approval: fluentVNextRecipeWriteApprovalSchema,
-        change: fluentVNextGroceryListChangeSchema,
-        currentness_confirmed: z.boolean().optional().describe(
-          'Required only when the current grocery list is stale or incomplete and the user explicitly confirms they still want to edit that list.',
-        ),
-        list_id: z.string().optional().describe('Optional current grocery-list ID from a recent readback; used to prevent target mismatches.'),
-        list_version: z.string().optional().describe('Optional current grocery-list version from a recent readback; used to prevent stale writes.'),
-        response_mode: writeResponseModeSchema,
-        week_start: z.string().optional().describe('Optional selected meal-plan week start from the current grocery-list readback.'),
-        ...provenanceInputSchema,
-      },
-      annotations: { title: 'Apply Fluent Grocery List Change', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
-      _meta: {
-        'openai/widgetAccessible': true,
-        ui: {
-          visibility: ['model', 'app'],
-        },
-      },
-    }),
-    async (args) => {
-      const authProps = requireVNextWriteScope('meals');
-      return vNextToolResult(
-        await applyFluentVNextGroceryListChange(vNextWriteServices, {
-          approval: args.approval,
-          change: args.change,
-          currentnessConfirmed: args.currentness_confirmed,
-          listId: args.list_id,
-          listVersion: args.list_version,
-          provenance: buildMutationProvenance(authProps, args),
-          weekStart: args.week_start,
-        }),
-      );
-    },
-  );
-
-  server.registerTool(
-    'fluent_apply_grocery_shopping_result',
-    withVNextWriteSecurity({
-      title: 'Apply Fluent Grocery Shopping Result',
-      description:
-        'Reconcile a completed shopping trip in one explicit user-approved action, then return read-after-write proof. Use selection.kind="selected_items" with a non-empty bought_items list, or selection.kind="all_to_buy" with a stable idempotency_key. Choose exactly one selection kind. This does not browse retailers, mutate carts, place orders, invent new items, or infer quantities.',
-      inputSchema: fluentVNextGroceryShoppingResultInputSchema,
-      annotations: { title: 'Apply Fluent Grocery Shopping Result', readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
-      _meta: {
-        'openai/widgetAccessible': true,
-        ui: {
-          visibility: ['model', 'app'],
-        },
-      },
-    }),
-    async (args) => {
-      const authProps = requireVNextWriteScope('meals');
-      const selection = args.selection;
-      const legacyBoughtItems = fluentVNextGroceryShoppingItemSchema.array().min(1).safeParse(args.bought_items);
-      const legacyMarkAll = args.mark_all_to_buy_bought === true;
-      if (selection && (args.bought_items !== undefined || args.mark_all_to_buy_bought !== undefined)) {
-        throw new Error('fluent_apply_grocery_shopping_result accepts only selection; do not combine it with legacy selection fields.');
-      }
-      if (!selection && legacyBoughtItems.success && legacyMarkAll) {
-        throw new Error('Cached widget payload must choose bought_items or mark_all_to_buy_bought, not both.');
-      }
-      if (!selection && !legacyBoughtItems.success && !legacyMarkAll) {
-        throw new Error('fluent_apply_grocery_shopping_result requires selection.');
-      }
-      const selectedItems = selection?.kind === 'selected_items'
-        ? selection.bought_items
-        : legacyBoughtItems.success
-          ? legacyBoughtItems.data
-          : undefined;
-      return vNextToolResult(
-        await applyFluentVNextGroceryShoppingResult(vNextWriteServices, {
-          checkbox: selection?.kind === 'item_checkbox' ? {
-            itemKey: selection.item_key, checked: selection.checked, purchaseId: selection.purchase_id,
-          } : undefined,
-          boughtItems: selectedItems?.map((entry) => ({ itemKey: entry.item_key, status: entry.status })),
-          approval: args.approval,
-          currentnessConfirmed: args.currentness_confirmed,
-          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
-          listId: args.list_id,
-          listVersion: args.list_version,
-          markAllToBuyBought: selection?.kind === 'all_to_buy' || legacyMarkAll,
-          provenance: buildMutationProvenance(authProps, args),
-          readbackMode: args.response_mode === 'ack' ? 'compact' : 'full',
-          weekStart: args.week_start,
-        }),
-      );
-    },
-  );
-
-  server.registerTool(
-    'fluent_update_style_item_patch',
+    'fluent_update_closet_item',
     withVNextStyleClosetWriteSecurity({
-      title: 'Update Fluent Style Item Patch',
+      title: 'Update Closet Item',
       description:
-        'Update one saved Style item with read-after-write proof. Use patch for catalog details, product_enrichment with an empty patch for a linked product and attributed material/care facts, or photo_library for photo arrangement. Tags and styling descriptors belong in fluent_refresh_style_item_profile. For user-approved closet management only; Fluent does not browse retailers or read email.',
-      inputSchema: {
-        approval: fluentVNextRecipeWriteApprovalSchema,
-        expected_duplicate_merge_id: z.string().uuid().optional().describe('Duplicate-merge Undo only: exact merge cycle supplied by the original combine action. Stale cycles fail closed.'),
-        item_id: z.string().min(1).describe('Existing saved Fluent Style item ID.'),
+        'Edit the catalog details of one saved closet item (brand, name, category, subcategory, color, size, formality) with read-after-write proof. Omitted fields stay unchanged. This tool only edits details: tags and styling descriptors belong in fluent_record_closet_item_feedback, and restoring an archived item uses fluent_restore_closet_item. For user-approved closet management only; Fluent does not browse retailers or read email.',
+      // Passthrough (not strict) so the handler sees keys this tool does not declare. Calls that still send
+      // a former operation (photo_library, product_enrichment, expected_duplicate_merge_id, or a status
+      // change) are rejected with the replacement tool named, never stripped into a successful no-op.
+      inputSchema: z.object({
+        ...styleClosetItemWriteInputFields(),
         patch: fluentStyleItemPatchSchema,
-        product_enrichment: productEnrichmentSchema.optional().describe('Save host-researched product identity and attributed facts. Read productReference.revision first; use 0 if absent. Supply an empty patch. No browsing, photo changes or ownership edits occur. For new items, create first then enrich the returned item ID.'),
-        photo_library: z.object({expected_revision:z.string().regex(/^[a-f0-9]{64}$/),operation_id:z.string().uuid(),action:photoLibraryActionSchema}).optional().describe('Manage retained photos with the exact revision from the closet render and an empty patch. Removal preserves files. Undo requires the unchanged saved revision.'),
-        provenance: nestedProvenanceSchema.describe('Who/what initiated this explicit user-approved closet edit; acceptance_test provenance stays non-durable.'),
-        response_mode: fluentStyleClosetWriteResponseModeSchema,
         source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
-        ...provenanceInputSchema,
-      },
-      annotations: { title: 'Update Fluent Style Item Patch', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      }).passthrough(),
+      annotations: { title: 'Update Closet Item', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
-        // Widget-callable for the closet edit form; stays model-visible. All closet write tools
-        // (patch, set-image, archive) are model-visible; archive's "explicit user signal only" gate
-        // lives in guidance, not by hiding the tool.
+        // Widget-callable for the closet edit form; stays model-visible.
         'openai/widgetAccessible': true,
       },
     }),
     async (args) => {
+      rejectMovedStyleItemPatchOperations(args as Record<string, unknown>);
       await requireExplicitPublicWriteApproval(
         args.approval,
-        'fluent_update_style_item_patch',
+        'fluent_update_closet_item',
         options.publicWriteRateLimiter,
       );
       const authProps = requireStyleClosetWriteScope();
       const { mode: _legacyMergeMode, ...patch } = args.patch;
       const ack = await updateFluentStyleItemPatch(vNextWriteServices, {
-        productEnrichment: args.product_enrichment,
-        photoLibrary: args.photo_library,
-        expectedDuplicateMergeId: args.expected_duplicate_merge_id,
         itemId: args.item_id,
         patch,
         provenance: buildStyleClosetMutationProvenance(authProps, args),
         sourceSnapshot: args.source_snapshot,
       });
-      return toolResult(ack, {
-        structuredContent: ack,
-        textData: ack.durable === true && ack.status === 'applied'
-          ? ack.readbackStatus === 'unavailable'
-            ? `Updated style item ${args.item_id}. ${ack.recovery}`
-            : `Updated style item ${args.item_id}.`
-          : `Style item ${args.item_id} was not saved; inspect the returned write result.`,
-      });
+      return styleItemWriteResult(ack, args.item_id, `Updated style item ${args.item_id}.`);
     },
   );
 
   server.registerTool(
-    'fluent_create_style_item',
+    'fluent_restore_closet_item',
     withVNextStyleClosetWriteSecurity({
-      title: 'Create Fluent Style Item',
+      title: 'Restore Closet Item',
       description:
-        'Create one NEW Style closet item from a profile YOU (the host model) produced from the user\'s photo or description. A photo is optional but strongly encouraged: when you have a usable image, include it so the item gets a cover. With a reviewed primary Catalog image set catalog_ready=true; in ChatGPT prefer image_file for an uploaded image, or pass the exact inspected direct public HTTPS image as image_url and Fluent will copy and validate its bytes before the atomic create. When the Catalog is host-generated, also pass the exact retained source evidence through source_image_file (or its bounded data/hosted-file equivalent) in the same call. Without catalog_ready, an image is saved as the item\'s ordinary photo after the create; with no image at all the item is saved with photoStatus "needs_photo", and you should offer once to add a photo with fluent_set_style_item_image. Fluent stores and hashes the bytes, binds the reviewed Catalog to its source, surfaces possible duplicates for YOU to judge, and returns read-after-write proof plus an exact reviewHandoff. In UI-capable hosts, a successful create directly presents the exact saved item in the current Closet app; the reviewHandoff is the text-only/non-UI fallback. A created item is active; ingestion_review is a render presentation mode, not a pending_review lifecycle status. Fluent does not inspect images, browse or scrape product pages, resolve product galleries, generate images, or infer taste; you own the visual judgment. For explicit user-approved closet onboarding only.',
+        'Restore one archived closet item to the active closet, with read-after-write proof. Use it when the user says an archived item is back or was archived by mistake. It does not undo a duplicate merge: an item archived by a merge is rejected without changes and must use fluent_undo_closet_item_merge. For user-approved closet management only.',
+      inputSchema: {
+        ...styleClosetItemWriteInputFields(),
+        item_id: z.string().min(1).describe('ID of the archived closet item to make active again.'),
+        source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
+      },
+      annotations: { title: 'Restore Closet Item', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: {
+        // Widget-callable for the archive receipt's Undo and the archived-item restore action.
+        'openai/widgetAccessible': true,
+      },
+    }),
+    async (args) => {
+      await requireExplicitPublicWriteApproval(args.approval, 'fluent_restore_closet_item', options.publicWriteRateLimiter);
+      const authProps = requireStyleClosetWriteScope();
+      const ack = await restoreFluentStyleItem(vNextWriteServices, {
+        itemId: args.item_id,
+        provenance: buildStyleClosetMutationProvenance(authProps, args),
+        sourceSnapshot: args.source_snapshot,
+      });
+      return styleItemWriteResult(ack, args.item_id, `Restored style item ${args.item_id}.`);
+    },
+  );
+
+  // The five photo-arrangement tools share the revision guard and the idempotent operation ID.
+  const photoArrangementInputFields = () => ({
+    ...styleClosetItemWriteInputFields(),
+    expected_revision: z.string().regex(/^[a-f0-9]{64}$/).describe('The item\'s current photoRevision from fluent_show_closet. A stale revision is rejected and nothing is saved.'),
+    operation_id: z.string().uuid().describe('New UUID for this change. Retrying the same change with the same operation_id is idempotent; reusing it for a different change is rejected.'),
+  });
+  const registerPhotoArrangementTool = <S extends z.ZodRawShape>(
+    name: string,
+    config: { title: string; description: string; inputSchema: S },
+    toAction: (args: z.infer<z.ZodObject<S>>) => PhotoLibraryAction,
+    savedText: (itemId: string) => string,
+  ) => server.registerTool(
+    name,
+    withVNextStyleClosetWriteSecurity({
+      title: config.title,
+      description: config.description,
+      inputSchema: config.inputSchema,
+      annotations: { title: config.title, readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: {
+        // Widget-callable for the closet photo manager; stays model-visible.
+        'openai/widgetAccessible': true,
+      },
+    }),
+    (async (args: Record<string, unknown>) => {
+      await requireExplicitPublicWriteApproval(args.approval, name, options.publicWriteRateLimiter);
+      const authProps = requireStyleClosetWriteScope();
+      const itemId = String(args.item_id);
+      const ack = await arrangeFluentStyleItemPhotos(vNextWriteServices, {
+        itemId,
+        photoLibrary: { action: toAction(args as never), expected_revision: String(args.expected_revision), operation_id: String(args.operation_id) },
+        provenance: buildStyleClosetMutationProvenance(authProps, args),
+      });
+      return styleItemWriteResult(ack, itemId, savedText(itemId));
+    }) as never,
+  );
+  const photoArrangementBoundary = 'Send the item\'s photoRevision from fluent_show_closet as expected_revision; a changed revision fails without saving. Returns read-after-write proof and an undoToken for fluent_undo_closet_item_photo_change. For user-approved closet management only.';
+
+  registerPhotoArrangementTool('fluent_set_closet_item_cover', {
+    title: 'Set Closet Item Cover',
+    description: `Make one visible product photo the cover of a saved closet item. On-you (fit) photos cannot be the cover. ${photoArrangementBoundary}`,
+    inputSchema: {
+      ...photoArrangementInputFields(),
+      photo_id: z.string().min(1).describe('ID of the visible product photo that becomes the cover.'),
+    },
+  }, (args) => ({ type: 'cover', photoId: args.photo_id }), (itemId) => `Set the cover of style item ${itemId}.`);
+
+  registerPhotoArrangementTool('fluent_reorder_closet_item_photos', {
+    title: 'Reorder Closet Item Photos',
+    description: `Set the display order of a saved closet item's visible photos. ${photoArrangementBoundary}`,
+    inputSchema: {
+      ...photoArrangementInputFields(),
+      photo_ids: z.array(z.string().min(1)).max(500).describe('Every visible photo ID of the item, each exactly once, in the new order.'),
+    },
+  }, (args) => ({ type: 'reorder', ids: args.photo_ids }), (itemId) => `Reordered the photos of style item ${itemId}.`);
+
+  registerPhotoArrangementTool('fluent_hide_closet_item_photo', {
+    title: 'Hide Closet Item Photo',
+    description: `Hide one visible photo of a saved closet item. The photo file is kept, not deleted, so the change can be undone. Hiding the current cover requires next_cover_photo_id. ${photoArrangementBoundary}`,
+    inputSchema: {
+      ...photoArrangementInputFields(),
+      photo_id: z.string().min(1).describe('ID of the visible photo to hide.'),
+      next_cover_photo_id: z.string().min(1).nullable().optional().describe('Required only when hiding the current cover: the visible product photo that becomes the next cover, or null to leave the item without a cover.'),
+    },
+  }, (args) => ({ type: 'remove', photoId: args.photo_id, ...(args.next_cover_photo_id !== undefined ? { coverId: args.next_cover_photo_id } : {}) }), (itemId) => `Hid a photo of style item ${itemId}.`);
+
+  registerPhotoArrangementTool('fluent_replace_closet_item_photo', {
+    title: 'Replace Closet Item Photo',
+    description: `Swap one visible photo of a saved closet item for a photo already added to the same item (for example with fluent_add_closet_item_photo). The replacement takes the old photo's place, and the cover if it was the cover; the old file is kept. ${photoArrangementBoundary}`,
+    inputSchema: {
+      ...photoArrangementInputFields(),
+      photo_id: z.string().min(1).describe('ID of the visible photo being replaced.'),
+      replacement_photo_id: z.string().min(1).describe('ID of the already-added photo of this item that takes its place.'),
+    },
+  }, (args) => ({ type: 'replace', photoId: args.photo_id, replacementId: args.replacement_photo_id }), (itemId) => `Replaced a photo of style item ${itemId}.`);
+
+  registerPhotoArrangementTool('fluent_undo_closet_item_photo_change', {
+    title: 'Undo Closet Item Photo Change',
+    description: `Reverse the most recent cover, order, hide or replace change on a saved closet item's photos, using the undoToken that change returned. It only works while the photos are unchanged since. ${photoArrangementBoundary}`,
+    inputSchema: {
+      ...photoArrangementInputFields(),
+      undo_token: z.string().uuid().describe('undoToken returned by the photo change being reversed.'),
+    },
+  }, (args) => ({ type: 'undo', token: args.undo_token }), (itemId) => `Undid the last photo change of style item ${itemId}.`);
+
+  server.registerTool(
+    'fluent_save_closet_item_product_details',
+    withVNextStyleClosetWriteSecurity({
+      title: 'Save Closet Item Product Details',
+      description:
+        'Save the product YOU (the host) identified for one saved closet item, with read-after-write proof: the product listing, its match status and basis, and attributed facts (colour, composition, care, construction, made in) that each cite a source. The details replace the previous ones in full, so carry forward every existing fact you keep. Read productReference.revision from fluent_get_closet_item and send it as expected_revision (0 if absent). Keep uncertain matches as candidate until the user confirms. Fluent does not browse or fetch the listing, change photos or edit ownership fields. For a new item, add it first, then save its product details. For user-approved closet management only.',
+      inputSchema: {
+        ...styleClosetItemWriteInputFields(),
+        expected_revision: productEnrichmentSchema.shape.expected_revision.describe('The item\'s current productReference.revision from fluent_get_closet_item, or 0 when it has none. A stale revision is rejected and nothing is saved.'),
+        operation_id: productEnrichmentSchema.shape.operation_id.describe('New UUID for this save. Retrying the same save with the same operation_id is idempotent; reusing it for a different reference is rejected.'),
+        reference: productEnrichmentSchema.shape.reference.describe('The complete product reference: status (candidate until the user confirms; rejected records a wrong match), match_basis, public HTTPS product_url, brand, name, optional product_code, the sources used (the listing must be one), and facts that each cite a source id.'),
+      },
+      annotations: { title: 'Save Closet Item Product Details', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+    }),
+    async (args) => {
+      await requireExplicitPublicWriteApproval(args.approval, 'fluent_save_closet_item_product_details', options.publicWriteRateLimiter);
+      const authProps = requireStyleClosetWriteScope();
+      const ack = await saveFluentStyleItemProductReference(vNextWriteServices, {
+        itemId: args.item_id,
+        productEnrichment: { expected_revision: args.expected_revision, operation_id: args.operation_id, reference: args.reference },
+        provenance: buildStyleClosetMutationProvenance(authProps, args),
+      });
+      return styleItemWriteResult(ack, args.item_id, `Saved the product reference for style item ${args.item_id}.`);
+    },
+  );
+
+  server.registerTool(
+    'fluent_merge_closet_items',
+    withVNextStyleClosetWriteSecurity({
+      title: 'Merge Closet Items',
+      description:
+        'Merge a duplicate closet record into the item that stays, after the user confirms they are the same physical garment. Fluent moves the duplicate\'s retained photos into the kept item, fills only its missing core details, and archives the duplicate, with read-after-write proof. Never infer or auto-merge. The result carries the merge_id that fluent_undo_closet_item_merge needs. For user-approved closet management only.',
+      inputSchema: {
+        ...styleClosetItemWriteInputFields(),
+        item_id: z.string().min(1).describe('ID of the redundant duplicate item that will be archived.'),
+        merge_into_item_id: z.string().min(1).describe('ID of the existing closet item that stays active and receives the duplicate\'s photos.'),
+        merge_operation_id: z.string().uuid().describe('New UUID that identifies this merge. Retrying with the same ID is idempotent, and fluent_undo_closet_item_merge needs it as merge_id.'),
+        reason: z.string().optional().describe('Optional short note recorded with the merge.'),
+        source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
+      },
+      annotations: { title: 'Merge Closet Items', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: {
+        // Widget-callable for the duplicate-comparison Combine action; stays model-visible.
+        'openai/widgetAccessible': true,
+      },
+    }),
+    async (args) => {
+      await requireExplicitPublicWriteApproval(args.approval, 'fluent_merge_closet_items', options.publicWriteRateLimiter);
+      const authProps = requireStyleClosetWriteScope();
+      return vNextToolResult(
+        await mergeFluentStyleDuplicateItems(vNextWriteServices, {
+          itemId: args.item_id,
+          mergeIntoItemId: args.merge_into_item_id,
+          mergeOperationId: args.merge_operation_id,
+          provenance: buildMutationProvenance(authProps, args),
+          reason: args.reason,
+          sourceSnapshot: args.source_snapshot,
+        }),
+      );
+    },
+  );
+
+  server.registerTool(
+    'fluent_undo_closet_item_merge',
+    withVNextStyleClosetWriteSecurity({
+      title: 'Undo Closet Item Merge',
+      description:
+        'Undo one duplicate merge, with read-after-write proof: the archived duplicate becomes active again and the photos it gave the kept item move back to it. Send the archived item\'s ID and the exact merge_id of that merge (duplicateMergeId on the item in fluent_show_closet). If that item has no outstanding merge with this merge_id, nothing changes and the call fails. For user-approved closet management only.',
+      inputSchema: {
+        ...styleClosetItemWriteInputFields(),
+        item_id: z.string().min(1).describe('ID of the archived duplicate item that the merge folded into another item.'),
+        merge_id: z.string().uuid().describe('Exact merge ID of the outstanding merge (duplicateMergeId).'),
+        source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
+      },
+      annotations: { title: 'Undo Closet Item Merge', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: {
+        // Widget-callable for the closet duplicate-merge Undo; stays model-visible.
+        'openai/widgetAccessible': true,
+      },
+    }),
+    async (args) => {
+      await requireExplicitPublicWriteApproval(args.approval, 'fluent_undo_closet_item_merge', options.publicWriteRateLimiter);
+      const authProps = requireStyleClosetWriteScope();
+      const ack = await undoFluentStyleDuplicateMerge(vNextWriteServices, {
+        itemId: args.item_id,
+        mergeId: args.merge_id,
+        provenance: buildStyleClosetMutationProvenance(authProps, args),
+        sourceSnapshot: args.source_snapshot,
+      });
+      return styleItemWriteResult(ack, args.item_id, `Restored style item ${args.item_id} from the duplicate merge.`);
+    },
+  );
+
+  server.registerTool(
+    'fluent_add_closet_item',
+    withVNextStyleClosetWriteSecurity({
+      title: 'Add Closet Item',
+      description:
+        'Create one NEW Style closet item from a profile YOU (the host model) produced from the user\'s photo or description. A photo is optional but strongly encouraged: when you have a usable image, include it so the item gets a cover. With a reviewed primary Catalog image set catalog_ready=true; in ChatGPT prefer image_file for an uploaded image, or pass the exact inspected direct public HTTPS image as image_url and Fluent will copy and validate its bytes before the atomic create. When the Catalog is host-generated, also pass the exact retained source evidence through source_image_file (or its bounded data/hosted-file equivalent) in the same call. Without catalog_ready, an image is saved as the item\'s ordinary photo after the create; with no image at all the item is saved with photoStatus "needs_photo", and you should offer once to add a photo with fluent_set_closet_item_photo. Fluent stores and hashes the bytes, binds the reviewed Catalog to its source, surfaces possible duplicates for YOU to judge (a warning saves nothing), and returns read-after-write proof plus an exact reviewHandoff. This tool only creates: for a garment that is already saved, add its photo to that item with fluent_add_closet_item_photo (or fluent_set_closet_item_photo with image_type "primary" when it has no photo yet) instead of creating it again. In UI-capable hosts, a successful create directly presents the exact saved item in the current Closet app; the reviewHandoff is the text-only/non-UI fallback. A created item is active; ingestion_review is a render presentation mode, not a pending_review lifecycle status. Fluent does not inspect images, browse or scrape product pages, resolve product galleries, generate images, or infer taste; you own the visual judgment. For explicit user-approved closet onboarding only.',
       inputSchema: {
         approval: fluentVNextRecipeWriteApprovalSchema,
-        category: z.enum(['TOP', 'BOTTOM', 'OUTERWEAR', 'SHOE', 'ACCESSORY']).describe('Canonical category (closed set).'),
+        category: z.enum(['TOP', 'BOTTOM', 'OUTERWEAR', 'SHOE', 'ACCESSORY', 'ONE_PIECE']).describe('Canonical category (closed set). Use ONE_PIECE for dresses, jumpsuits, rompers and overalls.'),
         subcategory: z.string().min(1).describe('Short garment type, e.g. Tee, Jean, Sneaker.'),
         brand: z.string().nullable().optional().describe('Brand from a legible tag; null if unsure (do not guess).'),
         name: z.string().nullable().optional(),
@@ -2515,7 +2271,7 @@ export function registerCoreMcpSurface(
         overall_confidence: z.number().min(0).max(1).nullable().optional(),
         host_model: z.string().nullable().optional().describe('Identifier of the host model that produced this profile.'),
         image_file: openAiFileParamSchema.nullable().optional(),
-        image_url: z.string().min(1).max(26_700_128).nullable().optional().describe('Optional direct public HTTPS image URL that the host already inspected and confirmed shows this garment. With catalog_ready=true Fluent copies, validates, hashes, and owns the image bytes before the atomic create; without catalog_ready it is kept by reference as the item\'s ordinary photo. Do not pass a product page or gallery URL. A ChatGPT upload link (files.oaiusercontent.com or chatgpt.com estuary content) is copied into Fluent-owned storage at write time, and a data: URL must contain real JPEG, PNG, or WebP bytes. Never pass an app-internal image handle (for example a code-mode image reference) or a local file path: Fluent saves the item without that photo (never Catalog-approved) and returns the exact step to attach it.'),
+        image_url: z.string().min(1).max(26_700_128).nullable().optional().describe('Optional direct public HTTPS image URL that the host already inspected and confirmed shows this garment. With catalog_ready=true Fluent copies, validates, hashes, and owns the image bytes before the atomic create (a self-hosted runtime without strict public fetching does not download links, so there a Catalog photo must be sent as image bytes and a link saves the item without its photo); without catalog_ready it is saved as the item\'s ordinary photo after the create: hosted Fluent copies it into its own storage (the link is kept as the source), and if the image cannot be downloaded the item is saved without the photo and the result says so; a self-hosted runtime without strict public fetching keeps the link instead. Do not pass a product page or gallery URL. A ChatGPT upload link (files.oaiusercontent.com or chatgpt.com estuary content) is copied into Fluent-owned storage at write time, and a data: URL must contain real JPEG, PNG, or WebP bytes. Never pass an app-internal image handle (for example a code-mode image reference) or a local file path: Fluent saves the item without that photo (never Catalog-approved) and returns the exact step to attach it.'),
         image_data_url: z.string().min(1).max(26_700_128).nullable().optional().describe('Optional host-inspected full-resolution JPEG, PNG, or WebP data URL to store as owned Fluent media. Use for local files; never pass an uninspected image. Fluent validates the data-URL MIME, base64 payload, byte signature, and size server-side.'),
         hosted_file_download_url: z.string().url().nullable().optional().describe('Optional temporary OpenAI-hosted file download URL for an inspected uploaded image. Fluent downloads it once into owned media and never persists the bearer URL.'),
         catalog_ready: z.boolean().nullable().optional().describe('Set true only as host attestation that the submitted primary image is the reviewed Catalog presentation; it then requires exactly one primary image source. Fluent independently binds the stored bytes and source lineage. Omit it for an ordinary photo or for a photo-less save.'),
@@ -2526,8 +2282,8 @@ export function registerCoreMcpSurface(
         source_image_type: z.enum(['alternate', 'fit']).nullable().optional().describe('How to retain host-generated Catalog source evidence. Use fit for an on-you photo; otherwise alternate.'),
         background_removed: z.boolean().nullable().optional().describe('True only when useful transparency/background removal was verified in the submitted bytes.'),
         image_type: fluentStyleImageTypeSchema,
-        on_duplicate: z.enum(['warn', 'force', 'skip']).optional().describe('warn (default) writes nothing and returns candidate matches with discriminating signals for YOU to compare against the garment (Fluent does not decide sameness); skip returns the existing match; force creates anyway.'),
-        duplicate_candidate_id: z.string().min(1).optional().describe('Required with skip or force when Fluent returned duplicate candidates. Names the exact candidate to use or deliberately distinguish from.'),
+        on_duplicate: z.enum(['warn', 'force'], { error: STYLE_ADD_ITEM_SKIP_REJECTION }).optional().describe('warn (default) writes nothing and returns candidate matches with discriminating signals for YOU to compare against the garment (Fluent does not decide sameness). force creates the new item anyway after you judged it a different garment. This tool only creates: for the same garment, use fluent_add_closet_item_photo or fluent_set_closet_item_photo on the existing item instead.'),
+        duplicate_candidate_id: z.string().min(1).optional().describe('Required with force when Fluent returned duplicate candidates: the exact candidate you deliberately distinguish this new item from (recorded as provenance).'),
         client_token: z.string().min(1).max(200).optional().describe('Idempotency token; a retry with the same token returns the same item.'),
         batch_id: z.string().trim().min(1).max(200).optional().describe('Correlates items from one approved import. A possible duplicate still writes nothing; continue unrelated garments and collect warned items for one consolidated decision turn.'),
         provenance: nestedProvenanceSchema.describe('Who/what initiated this explicit user-approved onboarding; acceptance_test provenance stays non-durable.'),
@@ -2536,7 +2292,7 @@ export function registerCoreMcpSurface(
         ...provenanceInputSchema,
       },
       outputSchema: fluentCreateStyleItemOutputSchema,
-      annotations: { title: 'Create Fluent Style Item', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Add Closet Item', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         // Widget-callable so the onboarding/confirm surface can create items; model-visible like the patch tool.
         'openai/widgetAccessible': true,
@@ -2546,7 +2302,9 @@ export function registerCoreMcpSurface(
       },
     }),
     async (args) => {
-      await requireExplicitPublicWriteApproval(args.approval, 'fluent_create_style_item', options.publicWriteRateLimiter);
+      // One operation: this tool only creates. "Use the existing item" is not a create.
+      if ((args as Record<string, unknown>).on_duplicate === 'skip') throw new Error(STYLE_ADD_ITEM_SKIP_REJECTION);
+      await requireExplicitPublicWriteApproval(args.approval, 'fluent_add_closet_item', options.publicWriteRateLimiter);
       const authProps = requireStyleClosetWriteScope();
       const imageOrigin = args.image_origin ?? 'user_source';
       const catalogRequested = args.catalog_ready === true;
@@ -2605,7 +2363,7 @@ export function registerCoreMcpSurface(
         }
       }
       if (catalogReady && sentPrimaryCount > 0 && (args.image_type ?? 'primary') !== 'primary') {
-        throw new Error('fluent_create_style_item requires image_type="primary". Add alternate or fit images only after the presentation-ready item exists.');
+        throw new Error('fluent_add_closet_item requires image_type="primary". Add alternate or fit images only after the presentation-ready item exists.');
       }
       if (imageOrigin === 'host_generated' && args.image_type === 'fit') {
         throw new Error('Host-generated media is display-only and cannot use image_type="fit".');
@@ -2683,7 +2441,8 @@ export function registerCoreMcpSurface(
         fieldEvidence: args.field_evidence,
         fitAssessment: args.fit_assessment,
         overallConfidence: args.overall_confidence,
-        hostModel: args.host_model,
+        // host_model is accepted for cached clients but not stored (plugin guidelines: no diagnostic identifiers).
+        hostModel: null,
         hasImage: imageOrigin === 'user_source' ? media.imageSource !== null : media.sourceImageSource !== null,
         onDuplicate: args.on_duplicate,
         duplicateCandidateId: args.duplicate_candidate_id,
@@ -2772,77 +2531,6 @@ export function registerCoreMcpSurface(
           textSuffix: reportedSuffix,
         });
       };
-      // Retiring the earlier client_token row is a duplicate MERGE into the kept item: one atomic
-      // transaction archives the row and records its canonical redirect, so replaying either the
-      // original or the corrected request resolves to the kept item instead of restoring the row.
-      const archiveSupersededItem = async (currentAck: FluentVNextWriteAck, canonicalItemId: string) => {
-        const supersededItemId = styleCreateAckSupersededItemId(ack);
-        if (!supersededItemId) return currentAck;
-        try {
-          if ((await style.getItem(supersededItemId))?.status !== 'active') return currentAck;
-          const mergeAck = await archiveFluentVNextItem(vNextWriteServices, {
-            disposition: 'duplicate',
-            domain: 'style',
-            itemId: supersededItemId,
-            itemType: 'style_item',
-            mergeIntoItemId: canonicalItemId,
-            provenance: buildStyleClosetMutationProvenance(authProps, args),
-            reason: `Superseded by duplicate resolution to ${canonicalItemId}.`,
-            sourceSnapshot: args.source_snapshot,
-          });
-          const merged: FluentVNextWriteAck = {
-            ...currentAck,
-            payload: {
-              ...(currentAck.payload as Record<string, unknown>),
-              supersededItemArchive: { itemId: supersededItemId, payload: mergeAck.payload, status: 'merged', targetItemId: canonicalItemId },
-            },
-            readAfterWrite: mergeAck.readAfterWrite ?? currentAck.readAfterWrite,
-          };
-          // If the photo write's own readback was unavailable, a NON-degraded merge readback of the
-          // kept item that contains the exact saved photo is authoritative proof again. Otherwise
-          // the unavailable disclosure stays.
-          const mergeReadback = recordOrNull(mergeAck.readAfterWrite);
-          const mergedPayload = merged.payload as Record<string, unknown>;
-          const attachment = recordOrNull(mergedPayload.imageAttachment);
-          const savedPhotoId = recordOrNull(attachment?.payload)?.photoId;
-          if (
-            currentAck.readbackStatus === 'unavailable'
-            && typeof savedPhotoId === 'string'
-            && mergeReadback
-            && recordOrNull(mergeAck.payload)?.readbackDegraded !== true
-            && Array.isArray(mergeReadback.photos)
-            && mergeReadback.photos.some((photo) => recordOrNull(photo)?.id === savedPhotoId)
-          ) {
-            const { readbackStatus: _unavailable, recovery, ...verified } = merged;
-            return {
-              ...verified,
-              boundaries: ack.boundaries,
-              payload: {
-                ...mergedPayload,
-                imageAttachment: {
-                  ...attachment,
-                  // The photo write's own "could not be read back" note is superseded by the verified merge readback.
-                  payload: withoutSupersededReadbackNote(attachment?.payload, recovery),
-                  status: 'attached',
-                },
-              },
-            };
-          }
-          return merged;
-        } catch (archiveError) {
-          return {
-            ...currentAck,
-            payload: {
-              ...(currentAck.payload as Record<string, unknown>),
-              supersededItemArchive: {
-                error: archiveError instanceof Error ? archiveError.message : String(archiveError),
-                itemId: supersededItemId,
-                status: 'failed',
-              },
-            },
-          };
-        }
-      };
       const verifyCommittedStylePhoto = async (
         itemId: string,
         photoId: string,
@@ -2862,7 +2550,6 @@ export function registerCoreMcpSurface(
           return { state: 'unknown' };
         }
       };
-      const imageTargetItemId = styleCreateAckImageTargetItemId(ack);
       if (styleCreateAckIsIdempotentReplay(ack)) {
         const replayAck = {
           ...ack,
@@ -2937,125 +2624,14 @@ export function registerCoreMcpSurface(
           );
         }
       }
-      if (imageSource && imageTargetItemId) {
-        let matchedPhotosBefore: string | null = null;
-        let addToExistingForWrite = false;
-        let writeAttempted = false;
-        try {
-          const sourceImageType = args.source_image_type ?? 'alternate';
-          // A non-Catalog photo must never replace the cover of the existing item the user chose to keep.
-          const matchedItem = await style.getItem(imageTargetItemId);
-          matchedPhotosBefore = matchedItem ? JSON.stringify(matchedItem.photos) : null;
-          const addToExisting = !catalogReady && imageOrigin === 'user_source' && (matchedItem?.photos.length ?? 0) > 0;
-          addToExistingForWrite = addToExisting;
-          writeAttempted = true;
-          const imageAck = await setFluentStyleItemImage(vNextWriteServices, {
-            backgroundRemoved: args.background_removed,
-            catalogReady,
-            duplicateResolution: args.on_duplicate === 'skip' && args.duplicate_candidate_id
-              ? {
-                  batchId: args.batch_id,
-                  candidateId: imageTargetItemId,
-                  clientToken: args.client_token,
-                  decision: 'use_existing',
-                }
-              : null,
-            hostedFileDownloadUrl: imageSource.kind === 'hosted_file_download' || imageSource.kind === 'openai_file_download'
-              ? imageSource.value
-              : null,
-            imageDataUrl: imageSource.kind === 'inline_data_url' ? imageSource.value : null,
-            imageOrigin,
-            imageType: addToExisting ? (args.image_type === 'fit' ? 'fit' : 'alternate') : args.image_type ?? 'primary',
-            imageUrl: !catalogReady && imageSource.kind === 'reference_url' ? imageSource.value : null,
-            itemId: imageTargetItemId,
-            photoAction: addToExisting ? 'add' : null,
-            provenance: buildStyleClosetMutationProvenance(authProps, args),
-            retainedSourceHostedFileDownloadUrl: sourceImageSource?.kind === 'hosted_file_download' || sourceImageSource?.kind === 'openai_file_download'
-              ? sourceImageSource.value
-              : null,
-            retainedSourceImageDataUrl: sourceImageSource?.kind === 'inline_data_url' ? sourceImageSource.value : null,
-            retainedSourceImageType: sourceImageSource ? sourceImageType : null,
-            sourceSnapshot: args.source_snapshot,
-          });
-          const combinedAck = await archiveSupersededItem(
-            mergeStyleCreateImageAck(ack, imageAck, null),
-            imageTargetItemId,
-          );
-          // Describe what was actually written, not what was requested.
-          const effectiveImageType = String(recordOrNull(imageAck.payload)?.imageType ?? (addToExisting ? 'alternate' : args.image_type ?? 'primary'));
-          const attachedText = addToExisting
-            ? `Added ${effectiveImageType === 'alternate' ? 'an alternate' : `a ${effectiveImageType}`} photo alongside the existing cover; the cover is unchanged.`
-            : `Attached the ${effectiveImageType} ${imageOrigin === 'host_generated' ? 'generated image' : 'photo'}.`;
-          return finalize(
-            combinedAck,
-            combinedAck.readbackStatus === 'unavailable'
-              ? `${attachedText} The photo was saved to the existing item, but the item could not be read back. Read the item before making another change; do not re-send the photo.`
-              : attachedText,
-          );
-        } catch (error) {
-          // The write may have committed before a later step (readback, event recording) failed.
-          // "Saved" is decided only from exact-photo evidence (the write's own photo id present
-          // afterward); "left unchanged" only from a verified-unchanged photo set or an image-input
-          // error, which is raised before anything is written. Anything else is "could not confirm".
-          const reason = styleImageNotAttachedReason(error);
-          const writtenPhotoId = recordOrNull(error)?.stylePhotoId;
-          let afterPhotos: string | null = null;
-          let exactPhotoPresent = false;
-          let slotAfter: string | null = null;
-          try {
-            const after = await style.getItem(imageTargetItemId);
-            afterPhotos = after ? JSON.stringify(after.photos) : null;
-            const slot = typeof writtenPhotoId === 'string' ? after?.photos.find((photo) => photo.id === writtenPhotoId) : undefined;
-            exactPhotoPresent = Boolean(slot);
-            slotAfter = slot ? JSON.stringify(slot) : null;
-          } catch {
-            afterPhotos = null;
-          }
-          // Evidence that THIS write landed: the writer's own post-commit marker, or (for an added
-          // photo, whose id is content-addressed) that exact photo present. A role-slot replace reuses
-          // the slot id, so neither its presence nor an unrelated photo-set change counts.
-          const committed = recordOrNull(error)?.styleWriteCommitted === true
-            || (addToExistingForWrite && exactPhotoPresent);
-          if (committed) {
-            return finalize(
-              mergeStyleCreateImageAck(ack, null, null, null, { status: 'attached' }),
-              `The photo was saved to the existing item, but Fluent hit a later error (${reason}). Read the item before making another change; do not re-send the photo.`,
-            );
-          }
-          const verifiedUnchanged = !writeAttempted
-            || isStyleImageInputError(error)
-            || (!exactPhotoPresent && afterPhotos !== null && matchedPhotosBefore !== null && afterPhotos === matchedPhotosBefore);
-          // A replace that did not land leaves its slot exactly as it was before the write, even when
-          // an unrelated concurrent change touched other photos.
-          const slotBefore = typeof writtenPhotoId === 'string' && matchedPhotosBefore !== null
-            ? (JSON.parse(matchedPhotosBefore) as Array<{ id?: unknown }>).find((photo) => photo.id === writtenPhotoId)
-            : undefined;
-          const slotUnchanged = !addToExistingForWrite && slotBefore !== undefined && slotAfter === JSON.stringify(slotBefore);
-          if (!verifiedUnchanged && slotUnchanged) {
-            const failed = catalogReady ? 'Primary Catalog image attachment failed' : 'The photo could not be saved to the existing item';
-            throw new Error(`${failed} (${reason}); no new closet item was created, the requested photo was not saved, and the existing photo in that slot is unchanged.`);
-          }
-          if (!verifiedUnchanged) {
-            throw new Error(`The photo write to the existing item ended with an error (${reason}), and Fluent could not confirm whether it was saved. No new closet item was created. Read the item before retrying; do not say the photo was saved.`);
-          }
-          const failed = catalogReady ? 'Primary Catalog image attachment failed' : 'The photo could not be added to the existing item';
-          const nothingSaved = isStyleImageInputError(error) ? ' Nothing was saved.' : '';
-          throw new Error(`${failed} (${reason}); no new closet item was created and the matched item was left unchanged.${nothingSaved}`);
-        }
-      }
-      if (!imageSource && imageTargetItemId && (ack.payload as { status?: unknown } | null)?.status === 'skipped_duplicate') {
-        // Photo-less "use existing": no media transaction carries the resolution, so the merge
-        // above is the only durable step.
-        return finalize(await archiveSupersededItem(ack, imageTargetItemId));
-      }
       return finalize(ack);
     },
   );
 
   server.registerTool(
-    'fluent_refresh_style_item_profile',
+    'fluent_record_closet_item_feedback',
     withVNextStyleClosetWriteSecurity({
-      title: 'Refresh Fluent Style Item Profile',
+      title: 'Record Closet Item Feedback',
       description:
         'Refresh selected profile fields or typed natural-language wear feedback on an EXISTING saved Style closet item from explicit host/user evidence. This is the durable home for tags, descriptors, fit/wear learning, and recommendation corrections. Fluent rank-merges each field, preserves stronger existing evidence, never infers unworn from silence, and returns read-after-write proof.',
       inputSchema: {
@@ -3082,7 +2658,7 @@ export function registerCoreMcpSurface(
         source_skill: provenanceInputSchema.source_skill,
         source_type: provenanceInputSchema.source_type,
       },
-      annotations: { title: 'Refresh Fluent Style Item Profile', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { title: 'Record Closet Item Feedback', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
       },
@@ -3090,7 +2666,7 @@ export function registerCoreMcpSurface(
     async (args) => {
       await requireExplicitPublicWriteApproval(
         args.approval,
-        'fluent_refresh_style_item_profile',
+        'fluent_record_closet_item_feedback',
         options.publicWriteRateLimiter,
       );
       const authProps = requireStyleClosetWriteScope();
@@ -3112,13 +2688,13 @@ export function registerCoreMcpSurface(
         Object.prototype.hasOwnProperty.call(rawProfile, key));
       const profileFeedbackRequested = presentFeedbackProfileKeys.length > 0;
       if (args.feedback && profileFeedbackRequested) {
-        throw new Error('fluent_refresh_style_item_profile feedback fields must be passed in feedback or profile, not both.');
+        throw new Error('fluent_record_closet_item_feedback feedback fields must be passed in feedback or profile, not both.');
       }
       const profileFeedbackInput: Record<string, unknown> = {};
       for (const key of presentFeedbackProfileKeys) {
         const canonicalKey = feedbackProfileAliases[key];
         if (Object.prototype.hasOwnProperty.call(profileFeedbackInput, canonicalKey)) {
-          throw new Error(`fluent_refresh_style_item_profile profile contains multiple aliases for feedback field ${canonicalKey}.`);
+          throw new Error(`fluent_record_closet_item_feedback profile contains multiple aliases for feedback field ${canonicalKey}.`);
         }
         profileFeedbackInput[canonicalKey] = rawProfile[key];
       }
@@ -3131,19 +2707,19 @@ export function registerCoreMcpSurface(
         delete genericProfile[key];
       }
       if (!args.profile && !args.feedback) {
-        throw new Error('fluent_refresh_style_item_profile requires profile, feedback, or both.');
+        throw new Error('fluent_record_closet_item_feedback requires profile, feedback, or both.');
       }
       if (feedback && Object.keys(feedback).length === 0) {
-        throw new Error('fluent_refresh_style_item_profile feedback must include at least one typed feedback field.');
+        throw new Error('fluent_record_closet_item_feedback feedback must include at least one typed feedback field.');
       }
       if (feedback && args.source !== 'user' && args.source !== 'user_correction') {
-        throw new Error('fluent_refresh_style_item_profile feedback requires source="user" or source="user_correction".');
+        throw new Error('fluent_record_closet_item_feedback feedback requires source="user" or source="user_correction".');
       }
       if (feedback) {
         for (const key of ['avoidFor', 'feedbackNote', 'feedbackSignals', 'wearUnderstanding', 'worksFor']) {
           const fieldSource = args.field_sources?.[key]?.source;
           if (fieldSource && fieldSource !== 'user' && fieldSource !== 'user_correction') {
-            throw new Error(`fluent_refresh_style_item_profile feedback field ${key} requires user evidence.`);
+            throw new Error(`fluent_record_closet_item_feedback feedback field ${key} requires user evidence.`);
           }
         }
       }
@@ -3171,7 +2747,7 @@ export function registerCoreMcpSurface(
         ),
         fitAssessment: args.fit_assessment,
         hasImage: args.has_image === true,
-        hostModel: args.host_model ?? null,
+        hostModel: null,
         itemId: args.item_id,
         profile,
         provenance: buildStyleClosetMutationProvenance(authProps, args),
@@ -3186,20 +2762,21 @@ export function registerCoreMcpSurface(
   );
 
   server.registerTool(
-    'fluent_set_style_item_image',
+    'fluent_set_closet_item_photo',
     withVNextStyleClosetWriteSecurity({
-      title: 'Set Fluent Style Item Image',
+      title: 'Set Closet Item Photo',
       description:
-        'Set one inspected source image or host-generated Catalog display image for a saved Style closet item and return read-after-write proof. In ChatGPT, pass an uploaded, selected, or generated image through image_file. Set catalog_ready=true only after reviewing the final primary Catalog presentation; for host-generated media, also provide source_photo_id for the exact retained non-generated source on this item. Fluent stores and hashes inline/hosted-file bytes and atomically binds the reviewed Catalog to its source. It never inspects images or browses product pages. A fit or alternate photo is ADDED by default (every saved photo and the cover are kept; repeating the same image and role is a no-op); only a primary photo or an explicit photo_action="replace" replaces its slot.',
-      inputSchema: {
+        'Set the photo in one role slot of a saved closet item (primary cover, alternate or fit), replacing what that slot held, with read-after-write proof. In ChatGPT, pass an uploaded, selected, or generated image through image_file. Set catalog_ready=true only after reviewing the final primary Catalog presentation; for host-generated media, also provide source_photo_id for the exact retained non-generated source on this item. Fluent stores and hashes inline/hosted-file bytes and atomically binds the reviewed Catalog to its source. It never inspects images or browses product pages. To add another photo while keeping every saved photo and the cover, use fluent_add_closet_item_photo.',
+      // Passthrough so a call that still sends photo_action reaches the handler and is rejected with
+      // fluent_add_closet_item_photo named, instead of silently replacing a slot.
+      inputSchema: z.object({
         approval: fluentVNextRecipeWriteApprovalSchema,
         background_removed: z.boolean().nullable().optional().describe('True only when useful transparency/background removal was verified in the submitted bytes.'),
-        photo_action: z.enum(['add', 'replace']).optional().describe('Use add for another original product, detail or fit photo on an existing item: preserves every saved photo and the current cover. Repeating the same input and role reuses the same added photo. When omitted, fit and alternate user_source photos are added (hosts whose schema has no photo_action, such as the published ChatGPT app 1.0.0, get the non-destructive behavior); primary, host-generated, and Catalog-ready writes keep role-slot replacement. Use replace only to deliberately replace a role slot. Add cannot set primary or approve a Catalog.'),
         caption: z.string().nullable().optional(),
         catalog_ready: z.boolean().nullable().optional().describe('Set true only for a reviewed primary Catalog presentation. Fluent will derive and persist byte/source bindings; no later widget normalization is required.'),
         image_type: fluentStyleImageTypeSchema,
         image_file: openAiFileParamSchema.nullable().optional(),
-        image_url: z.string().min(1).max(26_700_128).nullable().optional().describe('Host-inspected direct image URL to retain by reference only when catalog_ready is false. Catalog-ready media requires owned bytes. A ChatGPT upload link (files.oaiusercontent.com or chatgpt.com estuary content) is copied into Fluent-owned storage at write time, and a data: URL must contain real JPEG, PNG, or WebP bytes. Never pass an app-internal image handle (for example a code-mode image reference) or a local file path: it is rejected, nothing is saved, and the error gives the exact data-URL step.'),
+        image_url: z.string().min(1).max(26_700_128).nullable().optional().describe('Host-inspected direct public HTTPS image URL, only when catalog_ready is false. Hosted Fluent downloads the image once and keeps its own copy (the link is kept as the source); if the download is refused or is not an image, nothing is saved and the error says so. A self-hosted runtime without strict public fetching keeps the link instead. Catalog-ready media requires owned bytes. A ChatGPT upload link (files.oaiusercontent.com or chatgpt.com estuary content) is copied into Fluent-owned storage at write time, and a data: URL must contain real JPEG, PNG, or WebP bytes. Never pass an app-internal image handle (for example a code-mode image reference) or a local file path: it is rejected, nothing is saved, and the error gives the exact data-URL step.'),
         image_data_url: z.string().min(1).max(26_700_128).nullable().optional().describe('Host-inspected full-resolution JPEG, PNG, or WebP data URL to store as owned Fluent media. Fluent validates the data-URL MIME, base64 payload, byte signature, and size server-side.'),
         hosted_file_download_url: z.string().url().nullable().optional().describe('Temporary OpenAI-hosted download URL for an inspected upload or ChatGPT-generated image, including its signed chatgpt.com/backend-api/estuary/content URL. Fluent copies the bytes into owned media and does not retain this URL.'),
         image_origin: fluentStyleImageOriginSchema,
@@ -3209,17 +2786,20 @@ export function registerCoreMcpSurface(
         response_mode: fluentStyleClosetWriteResponseModeSchema,
         source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
         ...provenanceInputSchema,
-      },
-      annotations: { title: 'Set Fluent Style Item Image', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      }).passthrough(),
+      annotations: { title: 'Set Closet Item Photo', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
         'openai/fileParams': ['image_file'],
       },
     }),
     async (args) => {
+      if ((args as Record<string, unknown>).photo_action !== undefined) {
+        throw new Error('fluent_set_closet_item_photo no longer accepts photo_action. No changes were saved. It always sets a role slot; to add another photo while keeping every saved photo and the cover, use fluent_add_closet_item_photo.');
+      }
       await requireExplicitPublicWriteApproval(
         args.approval,
-        'fluent_set_style_item_image',
+        'fluent_set_closet_item_photo',
         options.publicWriteRateLimiter,
       );
       const authProps = requireStyleClosetWriteScope();
@@ -3228,19 +2808,8 @@ export function registerCoreMcpSurface(
       let ack: FluentVNextWriteAck;
       try {
       const imageSource = publicStyleImageSource(args, true)!;
-      // Hosts without photo_action (the cached ChatGPT 1.0.0 schema) must not lose a photo: an
-      // omitted action for an ordinary fit/alternate photo adds instead of replacing the role slot.
-      // No call-shape heuristics: an omitted action ALWAYS adds for fit/alternate, and only an explicit
-      // photo_action "replace" replaces a role slot. Accepted consequence: the frozen legacy closet
-      // widgets (closet-manager.ts v8-v33, closet-manager-v7.ts) have a "Replace fit photo" button that
-      // omits photo_action, so it now appends a photo instead (non-destructive; the label is stale).
-      // Their byte-pinned HTML is cached by hosts per URI, so it is intentionally not edited.
-      const photoAction = args.photo_action
-        ?? ((args.image_type === 'fit' || args.image_type === 'alternate')
-          && (args.image_origin ?? 'user_source') === 'user_source'
-          && args.catalog_ready !== true
-          ? 'add'
-          : undefined);
+      // One operation: this tool always sets (replaces) a role slot. Adding uses fluent_add_closet_item_photo.
+      const photoAction = 'replace' as const;
       ack = await setFluentStyleItemImage(vNextWriteServices, {
         photoAction,
         backgroundRemoved: args.background_removed,
@@ -3258,6 +2827,65 @@ export function registerCoreMcpSurface(
         sourcePhotoId: args.source_photo_id,
         sourceSnapshot: args.source_snapshot,
       });
+      } catch (error) {
+        throw withNothingSavedNote(error);
+      }
+      return toolResult(ack, {
+        structuredContent: ack,
+        textData: typeof (ack.payload as Record<string, unknown> | undefined)?.hostResponseInstruction === 'string'
+          ? (ack.payload as Record<string, unknown>).hostResponseInstruction as string
+          : `Image write result for ${args.item_id}; verify the read-after-write result before reporting success.`,
+      });
+    },
+  );
+
+  server.registerTool(
+    'fluent_add_closet_item_photo',
+    withVNextStyleClosetWriteSecurity({
+      title: 'Add Closet Item Photo',
+      description:
+        'Add one more original photo (a product or detail photo, or an on-you fit photo) to a saved closet item, with read-after-write proof. Every saved photo and the current cover are kept; repeating the same image and role reuses the photo already added. In ChatGPT, pass an uploaded or selected image through image_file. Fluent copies the image into its own storage, stores and hashes the bytes, and never inspects images or browses product pages. Verify the returned photoId. To change the cover or a role slot, use fluent_set_closet_item_photo.',
+      inputSchema: {
+        approval: fluentVNextRecipeWriteApprovalSchema,
+        caption: z.string().nullable().optional(),
+        image_type: z.enum(['alternate', 'fit']).describe('alternate for a product or detail photo; fit for an on-you photo.'),
+        image_file: openAiFileParamSchema.nullable().optional(),
+        image_url: z.string().min(1).max(26_700_128).nullable().optional().describe('Host-inspected direct public HTTPS image URL. Hosted Fluent downloads the image once and keeps its own copy (the link is kept as the source). Never pass a product page or gallery URL.'),
+        image_data_url: z.string().min(1).max(26_700_128).nullable().optional().describe('Host-inspected full-resolution JPEG, PNG, or WebP data URL to store as owned Fluent media. Fluent validates the data-URL MIME, base64 payload, byte signature, and size server-side.'),
+        hosted_file_download_url: z.string().url().nullable().optional().describe('Temporary OpenAI-hosted download URL for an inspected upload. Fluent copies the bytes into owned media and does not retain the URL.'),
+        item_id: z.string().min(1).describe('Existing saved closet item ID.'),
+        provenance: nestedProvenanceSchema.describe('Who/what initiated this explicit user-approved photo add; acceptance_test provenance stays non-durable.'),
+        response_mode: fluentStyleClosetWriteResponseModeSchema,
+        source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
+        ...provenanceInputSchema,
+      },
+      annotations: { title: 'Add Closet Item Photo', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: {
+        'openai/widgetAccessible': true,
+        'openai/fileParams': ['image_file'],
+      },
+    }),
+    async (args) => {
+      await requireExplicitPublicWriteApproval(args.approval, 'fluent_add_closet_item_photo', options.publicWriteRateLimiter);
+      const authProps = requireStyleClosetWriteScope();
+      let ack: FluentVNextWriteAck;
+      try {
+        const imageSource = publicStyleImageSource(args, true)!;
+        ack = await setFluentStyleItemImage(vNextWriteServices, {
+          photoAction: 'add',
+          catalogReady: false,
+          caption: args.caption ?? null,
+          hostedFileDownloadUrl: imageSource.kind === 'hosted_file_download' || imageSource.kind === 'openai_file_download'
+            ? imageSource.value
+            : null,
+          imageDataUrl: imageSource.kind === 'inline_data_url' ? imageSource.value : null,
+          imageOrigin: 'user_source',
+          imageType: args.image_type,
+          imageUrl: imageSource.kind === 'reference_url' ? imageSource.value : null,
+          itemId: args.item_id,
+          provenance: buildStyleClosetMutationProvenance(authProps, args),
+          sourceSnapshot: args.source_snapshot,
+        });
       } catch (error) {
         throw withNothingSavedNote(error);
       }
@@ -3313,12 +2941,14 @@ export function registerCoreMcpSurface(
   );
 
   server.registerTool(
-    'fluent_archive_item',
-    withVNextBudgetWriteSecurity({
-      title: 'Archive Fluent Item',
+    'fluent_archive_closet_item',
+    withVNextSharedProfileWriteSecurity({
+      title: 'Archive Closet Item',
       description:
-        'Archive a typed domain item through the canonical domain service with an explicit reason, disposition, provenance, and read-after-write proof. For Meals this supports meal plans, recipes, and inventory items; archiving a meal plan also removes only its linked grocery intents and derived grocery state from the active list. Use for returned, sold, donated, gifted, worn-out, never-purchased, duplicate, cancelled, or otherwise gone items. This removes an item from active memory without deleting audit history.',
-      inputSchema: {
+        'Archive one closet item the user no longer has, with an explicit reason, disposition, provenance and read-after-write proof. Use for returned, sold, donated, gifted, worn-out, never-purchased, cancelled, or otherwise gone items. The item leaves the active closet; audit history is kept and fluent_restore_closet_item brings it back. This tool only archives: to combine a duplicate record into the item that stays, use fluent_merge_closet_items. Meals is retired; domain="meals" archives nothing.',
+      // Passthrough so a call that still sends the former merge parameters reaches the handler and is
+      // rejected with fluent_merge_closet_items named, instead of silently archiving without a merge.
+      inputSchema: z.object({
         approval: fluentVNextRecipeWriteApprovalSchema,
         domain: fluentVNextArchiveDomainSchema,
         disposition: z.enum(['returned', 'sold', 'donated', 'gifted', 'worn_out', 'never_purchased', 'duplicate', 'other']).optional().describe(
@@ -3332,24 +2962,18 @@ export function registerCoreMcpSurface(
           item_id: z.string().min(1).optional().describe('Required with by="id": stable Fluent item ID from a current readback.'),
           item_name: z.string().min(1).optional().describe('Required with by="name": exact saved item name from a current readback.'),
         }).strict().optional().describe('Legacy archive target accepted for cached clients; equivalent to item_id or item_name. Prefer item_id.'),
-        merge_into_item_id: z.string().optional().describe(
-          'Style duplicate only: exact existing closet item that should remain active. Fluent atomically moves the duplicate item photos into this canonical item, fills only missing core details, and archives the redundant source item.',
-        ),
-        merge_operation_id: z.string().uuid().optional().describe(
-          'Style duplicate only: client-generated cycle identity binding this exact combine action to its reversible Undo.',
-        ),
         reason: z.string().optional(),
         response_mode: writeResponseModeSchema,
         source_snapshot: fluentVNextSourceSnapshotSchema.optional(),
         ...provenanceInputSchema,
-      },
-      annotations: { title: 'Archive Fluent Item', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
+      }).passthrough(),
+      annotations: { title: 'Archive Closet Item', readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false },
       _meta: {
         'openai/widgetAccessible': true,
         ui: {
           // Model-callable (not app-only): an explicit user signal like "I donated this" should let
           // the host archive directly with read-after-write proof. Archive is reversible
-          // (status:'active' restores), audited, and destructiveHint:false, so it is a safe model
+          // (fluent_restore_closet_item restores), audited and reviewed, so it is a safe model
           // write; the "explicit signal only, never infer" gate lives in fluent-guidance.ts, not by
           // hiding the tool. Still widget-callable (openai/widgetAccessible) for the closet manager.
           visibility: ['model', 'app'],
@@ -3357,8 +2981,18 @@ export function registerCoreMcpSurface(
       },
     }),
     async (args) => {
-      await requireExplicitPublicWriteApproval(args.approval, 'fluent_archive_item', options.publicWriteRateLimiter);
+      const raw = args as Record<string, unknown>;
+      if (styleArchiveRequestsDuplicateMerge({
+        mergeIntoItemId: raw.merge_into_item_id as string | null | undefined,
+        mergeOperationId: raw.merge_operation_id as string | null | undefined,
+        provenance: buildMutationProvenance(getFluentAuthProps(), args),
+        sourceSnapshot: args.source_snapshot,
+      })) {
+        throw new Error('fluent_archive_closet_item only archives and no longer merges duplicates. No changes were saved. To combine a duplicate into the item that stays, use fluent_merge_closet_items with item_id, merge_into_item_id and merge_operation_id.');
+      }
+      await requireExplicitPublicWriteApproval(args.approval, 'fluent_archive_closet_item', options.publicWriteRateLimiter);
       const authProps = requireArchiveItemWriteScope(args.domain);
+      if (isMealsRetiredReadRequest({ domain: args.domain, itemType: args.item_type })) return mealsRetiredToolResult();
       const { itemId, itemName } = resolveArchiveItemTarget(args);
       return vNextToolResult(
         await archiveFluentVNextItem(vNextWriteServices, {
@@ -3367,8 +3001,6 @@ export function registerCoreMcpSurface(
           itemId,
           itemName,
           itemType: args.item_type,
-          mergeIntoItemId: args.merge_into_item_id,
-          mergeOperationId: args.merge_operation_id,
           provenance: buildMutationProvenance(authProps, args),
           reason: args.reason,
           sourceSnapshot: args.source_snapshot,
@@ -3428,34 +3060,6 @@ export function registerCoreMcpSurface(
         structuredContent: buildFluentAccountStatusToolView(status) as unknown as Record<string, unknown>,
         textData: buildFluentAccountStatusToolText(status),
       });
-    },
-  );
-
-  server.registerTool(
-    'fluent_update_profile',
-    {
-      title: 'Update Fluent Profile',
-      annotations: { title: 'Update Fluent Profile' },
-      description: 'Update the shared Fluent profile display name, timezone, or metadata.',
-      inputSchema: {
-        display_name: z.string().optional(),
-        timezone: z.string().optional(),
-        metadata: z.any().optional(),
-        ...provenanceInputSchema,
-      },
-    },
-    async (args) => {
-      const authProps = requireAnyScope([FLUENT_MEALS_WRITE_SCOPE, FLUENT_HEALTH_WRITE_SCOPE, FLUENT_STYLE_WRITE_SCOPE]);
-      return toolResult(
-        await fluentCore.updateProfile(
-          {
-            displayName: args.display_name,
-            metadata: args.metadata,
-            timezone: args.timezone,
-          },
-          buildMutationProvenance(authProps, args),
-        ),
-      );
     },
   );
 
@@ -3595,17 +3199,13 @@ function buildFluentVNextReadServices(
   fluentCore: FluentCoreService,
   meals: MealsService,
   style: StyleService,
-  budgets: BudgetsService,
 ): FluentVNextReadServices {
   return {
-    budgets: {
-      getPurchaseContext: (input) => budgets.getPurchaseContext(input),
-    },
     core: {
       getAccountStatus: () => fluentCore.getAccountStatus(),
       getCapabilities: () => fluentCore.getCapabilities(),
       getProfile: () => fluentCore.getProfile(),
-      listPersonFacts: (input) => fluentCore.listPersonFacts(input),
+      listPersonFacts: async (input) => withoutMealsRetiredPersonFacts(await fluentCore.listPersonFacts(input)),
     },
     meals: {
       getCurrentGroceryList: (input) => meals.getCurrentGroceryList(input),
@@ -3637,23 +3237,18 @@ function buildFluentVNextWriteServices(
   fluentCore: FluentCoreService,
   meals: MealsService,
   style: StyleService,
-  budgets: BudgetsService,
-  options: { publicWriteRateLimiter?: FluentRateLimitBinding } = {},
+  options: { publicWriteRateLimiter?: FluentRateLimitBinding; writeOperations?: WriteOperationsStore } = {},
 ): FluentVNextWriteServices {
   return {
-    ...buildFluentVNextReadServices(fluentCore, meals, style, budgets),
+    ...buildFluentVNextReadServices(fluentCore, meals, style),
     publicWriteRateLimiter: options.publicWriteRateLimiter,
-    budgets: {
-      getPurchaseContext: (input) => budgets.getPurchaseContext(input),
-      logBudgetSpend: (input) => budgets.logBudgetSpend(input),
-      setBudgetEnvelope: (input) => budgets.setBudgetEnvelope(input),
-    },
+    writeOperations: options.writeOperations,
     core: {
       appendPersonConsentEvent: (input, provenance) => fluentCore.appendPersonConsentEvent(input, provenance),
       getAccountStatus: () => fluentCore.getAccountStatus(),
       getCapabilities: () => fluentCore.getCapabilities(),
       getProfile: () => fluentCore.getProfile(),
-      listPersonFacts: (input) => fluentCore.listPersonFacts(input),
+      listPersonFacts: async (input) => withoutMealsRetiredPersonFacts(await fluentCore.listPersonFacts(input)),
       rejectPersonFact: (input, provenance) => fluentCore.rejectPersonFact(input, provenance),
       updateProfile: (input, provenance) => fluentCore.updateProfile(input, provenance),
       upsertPersonFact: (input, provenance) => fluentCore.upsertPersonFact(input, provenance),
@@ -3717,19 +3312,7 @@ function requireVNextReadScope(domain: string): void {
     requireScopes([FLUENT_STYLE_READ_SCOPE]);
     return;
   }
-  if (domain === 'wellbeing') {
-    requireScopes([FLUENT_HEALTH_READ_SCOPE]);
-    return;
-  }
   requireAnyScope([FLUENT_MEALS_READ_SCOPE, FLUENT_HEALTH_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
-}
-
-function requireBudgetReadScope(category: BudgetCategory): void {
-  if (category === 'style-clothing') {
-    requireScopes([FLUENT_STYLE_READ_SCOPE]);
-    return;
-  }
-  requireScopes([FLUENT_MEALS_READ_SCOPE]);
 }
 
 function requireVNextWriteScope(domain: string) {
@@ -3737,16 +3320,6 @@ function requireVNextWriteScope(domain: string) {
     return requireScopes([FLUENT_MEALS_WRITE_SCOPE]);
   }
   if (domain === 'style') {
-    return requireScopes([FLUENT_STYLE_WRITE_SCOPE]);
-  }
-  if (domain === 'wellbeing') {
-    return requireScopes([FLUENT_HEALTH_WRITE_SCOPE]);
-  }
-  return requireScopes([FLUENT_MEALS_WRITE_SCOPE]);
-}
-
-function requireBudgetWriteScope(category: BudgetCategory) {
-  if (category === 'style-clothing') {
     return requireScopes([FLUENT_STYLE_WRITE_SCOPE]);
   }
   return requireScopes([FLUENT_MEALS_WRITE_SCOPE]);
@@ -3759,7 +3332,7 @@ function requireArchiveItemWriteScope(domain: string) {
   if (domain === 'meals') {
     return requireScopes([FLUENT_MEALS_WRITE_SCOPE]);
   }
-  throw new Error('fluent_archive_item supports only meals and style domains.');
+  throw new Error('fluent_archive_closet_item supports only meals and style domains.');
 }
 
 function requireStyleClosetWriteScope() {
