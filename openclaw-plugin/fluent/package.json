@@ -24,8 +24,8 @@
   "license": "MIT",
   "keywords": [
     "fluent",
-    "meals",
     "style",
+    "closet",
     "openclaw",
     "plugin",
     "personal-mcp"
@@ -57,8 +57,8 @@
       "oss"
     ],
     "defaultDeploymentTrack": "oss",
-    "minimumContractVersion": "2026-07-09.fluent-core-v2.0",
-    "currentReferenceContractVersion": "2026-07-09.fluent-core-v2.0",
+    "minimumContractVersion": "2026-10-08.fluent-core-v2.3",
+    "currentReferenceContractVersion": "2026-10-08.fluent-core-v2.3",
     "requiredHostedScopes": [
       "meals:read",
       "meals:write",

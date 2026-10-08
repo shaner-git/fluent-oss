@@ -119,7 +119,9 @@ export function buildMutationProvenance(
     actorName: props.name ?? null,
     confidence: typeof input.confidence === 'number' ? input.confidence : null,
     scopes: props.scope ?? [],
-    sessionId: input.session_id?.trim() || null,
+    // Plugin guidelines: no session or conversation identifiers. The schema still accepts session_id for
+    // cached clients, but Fluent no longer stores it.
+    sessionId: null,
     sourceAgent:
       input.source_agent?.trim() ||
       props.oauthClientName?.trim() ||

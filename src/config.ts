@@ -19,6 +19,10 @@ export interface CoreRuntimeBindings {
   publicWriteRateLimiter?: FluentRateLimitBinding;
   storageBackend: FluentStorageBackend;
   styleImageThumbnails?: boolean;
+  // True only where outbound fetch refuses private/internal destinations after DNS resolution
+  // (Cloudflare's global_fetch_strictly_public, set in wrangler.jsonc). Linked closet photos are
+  // copied into owned storage only then; elsewhere they stay by reference (no server-side fetch).
+  strictPublicFetch?: boolean;
 }
 
 export interface CloudRuntimeEnv {
@@ -103,6 +107,7 @@ export function coreBindingsFromCloudEnv(env: CloudRuntimeEnv): CoreRuntimeBindi
     publicWriteRateLimiter: env.FLUENT_PUBLIC_WRITE_RATE_LIMITER,
     storageBackend: 'd1-r2',
     styleImageThumbnails: Boolean(env.IMAGES),
+    strictPublicFetch: true,
   };
 }
 

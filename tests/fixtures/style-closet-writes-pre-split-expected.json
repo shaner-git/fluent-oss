@@ -1,0 +1,3013 @@
+{
+  "source": "a46f33e4: pre-split MCP server, former multiplexed tools (fluent_update_style_item_patch, fluent_archive_item)",
+  "results": {
+    "cover": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_patch",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.managePhotoLibrary",
+      "payload": {
+        "durable": true,
+        "photoLibrary": {
+          "state": {
+            "hidden": [],
+            "order": [],
+            "coverId": "style-photo:twin-2"
+          }
+        }
+      },
+      "readAfterWrite": {
+        "hidden": [],
+        "order": [],
+        "coverId": "style-photo:twin-2"
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "reorder": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_patch",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.managePhotoLibrary",
+      "payload": {
+        "durable": true,
+        "photoLibrary": {
+          "state": {
+            "hidden": [],
+            "order": [
+              "style-photo:twin-2",
+              "style-photo:twin-3",
+              "style-photo:twin-1"
+            ],
+            "coverId": "style-photo:twin-2"
+          }
+        }
+      },
+      "readAfterWrite": {
+        "hidden": [],
+        "order": [
+          "style-photo:twin-2",
+          "style-photo:twin-3",
+          "style-photo:twin-1"
+        ],
+        "coverId": "style-photo:twin-2"
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "hide": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_patch",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.managePhotoLibrary",
+      "payload": {
+        "durable": true,
+        "photoLibrary": {
+          "state": {
+            "hidden": [
+              "style-photo:twin-3"
+            ],
+            "order": [
+              "style-photo:twin-2",
+              "style-photo:twin-3",
+              "style-photo:twin-1"
+            ],
+            "coverId": "style-photo:twin-2"
+          }
+        }
+      },
+      "readAfterWrite": {
+        "hidden": [
+          "style-photo:twin-3"
+        ],
+        "order": [
+          "style-photo:twin-2",
+          "style-photo:twin-3",
+          "style-photo:twin-1"
+        ],
+        "coverId": "style-photo:twin-2"
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "undoPhotoChange": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_patch",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.managePhotoLibrary",
+      "payload": {
+        "durable": true,
+        "photoLibrary": {
+          "state": {
+            "hidden": [],
+            "order": [
+              "style-photo:twin-2",
+              "style-photo:twin-3",
+              "style-photo:twin-1"
+            ],
+            "coverId": "style-photo:twin-2"
+          }
+        }
+      },
+      "readAfterWrite": {
+        "hidden": [],
+        "order": [
+          "style-photo:twin-2",
+          "style-photo:twin-3",
+          "style-photo:twin-1"
+        ],
+        "coverId": "style-photo:twin-2"
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "replace": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_patch",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.managePhotoLibrary",
+      "payload": {
+        "durable": true,
+        "photoLibrary": {
+          "state": {
+            "hidden": [
+              "style-photo:twin-1"
+            ],
+            "order": [
+              "style-photo:twin-2",
+              "style-photo:twin-3"
+            ],
+            "coverId": "style-photo:twin-2"
+          }
+        }
+      },
+      "readAfterWrite": {
+        "hidden": [
+          "style-photo:twin-1"
+        ],
+        "order": [
+          "style-photo:twin-2",
+          "style-photo:twin-3"
+        ],
+        "coverId": "style-photo:twin-2"
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "hideCover": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_patch",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.managePhotoLibrary",
+      "payload": {
+        "durable": true,
+        "photoLibrary": {
+          "state": {
+            "hidden": [
+              "style-photo:twin-1",
+              "style-photo:twin-2"
+            ],
+            "order": [
+              "style-photo:twin-2",
+              "style-photo:twin-3"
+            ],
+            "coverId": "style-photo:twin-3"
+          }
+        }
+      },
+      "readAfterWrite": {
+        "hidden": [
+          "style-photo:twin-1",
+          "style-photo:twin-2"
+        ],
+        "order": [
+          "style-photo:twin-2",
+          "style-photo:twin-3"
+        ],
+        "coverId": "style-photo:twin-3"
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "photoLibraryState": {
+      "hidden": [
+        "style-photo:twin-1",
+        "style-photo:twin-2"
+      ],
+      "order": [
+        "style-photo:twin-2",
+        "style-photo:twin-3"
+      ],
+      "hiddenVersions": {
+        "style-photo:twin-1": "[\"style-photo:twin-1\",\"artifact:style-photo:twin-1\",\"artifact:style-photo:<uuid>\",null,1,0,0]",
+        "style-photo:twin-2": "[\"style-photo:twin-2\",\"artifact:style-photo:twin-2\",\"artifact:style-photo:<uuid>\",null,0,0,0]"
+      },
+      "coverId": "style-photo:twin-3",
+      "undo": {
+        "before": {
+          "hidden": [
+            "style-photo:twin-1"
+          ],
+          "order": [
+            "style-photo:twin-2",
+            "style-photo:twin-3"
+          ],
+          "hiddenVersions": {
+            "style-photo:twin-1": "[\"style-photo:twin-1\",\"artifact:style-photo:twin-1\",\"artifact:style-photo:<uuid>\",null,1,0,0]"
+          },
+          "coverId": "style-photo:twin-2"
+        }
+      }
+    },
+    "productDetails": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_patch",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.saveProductReference",
+      "payload": {
+        "durable": true,
+        "productReference": {
+          "reference": {
+            "status": "confirmed",
+            "match_basis": "user_confirmed",
+            "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+            "brand": "COS",
+            "name": "Textured Knitted Cotton T-Shirt",
+            "product_code": "1273306003",
+            "sources": [
+              {
+                "id": "listing",
+                "kind": "retailer",
+                "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                "observed_at": "<time>"
+              }
+            ],
+            "facts": {
+              "composition": {
+                "value": "100% cotton",
+                "source_id": "listing"
+              }
+            }
+          }
+        }
+      },
+      "readAfterWrite": {
+        "object": "DomainItem",
+        "domain": "style",
+        "id": "style-item:twin",
+        "type": "style_item",
+        "status": "active",
+        "source": "style.getItem",
+        "payload": {
+          "productReference": {
+            "reference": {
+              "status": "confirmed",
+              "match_basis": "user_confirmed",
+              "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "brand": "COS",
+              "name": "Textured Knitted Cotton T-Shirt",
+              "product_code": "1273306003",
+              "sources": [
+                {
+                  "id": "listing",
+                  "kind": "retailer",
+                  "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                  "observed_at": "<time>"
+                }
+              ],
+              "facts": {
+                "composition": {
+                  "value": "100% cotton",
+                  "source_id": "listing"
+                }
+              }
+            }
+          },
+          "brand": null,
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:twin",
+          "legacyItemId": null,
+          "name": "Twin tee",
+          "photos": [
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+              },
+              "id": "style-photo:twin-1",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": true,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-1",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+              },
+              "id": "style-photo:twin-2",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-2",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+              },
+              "id": "style-photo:twin-3",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-3",
+              "view": null
+            }
+          ],
+          "profile": {
+            "itemId": "style-item:twin",
+            "legacyProfileId": null,
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "active",
+          "subcategory": "Tee"
+        }
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "merge": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_duplicate_merge",
+      "status": "applied",
+      "target": {
+        "id": "style-item:keeper",
+        "type": "style_item"
+      },
+      "source": "style.mergeDuplicateItem",
+      "payload": {
+        "archivedSourceItemId": "style-item:twin",
+        "sourceStatus": "archived",
+        "targetItem": {
+          "productReference": {
+            "reference": null
+          },
+          "brand": null,
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:keeper",
+          "legacyItemId": null,
+          "name": "Keeper tee",
+          "photosCount": 3,
+          "profile": {
+            "itemId": "style-item:keeper",
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "active",
+          "subcategory": "Tee"
+        },
+        "targetItemId": "style-item:keeper",
+        "transferredPhotoIds": [
+          "style-photo:twin-1",
+          "style-photo:twin-2",
+          "style-photo:twin-3"
+        ],
+        "verifiedOneActiveItem": true,
+        "eventRecorded": true,
+        "idempotentReplay": false,
+        "readbackDegraded": false,
+        "disposition": "duplicate",
+        "durable": true,
+        "sourceItemId": "style-item:twin"
+      },
+      "readAfterWrite": {
+        "productReference": {
+          "reference": null
+        },
+        "brand": null,
+        "category": "TOP",
+        "comparatorKey": "tee",
+        "colorFamily": null,
+        "colorHex": null,
+        "colorName": null,
+        "formality": null,
+        "id": "style-item:keeper",
+        "legacyItemId": null,
+        "name": "Keeper tee",
+        "photosCount": 3,
+        "profile": {
+          "itemId": "style-item:keeper",
+          "method": "heuristic_bootstrap",
+          "raw": {
+            "avoidOccasions": [],
+            "bestOccasions": [],
+            "confidence": null,
+            "descriptorConfidence": null,
+            "dressCode": null,
+            "fabricHand": null,
+            "feedbackNote": null,
+            "feedbackSignals": [],
+            "fitObservations": [],
+            "fitVerdict": null,
+            "itemType": "tee",
+            "lengthNote": null,
+            "ownedSize": null,
+            "pairingNotes": null,
+            "polishLevel": null,
+            "qualityTier": null,
+            "reanalyzePending": false,
+            "seasonality": [],
+            "silhouette": null,
+            "styleRole": "workhorse",
+            "structureLevel": null,
+            "tags": [
+              "tee",
+              "top"
+            ],
+            "texture": null,
+            "useCases": [],
+            "avoidUseCases": [],
+            "visualWeight": null,
+            "wearUnderstanding": "unknown",
+            "worksFor": [],
+            "avoidFor": []
+          },
+          "source": "style_auto_bootstrap"
+        },
+        "size": "M",
+        "status": "active",
+        "subcategory": "Tee"
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "undoMerge": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_patch",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.upsertItem",
+      "payload": {
+        "durable": true,
+        "patch": {
+          "status": "active"
+        },
+        "result": {
+          "productReference": {
+            "reference": {
+              "status": "confirmed",
+              "match_basis": "user_confirmed",
+              "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "brand": "COS",
+              "name": "Textured Knitted Cotton T-Shirt",
+              "product_code": "1273306003",
+              "sources": [
+                {
+                  "id": "listing",
+                  "kind": "retailer",
+                  "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                  "observed_at": "<time>"
+                }
+              ],
+              "facts": {
+                "composition": {
+                  "value": "100% cotton",
+                  "source_id": "listing"
+                }
+              }
+            }
+          },
+          "brand": null,
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:twin",
+          "legacyItemId": null,
+          "name": "Twin tee",
+          "photos": [
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+              },
+              "id": "style-photo:twin-1",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": true,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-1",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+              },
+              "id": "style-photo:twin-2",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-2",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+              },
+              "id": "style-photo:twin-3",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-3",
+              "view": null
+            }
+          ],
+          "profile": {
+            "itemId": "style-item:twin",
+            "legacyProfileId": null,
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "active",
+          "subcategory": "Tee"
+        },
+        "unsupportedProfileFieldsStoredAsProvenance": []
+      },
+      "readAfterWrite": {
+        "object": "DomainItem",
+        "domain": "style",
+        "id": "style-item:twin",
+        "type": "style_item",
+        "status": "active",
+        "source": "style.getItem",
+        "payload": {
+          "productReference": {
+            "reference": {
+              "status": "confirmed",
+              "match_basis": "user_confirmed",
+              "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "brand": "COS",
+              "name": "Textured Knitted Cotton T-Shirt",
+              "product_code": "1273306003",
+              "sources": [
+                {
+                  "id": "listing",
+                  "kind": "retailer",
+                  "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                  "observed_at": "<time>"
+                }
+              ],
+              "facts": {
+                "composition": {
+                  "value": "100% cotton",
+                  "source_id": "listing"
+                }
+              }
+            }
+          },
+          "brand": null,
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:twin",
+          "legacyItemId": null,
+          "name": "Twin tee",
+          "photos": [
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+              },
+              "id": "style-photo:twin-1",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": true,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-1",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+              },
+              "id": "style-photo:twin-2",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-2",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+              },
+              "id": "style-photo:twin-3",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-3",
+              "view": null
+            }
+          ],
+          "profile": {
+            "itemId": "style-item:twin",
+            "legacyProfileId": null,
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "active",
+          "subcategory": "Tee"
+        },
+        "brand": null,
+        "category": "TOP",
+        "color": null,
+        "name": "Twin tee",
+        "size": "M",
+        "subcategory": "Tee"
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "archive": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "item_archive",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.archiveItem",
+      "payload": {
+        "activeExactMatchesAfter": [],
+        "activeExactMatchesBefore": [
+          {
+            "brand": null,
+            "category": "TOP",
+            "comparatorKey": "tee",
+            "colorFamily": null,
+            "formality": null,
+            "hasDisplayPhoto": false,
+            "hasFitPhoto": false,
+            "id": "style-item:twin",
+            "name": "Twin tee",
+            "photoCount": 3,
+            "primaryPhotoDelivery": {
+              "auth": "oauth_bearer",
+              "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+            },
+            "profileTags": [
+              "tee",
+              "top"
+            ],
+            "size": "M",
+            "status": "active",
+            "subcategory": "Tee"
+          }
+        ],
+        "archivedItemIds": [
+          "style-item:twin"
+        ],
+        "archivedItems": [
+          {
+            "brand": null,
+            "category": "TOP",
+            "comparatorKey": "tee",
+            "colorFamily": null,
+            "formality": null,
+            "hasDisplayPhoto": false,
+            "hasFitPhoto": false,
+            "id": "style-item:twin",
+            "name": "Twin tee",
+            "photoCount": 3,
+            "primaryPhotoDelivery": {
+              "auth": "oauth_bearer",
+              "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+            },
+            "profileTags": [
+              "tee",
+              "top"
+            ],
+            "size": "M",
+            "status": "archived",
+            "subcategory": "Tee"
+          }
+        ],
+        "matchedItems": [
+          {
+            "brand": null,
+            "category": "TOP",
+            "comparatorKey": "tee",
+            "colorFamily": null,
+            "formality": null,
+            "hasDisplayPhoto": false,
+            "hasFitPhoto": false,
+            "id": "style-item:twin",
+            "name": "Twin tee",
+            "photoCount": 3,
+            "primaryPhotoDelivery": {
+              "auth": "oauth_bearer",
+              "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+            },
+            "profileTags": [
+              "tee",
+              "top"
+            ],
+            "size": "M",
+            "status": "active",
+            "subcategory": "Tee"
+          }
+        ],
+        "notes": [
+          "Read-after-write verification found no active exact match for the requested item."
+        ],
+        "requestedItemId": "style-item:twin",
+        "requestedName": null,
+        "status": "archived",
+        "verifiedNoActiveExactMatch": true,
+        "disposition": "donated",
+        "durable": true
+      },
+      "readAfterWrite": {
+        "object": "DomainItem",
+        "domain": "style",
+        "id": "style-item:twin",
+        "type": "style_item",
+        "status": "archived",
+        "source": "style.getItem",
+        "payload": {
+          "productReference": {
+            "reference": {
+              "status": "confirmed",
+              "match_basis": "user_confirmed",
+              "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "brand": "COS",
+              "name": "Textured Knitted Cotton T-Shirt",
+              "product_code": "1273306003",
+              "sources": [
+                {
+                  "id": "listing",
+                  "kind": "retailer",
+                  "urlPresent": true,
+                  "observed_at": "<time>"
+                }
+              ],
+              "facts": {
+                "composition": {
+                  "value": "100% cotton",
+                  "source_id": "listing"
+                }
+              }
+            }
+          },
+          "brand": null,
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:twin",
+          "legacyItemId": null,
+          "name": "Twin tee",
+          "photosCount": 3,
+          "profile": {
+            "itemId": "style-item:twin",
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "archived",
+          "subcategory": "Tee"
+        }
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "restore": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_patch",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.upsertItem",
+      "payload": {
+        "durable": true,
+        "patch": {
+          "status": "active"
+        },
+        "result": {
+          "productReference": {
+            "reference": {
+              "status": "confirmed",
+              "match_basis": "user_confirmed",
+              "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "brand": "COS",
+              "name": "Textured Knitted Cotton T-Shirt",
+              "product_code": "1273306003",
+              "sources": [
+                {
+                  "id": "listing",
+                  "kind": "retailer",
+                  "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                  "observed_at": "<time>"
+                }
+              ],
+              "facts": {
+                "composition": {
+                  "value": "100% cotton",
+                  "source_id": "listing"
+                }
+              }
+            }
+          },
+          "brand": null,
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:twin",
+          "legacyItemId": null,
+          "name": "Twin tee",
+          "photos": [
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+              },
+              "id": "style-photo:twin-1",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": true,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-1",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+              },
+              "id": "style-photo:twin-2",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-2",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+              },
+              "id": "style-photo:twin-3",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-3",
+              "view": null
+            }
+          ],
+          "profile": {
+            "itemId": "style-item:twin",
+            "legacyProfileId": null,
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "active",
+          "subcategory": "Tee"
+        },
+        "unsupportedProfileFieldsStoredAsProvenance": []
+      },
+      "readAfterWrite": {
+        "object": "DomainItem",
+        "domain": "style",
+        "id": "style-item:twin",
+        "type": "style_item",
+        "status": "active",
+        "source": "style.getItem",
+        "payload": {
+          "productReference": {
+            "reference": {
+              "status": "confirmed",
+              "match_basis": "user_confirmed",
+              "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "brand": "COS",
+              "name": "Textured Knitted Cotton T-Shirt",
+              "product_code": "1273306003",
+              "sources": [
+                {
+                  "id": "listing",
+                  "kind": "retailer",
+                  "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                  "observed_at": "<time>"
+                }
+              ],
+              "facts": {
+                "composition": {
+                  "value": "100% cotton",
+                  "source_id": "listing"
+                }
+              }
+            }
+          },
+          "brand": null,
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:twin",
+          "legacyItemId": null,
+          "name": "Twin tee",
+          "photos": [
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+              },
+              "id": "style-photo:twin-1",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": true,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-1",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+              },
+              "id": "style-photo:twin-2",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-2",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+              },
+              "id": "style-photo:twin-3",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-3",
+              "view": null
+            }
+          ],
+          "profile": {
+            "itemId": "style-item:twin",
+            "legacyProfileId": null,
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "active",
+          "subcategory": "Tee"
+        },
+        "brand": null,
+        "category": "TOP",
+        "color": null,
+        "name": "Twin tee",
+        "size": "M",
+        "subcategory": "Tee"
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "updateDetails": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_patch",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.upsertItem",
+      "payload": {
+        "durable": true,
+        "patch": {
+          "brand": "COS"
+        },
+        "result": {
+          "productReference": {
+            "reference": {
+              "status": "confirmed",
+              "match_basis": "user_confirmed",
+              "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "brand": "COS",
+              "name": "Textured Knitted Cotton T-Shirt",
+              "product_code": "1273306003",
+              "sources": [
+                {
+                  "id": "listing",
+                  "kind": "retailer",
+                  "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                  "observed_at": "<time>"
+                }
+              ],
+              "facts": {
+                "composition": {
+                  "value": "100% cotton",
+                  "source_id": "listing"
+                }
+              }
+            }
+          },
+          "brand": "COS",
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:twin",
+          "legacyItemId": null,
+          "name": "Twin tee",
+          "photos": [
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+              },
+              "id": "style-photo:twin-1",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": true,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-1",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+              },
+              "id": "style-photo:twin-2",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-2",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+              },
+              "id": "style-photo:twin-3",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-3",
+              "view": null
+            }
+          ],
+          "profile": {
+            "itemId": "style-item:twin",
+            "legacyProfileId": null,
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "active",
+          "subcategory": "Tee"
+        },
+        "unsupportedProfileFieldsStoredAsProvenance": []
+      },
+      "readAfterWrite": {
+        "object": "DomainItem",
+        "domain": "style",
+        "id": "style-item:twin",
+        "type": "style_item",
+        "status": "active",
+        "source": "style.getItem",
+        "payload": {
+          "productReference": {
+            "reference": {
+              "status": "confirmed",
+              "match_basis": "user_confirmed",
+              "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "brand": "COS",
+              "name": "Textured Knitted Cotton T-Shirt",
+              "product_code": "1273306003",
+              "sources": [
+                {
+                  "id": "listing",
+                  "kind": "retailer",
+                  "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                  "observed_at": "<time>"
+                }
+              ],
+              "facts": {
+                "composition": {
+                  "value": "100% cotton",
+                  "source_id": "listing"
+                }
+              }
+            }
+          },
+          "brand": "COS",
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:twin",
+          "legacyItemId": null,
+          "name": "Twin tee",
+          "photos": [
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+              },
+              "id": "style-photo:twin-1",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": true,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-1",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+              },
+              "id": "style-photo:twin-2",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-2",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+              },
+              "id": "style-photo:twin-3",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-3",
+              "view": null
+            }
+          ],
+          "profile": {
+            "itemId": "style-item:twin",
+            "legacyProfileId": null,
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "active",
+          "subcategory": "Tee"
+        },
+        "brand": "COS",
+        "category": "TOP",
+        "color": null,
+        "name": "Twin tee",
+        "size": "M",
+        "subcategory": "Tee"
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "addPhoto": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_image_set",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.upsertItemPhotos",
+      "payload": {
+        "becameCover": false,
+        "photoAction": "add",
+        "photoId": "style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+        "caption": null,
+        "catalogReady": false,
+        "durable": true,
+        "backgroundRemoved": false,
+        "presentationStatus": "fit_photo_saved",
+        "hostResponseInstruction": "The original photo was added without changing the cover. Verify this exact photo ID in the item readback. Do not prepare or replace an existing cover unless the user asks; if there is no cover, use the retained source for host-led preparation when suitable.",
+        "imageInput": "inline_data_url",
+        "imageOrigin": "user_source",
+        "imageType": "fit",
+        "newImageUrl": null,
+        "result": {
+          "inserted": true,
+          "photos": [
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aadded-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400/original"
+              },
+              "id": "style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+              "importedFrom": "fluent_style_user_source",
+              "isFit": true,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "fit",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+              "view": "fit_front"
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+              },
+              "id": "style-photo:twin-1",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": true,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-1",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+              },
+              "id": "style-photo:twin-2",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-2",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+              },
+              "id": "style-photo:twin-3",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-3",
+              "view": null
+            }
+          ]
+        },
+        "sourcePhotoId": null
+      },
+      "readAfterWrite": {
+        "object": "DomainItem",
+        "domain": "style",
+        "id": "style-item:twin",
+        "type": "style_item",
+        "status": "active",
+        "source": "style.getItem",
+        "payload": {
+          "productReference": {
+            "reference": {
+              "status": "confirmed",
+              "match_basis": "user_confirmed",
+              "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "brand": "COS",
+              "name": "Textured Knitted Cotton T-Shirt",
+              "product_code": "1273306003",
+              "sources": [
+                {
+                  "id": "listing",
+                  "kind": "retailer",
+                  "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                  "observed_at": "<time>"
+                }
+              ],
+              "facts": {
+                "composition": {
+                  "value": "100% cotton",
+                  "source_id": "listing"
+                }
+              }
+            }
+          },
+          "brand": "COS",
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:twin",
+          "legacyItemId": null,
+          "name": "Twin tee",
+          "photos": [
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aadded-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400/original"
+              },
+              "id": "style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+              "importedFrom": "fluent_style_user_source",
+              "isFit": true,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "fit",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+              "view": "fit_front"
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+              },
+              "id": "style-photo:twin-1",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": true,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-1",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+              },
+              "id": "style-photo:twin-2",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-2",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+              },
+              "id": "style-photo:twin-3",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-3",
+              "view": null
+            }
+          ],
+          "profile": {
+            "itemId": "style-item:twin",
+            "legacyProfileId": null,
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "active",
+          "subcategory": "Tee"
+        },
+        "brand": "COS",
+        "category": "TOP",
+        "color": null,
+        "name": "Twin tee",
+        "size": "M",
+        "subcategory": "Tee",
+        "hasImage": true,
+        "imageInput": "inline_data_url",
+        "newImageUrl": null,
+        "updatedItem": {
+          "object": "DomainItem",
+          "domain": "style",
+          "id": "style-item:twin",
+          "type": "style_item",
+          "status": "active",
+          "source": "style.getItem",
+          "payload": {
+            "productReference": {
+              "reference": {
+                "status": "confirmed",
+                "match_basis": "user_confirmed",
+                "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                "brand": "COS",
+                "name": "Textured Knitted Cotton T-Shirt",
+                "product_code": "1273306003",
+                "sources": [
+                  {
+                    "id": "listing",
+                    "kind": "retailer",
+                    "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                    "observed_at": "<time>"
+                  }
+                ],
+                "facts": {
+                  "composition": {
+                    "value": "100% cotton",
+                    "source_id": "listing"
+                  }
+                }
+              }
+            },
+            "brand": "COS",
+            "category": "TOP",
+            "comparatorKey": "tee",
+            "colorFamily": null,
+            "colorHex": null,
+            "colorName": null,
+            "formality": null,
+            "id": "style-item:twin",
+            "legacyItemId": null,
+            "name": "Twin tee",
+            "photos": [
+              {
+                "artifactAvailable": true,
+                "bgRemoved": false,
+                "delivery": {
+                  "auth": "oauth_bearer",
+                  "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aadded-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400/original"
+                },
+                "id": "style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+                "importedFrom": "fluent_style_user_source",
+                "isFit": true,
+                "isPrimary": false,
+                "itemId": "style-item:twin",
+                "kind": "fit",
+                "legacyPhotoId": null,
+                "mimeType": "image/png",
+                "source": "user_upload",
+                "sourceUrl": null,
+                "url": "artifact:style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+                "view": "fit_front"
+              },
+              {
+                "artifactAvailable": true,
+                "bgRemoved": false,
+                "delivery": {
+                  "auth": "oauth_bearer",
+                  "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+                },
+                "id": "style-photo:twin-1",
+                "importedFrom": null,
+                "isFit": false,
+                "isPrimary": true,
+                "itemId": "style-item:twin",
+                "kind": "unknown",
+                "legacyPhotoId": null,
+                "mimeType": "image/png",
+                "source": "user_upload",
+                "sourceUrl": null,
+                "url": "artifact:style-photo:twin-1",
+                "view": null
+              },
+              {
+                "artifactAvailable": true,
+                "bgRemoved": false,
+                "delivery": {
+                  "auth": "oauth_bearer",
+                  "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+                },
+                "id": "style-photo:twin-2",
+                "importedFrom": null,
+                "isFit": false,
+                "isPrimary": false,
+                "itemId": "style-item:twin",
+                "kind": "unknown",
+                "legacyPhotoId": null,
+                "mimeType": "image/png",
+                "source": "user_upload",
+                "sourceUrl": null,
+                "url": "artifact:style-photo:twin-2",
+                "view": null
+              },
+              {
+                "artifactAvailable": true,
+                "bgRemoved": false,
+                "delivery": {
+                  "auth": "oauth_bearer",
+                  "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+                },
+                "id": "style-photo:twin-3",
+                "importedFrom": null,
+                "isFit": false,
+                "isPrimary": false,
+                "itemId": "style-item:twin",
+                "kind": "unknown",
+                "legacyPhotoId": null,
+                "mimeType": "image/png",
+                "source": "user_upload",
+                "sourceUrl": null,
+                "url": "artifact:style-photo:twin-3",
+                "view": null
+              }
+            ],
+            "profile": {
+              "itemId": "style-item:twin",
+              "legacyProfileId": null,
+              "method": "heuristic_bootstrap",
+              "raw": {
+                "avoidOccasions": [],
+                "bestOccasions": [],
+                "confidence": null,
+                "descriptorConfidence": null,
+                "dressCode": null,
+                "fabricHand": null,
+                "feedbackNote": null,
+                "feedbackSignals": [],
+                "fitObservations": [],
+                "fitVerdict": null,
+                "itemType": "tee",
+                "lengthNote": null,
+                "ownedSize": null,
+                "pairingNotes": null,
+                "polishLevel": null,
+                "qualityTier": null,
+                "reanalyzePending": false,
+                "seasonality": [],
+                "silhouette": null,
+                "styleRole": "workhorse",
+                "structureLevel": null,
+                "tags": [
+                  "tee",
+                  "top"
+                ],
+                "texture": null,
+                "useCases": [],
+                "avoidUseCases": [],
+                "visualWeight": null,
+                "wearUnderstanding": "unknown",
+                "worksFor": [],
+                "avoidFor": []
+              },
+              "source": "style_auto_bootstrap"
+            },
+            "size": "M",
+            "status": "active",
+            "subcategory": "Tee"
+          },
+          "brand": "COS",
+          "category": "TOP",
+          "color": null,
+          "name": "Twin tee",
+          "size": "M",
+          "subcategory": "Tee"
+        }
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "setPhoto": {
+      "object": "WriteAck",
+      "domain": "style",
+      "durable": true,
+      "kind": "style_item_image_set",
+      "status": "applied",
+      "target": {
+        "id": "style-item:twin",
+        "type": "style_item"
+      },
+      "source": "style.upsertItemPhotos",
+      "payload": {
+        "becameCover": false,
+        "photoAction": "replace",
+        "photoId": "style-photo:style-item:twin:primary",
+        "caption": null,
+        "catalogReady": false,
+        "durable": true,
+        "backgroundRemoved": false,
+        "presentationStatus": "source_saved",
+        "hostResponseInstruction": "The source photo was saved, but this write did not prepare or approve a Catalog image. Do not say the wardrobe image is fixed or normalized. Inspect the retained source, complete Catalog preparation with owned image bytes and catalog_ready, then render this exact item to verify the selected image. If this host cannot submit Catalog preparation, report that limitation explicitly.",
+        "imageInput": "inline_data_url",
+        "imageOrigin": "user_source",
+        "imageType": "primary",
+        "newImageUrl": null,
+        "result": [
+          {
+            "artifactAvailable": true,
+            "bgRemoved": false,
+            "delivery": {
+              "auth": "oauth_bearer",
+              "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aadded-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400/original"
+            },
+            "id": "style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+            "importedFrom": "fluent_style_user_source",
+            "isFit": true,
+            "isPrimary": false,
+            "itemId": "style-item:twin",
+            "kind": "fit",
+            "legacyPhotoId": null,
+            "mimeType": "image/png",
+            "source": "user_upload",
+            "sourceUrl": null,
+            "url": "artifact:style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+            "view": "fit_front"
+          },
+          {
+            "artifactAvailable": true,
+            "bgRemoved": false,
+            "delivery": {
+              "auth": "oauth_bearer",
+              "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aprimary/original"
+            },
+            "id": "style-photo:style-item:twin:primary",
+            "importedFrom": "fluent_style_user_source",
+            "isFit": false,
+            "isPrimary": true,
+            "itemId": "style-item:twin",
+            "kind": "product",
+            "legacyPhotoId": null,
+            "mimeType": "image/png",
+            "source": "user_upload",
+            "sourceUrl": null,
+            "url": "artifact:style-photo:style-item:twin:primary",
+            "view": "front"
+          },
+          {
+            "artifactAvailable": true,
+            "bgRemoved": false,
+            "delivery": {
+              "auth": "oauth_bearer",
+              "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+            },
+            "id": "style-photo:twin-1",
+            "importedFrom": null,
+            "isFit": false,
+            "isPrimary": false,
+            "itemId": "style-item:twin",
+            "kind": "unknown",
+            "legacyPhotoId": null,
+            "mimeType": "image/png",
+            "source": "user_upload",
+            "sourceUrl": null,
+            "url": "artifact:style-photo:twin-1",
+            "view": null
+          },
+          {
+            "artifactAvailable": true,
+            "bgRemoved": false,
+            "delivery": {
+              "auth": "oauth_bearer",
+              "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+            },
+            "id": "style-photo:twin-2",
+            "importedFrom": null,
+            "isFit": false,
+            "isPrimary": false,
+            "itemId": "style-item:twin",
+            "kind": "unknown",
+            "legacyPhotoId": null,
+            "mimeType": "image/png",
+            "source": "user_upload",
+            "sourceUrl": null,
+            "url": "artifact:style-photo:twin-2",
+            "view": null
+          },
+          {
+            "artifactAvailable": true,
+            "bgRemoved": false,
+            "delivery": {
+              "auth": "oauth_bearer",
+              "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+            },
+            "id": "style-photo:twin-3",
+            "importedFrom": null,
+            "isFit": false,
+            "isPrimary": false,
+            "itemId": "style-item:twin",
+            "kind": "unknown",
+            "legacyPhotoId": null,
+            "mimeType": "image/png",
+            "source": "user_upload",
+            "sourceUrl": null,
+            "url": "artifact:style-photo:twin-3",
+            "view": null
+          }
+        ],
+        "sourcePhotoId": null
+      },
+      "readAfterWrite": {
+        "object": "DomainItem",
+        "domain": "style",
+        "id": "style-item:twin",
+        "type": "style_item",
+        "status": "active",
+        "source": "style.getItem",
+        "payload": {
+          "productReference": {
+            "reference": {
+              "status": "confirmed",
+              "match_basis": "user_confirmed",
+              "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "brand": "COS",
+              "name": "Textured Knitted Cotton T-Shirt",
+              "product_code": "1273306003",
+              "sources": [
+                {
+                  "id": "listing",
+                  "kind": "retailer",
+                  "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                  "observed_at": "<time>"
+                }
+              ],
+              "facts": {
+                "composition": {
+                  "value": "100% cotton",
+                  "source_id": "listing"
+                }
+              }
+            }
+          },
+          "brand": "COS",
+          "category": "TOP",
+          "comparatorKey": "tee",
+          "colorFamily": null,
+          "colorHex": null,
+          "colorName": null,
+          "formality": null,
+          "id": "style-item:twin",
+          "legacyItemId": null,
+          "name": "Twin tee",
+          "photos": [
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aadded-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400/original"
+              },
+              "id": "style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+              "importedFrom": "fluent_style_user_source",
+              "isFit": true,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "fit",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+              "view": "fit_front"
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aprimary/original"
+              },
+              "id": "style-photo:style-item:twin:primary",
+              "importedFrom": "fluent_style_user_source",
+              "isFit": false,
+              "isPrimary": true,
+              "itemId": "style-item:twin",
+              "kind": "product",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:style-item:twin:primary",
+              "view": "front"
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+              },
+              "id": "style-photo:twin-1",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-1",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+              },
+              "id": "style-photo:twin-2",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-2",
+              "view": null
+            },
+            {
+              "artifactAvailable": true,
+              "bgRemoved": false,
+              "delivery": {
+                "auth": "oauth_bearer",
+                "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+              },
+              "id": "style-photo:twin-3",
+              "importedFrom": null,
+              "isFit": false,
+              "isPrimary": false,
+              "itemId": "style-item:twin",
+              "kind": "unknown",
+              "legacyPhotoId": null,
+              "mimeType": "image/png",
+              "source": "user_upload",
+              "sourceUrl": null,
+              "url": "artifact:style-photo:twin-3",
+              "view": null
+            }
+          ],
+          "profile": {
+            "itemId": "style-item:twin",
+            "legacyProfileId": null,
+            "method": "heuristic_bootstrap",
+            "raw": {
+              "avoidOccasions": [],
+              "bestOccasions": [],
+              "confidence": null,
+              "descriptorConfidence": null,
+              "dressCode": null,
+              "fabricHand": null,
+              "feedbackNote": null,
+              "feedbackSignals": [],
+              "fitObservations": [],
+              "fitVerdict": null,
+              "itemType": "tee",
+              "lengthNote": null,
+              "ownedSize": null,
+              "pairingNotes": null,
+              "polishLevel": null,
+              "qualityTier": null,
+              "reanalyzePending": false,
+              "seasonality": [],
+              "silhouette": null,
+              "styleRole": "workhorse",
+              "structureLevel": null,
+              "tags": [
+                "tee",
+                "top"
+              ],
+              "texture": null,
+              "useCases": [],
+              "avoidUseCases": [],
+              "visualWeight": null,
+              "wearUnderstanding": "unknown",
+              "worksFor": [],
+              "avoidFor": []
+            },
+            "source": "style_auto_bootstrap"
+          },
+          "size": "M",
+          "status": "active",
+          "subcategory": "Tee"
+        },
+        "brand": "COS",
+        "category": "TOP",
+        "color": null,
+        "name": "Twin tee",
+        "size": "M",
+        "subcategory": "Tee",
+        "hasImage": true,
+        "imageInput": "inline_data_url",
+        "newImageUrl": null,
+        "updatedItem": {
+          "object": "DomainItem",
+          "domain": "style",
+          "id": "style-item:twin",
+          "type": "style_item",
+          "status": "active",
+          "source": "style.getItem",
+          "payload": {
+            "productReference": {
+              "reference": {
+                "status": "confirmed",
+                "match_basis": "user_confirmed",
+                "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                "brand": "COS",
+                "name": "Textured Knitted Cotton T-Shirt",
+                "product_code": "1273306003",
+                "sources": [
+                  {
+                    "id": "listing",
+                    "kind": "retailer",
+                    "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+                    "observed_at": "<time>"
+                  }
+                ],
+                "facts": {
+                  "composition": {
+                    "value": "100% cotton",
+                    "source_id": "listing"
+                  }
+                }
+              }
+            },
+            "brand": "COS",
+            "category": "TOP",
+            "comparatorKey": "tee",
+            "colorFamily": null,
+            "colorHex": null,
+            "colorName": null,
+            "formality": null,
+            "id": "style-item:twin",
+            "legacyItemId": null,
+            "name": "Twin tee",
+            "photos": [
+              {
+                "artifactAvailable": true,
+                "bgRemoved": false,
+                "delivery": {
+                  "auth": "oauth_bearer",
+                  "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aadded-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400/original"
+                },
+                "id": "style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+                "importedFrom": "fluent_style_user_source",
+                "isFit": true,
+                "isPrimary": false,
+                "itemId": "style-item:twin",
+                "kind": "fit",
+                "legacyPhotoId": null,
+                "mimeType": "image/png",
+                "source": "user_upload",
+                "sourceUrl": null,
+                "url": "artifact:style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+                "view": "fit_front"
+              },
+              {
+                "artifactAvailable": true,
+                "bgRemoved": false,
+                "delivery": {
+                  "auth": "oauth_bearer",
+                  "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aprimary/original"
+                },
+                "id": "style-photo:style-item:twin:primary",
+                "importedFrom": "fluent_style_user_source",
+                "isFit": false,
+                "isPrimary": true,
+                "itemId": "style-item:twin",
+                "kind": "product",
+                "legacyPhotoId": null,
+                "mimeType": "image/png",
+                "source": "user_upload",
+                "sourceUrl": null,
+                "url": "artifact:style-photo:style-item:twin:primary",
+                "view": "front"
+              },
+              {
+                "artifactAvailable": true,
+                "bgRemoved": false,
+                "delivery": {
+                  "auth": "oauth_bearer",
+                  "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+                },
+                "id": "style-photo:twin-1",
+                "importedFrom": null,
+                "isFit": false,
+                "isPrimary": false,
+                "itemId": "style-item:twin",
+                "kind": "unknown",
+                "legacyPhotoId": null,
+                "mimeType": "image/png",
+                "source": "user_upload",
+                "sourceUrl": null,
+                "url": "artifact:style-photo:twin-1",
+                "view": null
+              },
+              {
+                "artifactAvailable": true,
+                "bgRemoved": false,
+                "delivery": {
+                  "auth": "oauth_bearer",
+                  "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+                },
+                "id": "style-photo:twin-2",
+                "importedFrom": null,
+                "isFit": false,
+                "isPrimary": false,
+                "itemId": "style-item:twin",
+                "kind": "unknown",
+                "legacyPhotoId": null,
+                "mimeType": "image/png",
+                "source": "user_upload",
+                "sourceUrl": null,
+                "url": "artifact:style-photo:twin-2",
+                "view": null
+              },
+              {
+                "artifactAvailable": true,
+                "bgRemoved": false,
+                "delivery": {
+                  "auth": "oauth_bearer",
+                  "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+                },
+                "id": "style-photo:twin-3",
+                "importedFrom": null,
+                "isFit": false,
+                "isPrimary": false,
+                "itemId": "style-item:twin",
+                "kind": "unknown",
+                "legacyPhotoId": null,
+                "mimeType": "image/png",
+                "source": "user_upload",
+                "sourceUrl": null,
+                "url": "artifact:style-photo:twin-3",
+                "view": null
+              }
+            ],
+            "profile": {
+              "itemId": "style-item:twin",
+              "legacyProfileId": null,
+              "method": "heuristic_bootstrap",
+              "raw": {
+                "avoidOccasions": [],
+                "bestOccasions": [],
+                "confidence": null,
+                "descriptorConfidence": null,
+                "dressCode": null,
+                "fabricHand": null,
+                "feedbackNote": null,
+                "feedbackSignals": [],
+                "fitObservations": [],
+                "fitVerdict": null,
+                "itemType": "tee",
+                "lengthNote": null,
+                "ownedSize": null,
+                "pairingNotes": null,
+                "polishLevel": null,
+                "qualityTier": null,
+                "reanalyzePending": false,
+                "seasonality": [],
+                "silhouette": null,
+                "styleRole": "workhorse",
+                "structureLevel": null,
+                "tags": [
+                  "tee",
+                  "top"
+                ],
+                "texture": null,
+                "useCases": [],
+                "avoidUseCases": [],
+                "visualWeight": null,
+                "wearUnderstanding": "unknown",
+                "worksFor": [],
+                "avoidFor": []
+              },
+              "source": "style_auto_bootstrap"
+            },
+            "size": "M",
+            "status": "active",
+            "subcategory": "Tee"
+          },
+          "brand": "COS",
+          "category": "TOP",
+          "color": null,
+          "name": "Twin tee",
+          "size": "M",
+          "subcategory": "Tee"
+        }
+      },
+      "boundaries": [
+        "Mutation was routed through the canonical domain service and its validators.",
+        "The host model owns the user-facing reasoning; Fluent stores durable state and provenance.",
+        "Read-after-write proof is included so hosts can verify the state they will cite."
+      ]
+    },
+    "finalItem": {
+      "productReference": {
+        "reference": {
+          "status": "confirmed",
+          "match_basis": "user_confirmed",
+          "product_url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+          "brand": "COS",
+          "name": "Textured Knitted Cotton T-Shirt",
+          "product_code": "1273306003",
+          "sources": [
+            {
+              "id": "listing",
+              "kind": "retailer",
+              "url": "https://www2.hm.com/pt_pt/productpage.1273306003.html",
+              "observed_at": "<time>"
+            }
+          ],
+          "facts": {
+            "composition": {
+              "value": "100% cotton",
+              "source_id": "listing"
+            }
+          }
+        }
+      },
+      "brand": "COS",
+      "category": "TOP",
+      "comparatorKey": "tee",
+      "colorFamily": null,
+      "colorHex": null,
+      "colorName": null,
+      "formality": null,
+      "id": "style-item:twin",
+      "legacyItemId": null,
+      "name": "Twin tee",
+      "photos": [
+        {
+          "artifactAvailable": true,
+          "bgRemoved": false,
+          "delivery": {
+            "auth": "oauth_bearer",
+            "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aadded-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400/original"
+          },
+          "id": "style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+          "importedFrom": "fluent_style_user_source",
+          "isFit": true,
+          "isPrimary": false,
+          "itemId": "style-item:twin",
+          "kind": "fit",
+          "legacyPhotoId": null,
+          "mimeType": "image/png",
+          "source": "user_upload",
+          "sourceUrl": null,
+          "url": "artifact:style-photo:style-item:twin:added-f85fea97da161525600fa8ef19235fef4a3be56111e0f1e8a594250501893400",
+          "view": "fit_front"
+        },
+        {
+          "artifactAvailable": true,
+          "bgRemoved": false,
+          "delivery": {
+            "auth": "oauth_bearer",
+            "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Astyle-item%3Atwin%3Aprimary/original"
+          },
+          "id": "style-photo:style-item:twin:primary",
+          "importedFrom": "fluent_style_user_source",
+          "isFit": false,
+          "isPrimary": true,
+          "itemId": "style-item:twin",
+          "kind": "product",
+          "legacyPhotoId": null,
+          "mimeType": "image/png",
+          "source": "user_upload",
+          "sourceUrl": null,
+          "url": "artifact:style-photo:style-item:twin:primary",
+          "view": "front"
+        },
+        {
+          "artifactAvailable": true,
+          "bgRemoved": false,
+          "delivery": {
+            "auth": "oauth_bearer",
+            "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-1/original"
+          },
+          "id": "style-photo:twin-1",
+          "importedFrom": null,
+          "isFit": false,
+          "isPrimary": false,
+          "itemId": "style-item:twin",
+          "kind": "unknown",
+          "legacyPhotoId": null,
+          "mimeType": "image/png",
+          "source": "user_upload",
+          "sourceUrl": null,
+          "url": "artifact:style-photo:twin-1",
+          "view": null
+        },
+        {
+          "artifactAvailable": true,
+          "bgRemoved": false,
+          "delivery": {
+            "auth": "oauth_bearer",
+            "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-2/original"
+          },
+          "id": "style-photo:twin-2",
+          "importedFrom": null,
+          "isFit": false,
+          "isPrimary": false,
+          "itemId": "style-item:twin",
+          "kind": "unknown",
+          "legacyPhotoId": null,
+          "mimeType": "image/png",
+          "source": "user_upload",
+          "sourceUrl": null,
+          "url": "artifact:style-photo:twin-2",
+          "view": null
+        },
+        {
+          "artifactAvailable": true,
+          "bgRemoved": false,
+          "delivery": {
+            "auth": "oauth_bearer",
+            "originalUrl": "http://127.0.0.1:8788/images/style/style-photo%3Atwin-3/original"
+          },
+          "id": "style-photo:twin-3",
+          "importedFrom": null,
+          "isFit": false,
+          "isPrimary": false,
+          "itemId": "style-item:twin",
+          "kind": "unknown",
+          "legacyPhotoId": null,
+          "mimeType": "image/png",
+          "source": "user_upload",
+          "sourceUrl": null,
+          "url": "artifact:style-photo:twin-3",
+          "view": null
+        }
+      ],
+      "profile": {
+        "itemId": "style-item:twin",
+        "legacyProfileId": null,
+        "method": "heuristic_bootstrap",
+        "raw": {
+          "avoidOccasions": [],
+          "bestOccasions": [],
+          "confidence": null,
+          "descriptorConfidence": null,
+          "dressCode": null,
+          "fabricHand": null,
+          "feedbackNote": null,
+          "feedbackSignals": [],
+          "fitObservations": [],
+          "fitVerdict": null,
+          "itemType": "tee",
+          "lengthNote": null,
+          "ownedSize": null,
+          "pairingNotes": null,
+          "polishLevel": null,
+          "qualityTier": null,
+          "reanalyzePending": false,
+          "seasonality": [],
+          "silhouette": null,
+          "styleRole": "workhorse",
+          "structureLevel": null,
+          "tags": [
+            "tee",
+            "top"
+          ],
+          "texture": null,
+          "useCases": [],
+          "avoidUseCases": [],
+          "visualWeight": null,
+          "wearUnderstanding": "unknown",
+          "worksFor": [],
+          "avoidFor": []
+        },
+        "source": "style_auto_bootstrap"
+      },
+      "size": "M",
+      "status": "active",
+      "subcategory": "Tee"
+    },
+    "finalKeeper": {
+      "productReference": {
+        "reference": null
+      },
+      "brand": null,
+      "category": "TOP",
+      "comparatorKey": "tee",
+      "colorFamily": null,
+      "colorHex": null,
+      "colorName": null,
+      "formality": null,
+      "id": "style-item:keeper",
+      "legacyItemId": null,
+      "name": "Keeper tee",
+      "photos": [],
+      "profile": {
+        "itemId": "style-item:keeper",
+        "legacyProfileId": null,
+        "method": "heuristic_bootstrap",
+        "raw": {
+          "avoidOccasions": [],
+          "bestOccasions": [],
+          "confidence": null,
+          "descriptorConfidence": null,
+          "dressCode": null,
+          "fabricHand": null,
+          "feedbackNote": null,
+          "feedbackSignals": [],
+          "fitObservations": [],
+          "fitVerdict": null,
+          "itemType": "tee",
+          "lengthNote": null,
+          "ownedSize": null,
+          "pairingNotes": null,
+          "polishLevel": null,
+          "qualityTier": null,
+          "reanalyzePending": false,
+          "seasonality": [],
+          "silhouette": null,
+          "styleRole": "workhorse",
+          "structureLevel": null,
+          "tags": [
+            "tee",
+            "top"
+          ],
+          "texture": null,
+          "useCases": [],
+          "avoidUseCases": [],
+          "visualWeight": null,
+          "wearUnderstanding": "unknown",
+          "worksFor": [],
+          "avoidFor": []
+        },
+        "source": "style_auto_bootstrap"
+      },
+      "size": "M",
+      "status": "active",
+      "subcategory": "Tee"
+    }
+  }
+}

@@ -26,6 +26,6 @@ Primary open-source runtime expectations:
 - contract-compatible with Fluent's hosted service
 - Docker-first distribution plus raw Node runtime support
 - direct runtime requirement: Node.js `22.x`
-- supported minimum contract version: `2026-07-09.fluent-core-v2.0`
+- supported minimum contract version: `2026-10-08.fluent-core-v2.3`
 
 See [fluent-oss-artifact-boundary.md](./fluent-oss-artifact-boundary.md) for the generated-export boundary, public exclusions, and scrub gates that protect this repo.

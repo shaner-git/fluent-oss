@@ -1,16 +1,15 @@
 {
   "name": "fluent",
   "version": "0.1.0",
-  "description": "Fluent gives ChatGPT and Codex shared Meals, Style, and budget context for practical everyday decisions.",
+  "description": "Fluent gives ChatGPT and Codex your saved closet as shared Style context for practical everyday decisions.",
   "author": {
     "name": "Fluent"
   },
   "license": "MIT",
   "keywords": [
     "fluent",
-    "meals",
     "style",
-    "budgets",
+    "closet",
     "chatgpt",
     "codex",
     "personal-mcp"
@@ -22,8 +21,8 @@
       "oss"
     ],
     "defaultDeploymentTrack": "oss",
-    "minimumContractVersion": "2026-07-09.fluent-core-v2.0",
-    "currentReferenceContractVersion": "2026-07-09.fluent-core-v2.0",
+    "minimumContractVersion": "2026-10-08.fluent-core-v2.3",
+    "currentReferenceContractVersion": "2026-10-08.fluent-core-v2.3",
     "requiredHostedScopes": [
       "meals:read",
       "meals:write",
@@ -34,10 +33,10 @@
   },
   "interface": {
     "displayName": "Fluent",
-    "shortDescription": "Shared Meals, Style, and budget context.",
-    "longDescription": "Fluent connects ChatGPT and Codex to the same saved Meals, Style, and budget context, with explicit approval for changes.",
+    "shortDescription": "Your closet as shared Style context.",
+    "longDescription": "Fluent connects ChatGPT and Codex to the same saved closet and Style context, with explicit approval for changes.",
     "developerName": "Fluent",
-    "category": "Lifestyle",
+    "category": "Productivity",
     "capabilities": [
       "Interactive",
       "Write"

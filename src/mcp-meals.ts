@@ -9,11 +9,6 @@ import {
   requireScope,
   requireScopes,
 } from './auth';
-import type { BudgetsService } from './domains/budgets/service';
-import {
-  BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
-  buildBudgetsEnvelopeSetupStructuredContent,
-} from './domains/budgets/envelope-setup';
 import type { FluentCoreService } from './fluent-core';
 import {
   buildMutationAck,
@@ -175,7 +170,7 @@ const mealsCalibrationSignalKindSchema = z.enum([
 const mealsCalibrationSignalStatusSchema = z.enum(['confirmed', 'corrected', 'rejected']);
 const mealsPantryCalibrationStatusSchema = z.enum(['stale', 'accidental', 'not_representative', 'representative']);
 const vNextMealsPlanningFrontDoor =
-  'For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, this is a detail follow-up, not a starter; do not use this as the first read. Start with fluent_get_context(domain="meals", intent="planning") when available, then use this tool only if the user asks for its specific detail or the context packet says that detail is required.';
+  'For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, this is a detail follow-up, not a starter; do not use this as the first read. Start with fluent_get_closet_context(domain="meals", intent="planning") when available, then use this tool only if the user asks for its specific detail or the context packet says that detail is required.';
 function buildWidgetMeta(description: string, origin: string, prefersBorder = true) {
   return {
     'openai/widgetCSP': {
@@ -227,7 +222,6 @@ function withAppsSecurity<T extends { _meta?: Record<string, unknown> }>(
 }
 
 type MealsMcpSurfaceOptions = {
-  budgets?: BudgetsService;
   includeDevWidgetSurfaces?: boolean;
 };
 
@@ -706,9 +700,6 @@ export function registerMealsMcpSurface(
   options?: MealsMcpSurfaceOptions,
 ) {
   const mealsReadSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_MEALS_READ_SCOPE] }];
-  const budgetsRenderSurfaceSecuritySchemes = [
-    { type: 'oauth2' as const, scopes: [FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE] },
-  ];
   const mealsWriteSecuritySchemes = [{ type: 'oauth2' as const, scopes: [FLUENT_MEALS_WRITE_SCOPE] }];
   const recipeCardWidgetMeta = buildWidgetMeta(
     'Fluent recipe card for a saved meal recipe, with ingredients, steps, and cook mode.',
@@ -852,7 +843,7 @@ export function registerMealsMcpSurface(
       {
       title: 'Detail Resource: Current Meal Plan',
       description:
-        'Detail resource for the current approved or active meal plan with entries. For broad planning/currentness prompts, start with fluent_get_context(domain="meals", intent="planning") instead.',
+        'Detail resource for the current approved or active meal plan with entries. For broad planning/currentness prompts, start with fluent_get_closet_context(domain="meals", intent="planning") instead.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -870,7 +861,7 @@ export function registerMealsMcpSurface(
       {
       title: 'Detail Resource: Meal Inventory',
       description:
-        'Detail resource for the current lightweight meal inventory snapshot. For broad planning/currentness prompts, start with fluent_get_context(domain="meals", intent="planning") instead.',
+        'Detail resource for the current lightweight meal inventory snapshot. For broad planning/currentness prompts, start with fluent_get_closet_context(domain="meals", intent="planning") instead.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -886,7 +877,7 @@ export function registerMealsMcpSurface(
       {
       title: 'Detail Resource: Meals Preferences',
       description:
-        'Detail resource for canonical meal-planning preferences. For broad planning/currentness prompts, start with fluent_get_context(domain="meals", intent="planning") instead.',
+        'Detail resource for canonical meal-planning preferences. For broad planning/currentness prompts, start with fluent_get_closet_context(domain="meals", intent="planning") instead.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -902,7 +893,7 @@ export function registerMealsMcpSurface(
       {
       title: 'Detail Resource: Meal Plan By Week',
       description:
-        'Detail resource for a meal plan by specific week start date. For broad planning/currentness prompts, start with fluent_get_context(domain="meals", intent="planning") instead.',
+        'Detail resource for a meal plan by specific week start date. For broad planning/currentness prompts, start with fluent_get_closet_context(domain="meals", intent="planning") instead.',
       mimeType: 'application/json',
       icons: iconFor(origin),
     },
@@ -1330,81 +1321,12 @@ export function registerMealsMcpSurface(
 
   registerRenderGroceryListTool();
 
-  const renderBudgetsEnvelopeSetupResult = async () => {
-    requireScopes([FLUENT_MEALS_READ_SCOPE, FLUENT_STYLE_READ_SCOPE]);
-    if (!options?.budgets) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: 'Budgets envelope setup is unavailable in this runtime.',
-          },
-        ],
-        isError: true,
-        structuredContent: {
-          error: 'budgets_unavailable',
-          surface: 'budgets_envelope_setup',
-        },
-      };
-    }
-    const structuredContent = await buildBudgetsEnvelopeSetupStructuredContent(options.budgets);
-    return {
-      _meta: {
-        ui: {
-          resourceUri: BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
-        },
-        'openai/outputTemplate': BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
-        surface: 'budgets_envelope_setup',
-        templateUri: BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
-      },
-      content: [
-        {
-          type: 'text' as const,
-          text: [
-            'Showing the Fluent budget envelope setup surface.',
-            `Template URI: ${BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI}.`,
-            'If the host cannot mount this resource, use the structured envelope fallback data in text.',
-          ].join(' '),
-        },
-      ],
-      structuredContent,
-    };
-  };
-
-  // Hosts mount only the REGISTRATION-level output template (Claude ignores per-result
-  // templateUri — observed live 2026-06-11), so the envelope-setup view needs its own
-  // adapter tool with the budgets template pinned here.
-  server.registerTool(
-    'fluent_render_budgets_surface',
-    withAppsSecurity({
-      title: 'Show Fluent Budget Envelopes',
-      description:
-        'Promoted render adapter for the Fluent budget envelope-setup MCP Apps surface. Use this when the user wants to see, set, or edit their clothing/grocery budget envelopes and the host can mount MCP Apps ui:// resources. Returns the envelope-setup widget resource plus structured fallback data; if the host cannot mount the resource, answer from the structured fallback data in text.',
-      inputSchema: {},
-      annotations: {
-        title: 'Show Fluent Budget Envelopes',
-        readOnlyHint: true,
-        idempotentHint: true,
-      },
-      _meta: {
-        ui: {
-          resourceUri: BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
-        },
-        'openai/outputTemplate': BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI,
-        'openai/toolInvocation/invoked': 'Fluent budget envelopes ready.',
-        'openai/toolInvocation/invoking': 'Opening budget envelopes...',
-        'openai/widgetAccessible': true,
-      },
-    }, budgetsRenderSurfaceSecuritySchemes),
-    async () => renderBudgetsEnvelopeSetupResult(),
-  );
-
   server.registerTool(
     'fluent_render_surface',
     withAppsSecurity({
       title: 'Render Fluent Grocery List',
       description:
-        'Render the current Fluent grocery-list MCP Apps surface. Use surface="meals_grocery_list". If the host cannot mount the returned ui:// resource, answer from the structured grocery-list fallback data in text. Budget envelopes use the separate fluent_render_budgets_surface tool.',
+        'Render the current Fluent grocery-list MCP Apps surface. Use surface="meals_grocery_list". If the host cannot mount the returned ui:// resource, answer from the structured grocery-list fallback data in text.',
       inputSchema: {
         surface: z.enum(['meals_grocery_list']).describe('The Fluent grocery-list surface to render.'),
         week_start: isoDateInputSchema.optional().describe('Optional plan week start date formatted exactly as YYYY-MM-DD.'),
@@ -1989,7 +1911,7 @@ export function registerMealsMcpSurface(
     {
       title: 'Detail Only: Meals Setup Calibration',
       description:
-        'Read the detailed Meals setup/calibration model for explicit setup, returning/imported inventory calibration, inferred preference confirmation, or starter meal preference collection. For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, start with fluent_get_context(domain="meals", intent="planning") when available; use this tool only when the context packet is unavailable or the user asks for setup/calibration detail. At-home ownership, old plans, accepted recipes, and grocery actions are evidence only; say "your kitchen inventory suggests" or "your meal history suggests" unless the user explicitly confirmed the preference.',
+        'Read the detailed Meals setup/calibration model for explicit setup, returning/imported inventory calibration, inferred preference confirmation, or starter meal preference collection. For broad Meals planning, currentness checks, "what Fluent knows", and weeknight meal-planning prompts, start with fluent_get_closet_context(domain="meals", intent="planning") when available; use this tool only when the context packet is unavailable or the user asks for setup/calibration detail. At-home ownership, old plans, accepted recipes, and grocery actions are evidence only; say "your kitchen inventory suggests" or "your meal history suggests" unless the user explicitly confirmed the preference.',
       inputSchema: {},
       annotations: {
         title: 'Detail Only: Meals Setup Calibration',

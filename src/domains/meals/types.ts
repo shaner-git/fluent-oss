@@ -261,6 +261,8 @@ export interface MealFeedbackRecord {
   confidence: number | null;
   sourceType: string | null;
   createdAt: string | null;
+  /** True when an operation_id retry returned the originally recorded feedback. */
+  replayed?: boolean;
 }
 
 export interface GroceryIntentRecord {
@@ -822,7 +824,7 @@ export interface MealsOnboardingCalibrationRecord {
   groceryReadiness: MealsReadinessRecord;
   hostGuidance: {
     answerMode: 'text_first' | 'widget_deferred';
-    broadPlanningFirstTool: 'fluent_get_context';
+    broadPlanningFirstTool: 'fluent_get_closet_context';
     copyGuardrails: string[];
     firstTool: 'meals_get_onboarding_calibration';
   };

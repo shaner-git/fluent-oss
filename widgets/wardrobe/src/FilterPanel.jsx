@@ -1,12 +1,12 @@
 import React,{useState} from 'react';
 import {MagnifyingGlass,Check,X,ArrowLeft} from '@phosphor-icons/react';
 import {transition} from './motion';
-import {categories} from './metadata.mjs';
+import {visibleCategories} from './metadata.mjs';
 import {facets,matches,optionsFor,displayValue} from './facets.mjs';
 export function FilterPanel({items,query,category,setCategory,selected,toggle,clear,close,total}){
  const [active,A]=useState('category'),[search,S]=useState('');
  const fields={category:'Category',...facets};
- const options=active==='category'?['All',...categories].map(value=>({value,count:items.filter(item=>matches(item,query,value,selected)).length})):optionsFor(items,query,category,selected,active);
+ const options=active==='category'?['All',...visibleCategories(items)].map(value=>({value,count:items.filter(item=>matches(item,query,value,selected)).length})):optionsFor(items,query,category,selected,active);
  const checked=value=>active==='category'?category===value:selected[active].includes(value);
  const visible=options.filter(o=>o.value.toLowerCase().includes(search.toLowerCase()));
  return <section className="facet-panel" role="dialog" aria-label="Wardrobe filters" onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close();}}}>

@@ -2,6 +2,8 @@
 
 Fluent is open source. This guide covers the supported self-hosted open-source runtime for Fluent.
 
+> **Archived 2026-10-08.** The open-source runtime is no longer maintained and receives no security updates. This guide describes the final, closet-only version (contract `2026-10-08.fluent-core-v2.3`). Hosted Fluent continues at [meetfluent.app](https://meetfluent.app/); export your data with `npm run oss:export:snapshot`.
+
 Public release references:
 
 - public repo: [shaner-git/fluent-oss](https://github.com/shaner-git/fluent-oss)
@@ -21,7 +23,7 @@ Public release references:
 - open `GET /health`
 - open `GET /codex-probe`
 - same MCP contract as Fluent's hosted service
-- supported minimum contract version: `2026-07-09.fluent-core-v2.0`
+- supported minimum contract version: `2026-10-08.fluent-core-v2.3`
 - local DB and artifacts stored under `~/.fluent/` by default
 - no OAuth, no `/authorize`, no `/token`
 - direct runtime support is documented for Node.js `22.x`
@@ -65,7 +67,7 @@ Bootstrap a token:
 npm run oss:token:bootstrap
 ```
 
-Seed the OSS demo profile. This command is safe to rerun: stable style, recipe, meal-plan, inventory, and budget records are updated; budget spend is only topped up to the fixture target.
+Seed the OSS demo profile. This command is safe to rerun: stable records are updated. It writes a demo closet, plus legacy recipe, meal-plan and inventory rows from the retired Meals domain that the closet-only tools do not expose.
 
 ```bash
 npm run oss:seed:demo
@@ -87,7 +89,7 @@ Prove `/mcp` answers with the bearer token and seeded data:
 
 ```bash
 export TOKEN="$(npm run -s oss:token:print | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).token))')"
-node --input-type=module -e "import { Client } from '@modelcontextprotocol/sdk/client/index.js'; import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'; const transport = new StreamableHTTPClientTransport(new URL('http://127.0.0.1:8788/mcp'), { requestInit: { headers: { Authorization: 'Bearer ' + process.env.TOKEN } } }); const client = new Client({ name: 'fluent-oss-proof', version: '1.0.0' }, { capabilities: {} }); await client.connect(transport); const result = await client.callTool({ name: 'fluent_list_items', arguments: { domain: 'style', item_type: 'style_item', limit: 5 } }); console.log(JSON.stringify(result.structuredContent ?? result.content, null, 2)); await transport.close();"
+node --input-type=module -e "import { Client } from '@modelcontextprotocol/sdk/client/index.js'; import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'; const transport = new StreamableHTTPClientTransport(new URL('http://127.0.0.1:8788/mcp'), { requestInit: { headers: { Authorization: 'Bearer ' + process.env.TOKEN } } }); const client = new Client({ name: 'fluent-oss-proof', version: '1.0.0' }, { capabilities: {} }); await client.connect(transport); const result = await client.callTool({ name: 'fluent_list_closet_items', arguments: { domain: 'style', item_type: 'style_item', limit: 5 } }); console.log(JSON.stringify(result.structuredContent ?? result.content, null, 2)); await transport.close();"
 ```
 
 Generate a Codex config:

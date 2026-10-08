@@ -11,6 +11,7 @@ import {
 // the public product and generated artifacts use the unversioned Fluent name.
 export const FLUENT_VNEXT_CONTRACT_VERSION = FLUENT_PUBLIC_CONTRACT_VERSION;
 
+// meals and wellbeing stay accepted for cached 1.0.0/1.0.1 clients; both are retired (D30, D23) and return no data.
 export type FluentVNextDomain = 'shared' | 'meals' | 'style' | 'wellbeing' | 'finance';
 export type FluentVNextConceptKind = 'read' | 'write' | 'render';
 export type FluentVNextConceptPhase = 'discovery' | 'phase1_read' | 'phase2_write' | 'adapter';
@@ -60,14 +61,11 @@ function conceptKind(name: string): FluentVNextConceptKind {
 }
 
 function conceptDomains(name: string): readonly FluentVNextDomain[] {
-  if (name.includes('recipe') || name.includes('meal_plan') || name.includes('grocery')) return ['meals'];
-  if (name.includes('style')) return ['style'];
-  if (name.includes('budget') || name === 'fluent_get_purchase_context') return ['meals', 'style'];
-  if (name === 'fluent_get_media_bundle') return ['meals', 'style'];
-  if (name === 'fluent_list_items' || name === 'fluent_get_item' || name === 'fluent_list_evidence' || name === 'fluent_archive_item') {
-    return ['meals', 'style'];
+  if (name.includes('style') || name === 'fluent_get_closet_item_photos') return ['style'];
+  if (name === 'fluent_list_closet_items' || name === 'fluent_get_closet_item' || name === 'fluent_list_closet_evidence' || name === 'fluent_archive_closet_item') {
+    return ['style'];
   }
-  return ['shared', 'meals', 'style'];
+  return ['shared', 'style'];
 }
 
 export const FLUENT_VNEXT_CONCEPTS = FLUENT_PUBLIC_TOOL_NAMES.map((name): FluentVNextConcept => {

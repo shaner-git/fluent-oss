@@ -12,21 +12,10 @@ import {
 } from './contract';
 import { FluentCoreService } from './fluent-core';
 import { registerCoreMcpSurface } from './mcp-core';
-import { registerMealsMcpSurface } from './mcp-meals';
 import { createStyleClosetSurfaceBuilder, registerStyleMcpSurface } from './mcp-style';
-import {
-  MEALS_GROCERY_LIST_V81_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_LEGACY_SUBMITTED_SNAPSHOT_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PREVIOUS_PUBLIC_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_SECOND_PREVIOUS_PUBLIC_TEMPLATE_URI,
-  MEALS_GROCERY_LIST_SUBMITTED_SNAPSHOT_TEMPLATE_URI,
-} from './domains/meals/grocery-list';
-import { STYLE_CLOSET_TEMPLATE_URI, STYLE_CLOSET_V34_TEMPLATE_URI } from './domains/style/closet-manager';
-import { BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI, BUDGETS_ENVELOPE_SETUP_V1_TEMPLATE_URI } from './domains/budgets/envelope-setup';
 import { getFluentAuthProps } from './auth';
 import { assertCurrentUserToolAllowedForSubscriptionLifecycle } from './subscription-lifecycle';
-import { BudgetsService } from './domains/budgets/service';
+import { WriteOperationsStore } from './write-operations';
 import { iconFor } from './mcp-shared';
 import { MealsService } from './domains/meals/service';
 import { StyleService } from './domains/style/service';
@@ -35,17 +24,18 @@ export type FluentMcpRuntimeProfile = 'assistant_app' | 'chatgpt_app';
 
 export const FLUENT_CHATGPT_APP_INSTRUCTIONS = [
   'Use Fluent whenever the user asks about their current, existing, saved, or owned Fluent data.',
-  'For closet-grounded outfit or shoe advice, call fluent_get_context with domain="style" and intent="closet" before naming an owned item; do not answer from conversation memory or general fashion knowledge alone.',
-  'List the relevant active Style items with fluent_list_items and inspect shortlisted item photos with fluent_get_media_bundle when appearance affects the choice.',
-  'When the answer recommends one winning owned item, finish by calling fluent_render_style_closet_surface with filter.item_ids containing only that exact saved item ID, presentation.mode="recommendation", presentation.focused_item_id set to the same ID, and one concise presentation.recommendation_reason. Reserve mode="detail" for an explicit request to inspect or manage the full saved item.',
+  'For closet-grounded outfit or shoe advice, call fluent_get_closet_context with domain="style" and intent="closet" before naming an owned item; do not answer from conversation memory or general fashion knowledge alone.',
+  'List the relevant active Style items with fluent_list_closet_items and inspect shortlisted item photos with fluent_get_closet_item_photos when appearance affects the choice.',
+  'When the answer recommends one winning owned item, finish by calling fluent_show_closet with filter.item_ids containing only that exact saved item ID, presentation.mode="recommendation", presentation.focused_item_id set to the same ID, and one concise presentation.recommendation_reason. Reserve mode="detail" for an explicit request to inspect or manage the full saved item.',
   'Use collection filters only when the user explicitly asks to browse a collection; never replace an exact recommended-item detail payoff with a category-filtered closet.',
-  'When the user asks to review, compare, or resolve a possible duplicate between two saved closet records, call fluent_render_style_closet_surface with exactly those two saved IDs, filter.status="active", presentation.mode="comparison", and no focused_item_id. Never say the comparison is open unless that tool call actually returned.',
+  'When the user asks to review, compare, or resolve a possible duplicate between two saved closet records, call fluent_show_closet with exactly those two saved IDs, filter.status="active", presentation.mode="comparison", and no focused_item_id. Never say the comparison is open unless that tool call actually returned.',
   'For multi-garment intake, use one batch_id and a stable client_token per physical garment. A duplicate warning writes nothing: continue unrelated garments, collect warned items for one decision turn, and include only exact durable item IDs in the final review and added count.',
 ].join(' ');
 
 const MCP_TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
 let fluentKnownToolNamesCache: Set<string> | null = null;
-const PUBLIC_CAPABILITY_DOMAIN_IDS = new Set(['meals', 'style']);
+// Meals is retired (D30, 2026-10-06): Style is the only public product domain.
+const PUBLIC_CAPABILITY_DOMAIN_IDS = new Set(['style']);
 // Move 4 landed: core_rules Tier-1 dietary dual-write is removed; person_facts is sole source.
 // Keep this disabled and the reader null as a read-time safety belt for the legacy server-side planner overlay.
 export const ENABLE_MEALS_PERSON_FACTS_PLANNING = false;
@@ -60,10 +50,9 @@ export function createFluentMcpServer(
     bindings.db,
     ENABLE_MEALS_PERSON_FACTS_PLANNING ? (input) => fluentCore.listPersonFacts(input) : null,
   );
-  const budgets = new BudgetsService(bindings.db);
   const style = new StyleService(bindings.db, {
     artifacts: bindings.artifacts,
-    budgets,
+    strictPublicFetch: bindings.strictPublicFetch === true,
     imageDeliverySecret: bindings.imageDeliverySecret ?? null,
     origin,
   });
@@ -126,83 +115,19 @@ export function createFluentMcpServer(
     thumbnailCapable: bindings.styleImageThumbnails === true,
   });
 
-  registerCoreMcpSurface(server, fluentCore, meals, style, budgets, origin, {
+  registerCoreMcpSurface(server, fluentCore, meals, style, origin, {
     publicWriteRateLimiter: bindings.publicWriteRateLimiter,
     styleClosetSurfaceBuilder,
+    writeOperations: new WriteOperationsStore(bindings.db),
   });
-  registerMealsMcpSurface(server, meals, fluentCore, origin, { budgets });
+  // Meals is retired (D30): the Meals surface in src/mcp-meals.ts stays in the repo, dormant, and is
+  // not registered on any public server. The grocery widget and its resource aliases go with it.
   registerStyleMcpSurface(server, style, origin, {
     imageDeliverySecret: bindings.imageDeliverySecret ?? null,
     styleClosetSurfaceBuilder,
     thumbnailCapable: bindings.styleImageThumbnails === true,
   });
-  registerHiddenResourceReadAlias(server, MEALS_GROCERY_LIST_V81_TEMPLATE_URI, MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI);
-  registerHiddenResourceReadAlias(server, STYLE_CLOSET_V34_TEMPLATE_URI, STYLE_CLOSET_TEMPLATE_URI);
-  registerHiddenResourceReadAlias(server, BUDGETS_ENVELOPE_SETUP_V1_TEMPLATE_URI, BUDGETS_ENVELOPE_SETUP_TEMPLATE_URI);
-  registerHiddenResourceReadAlias(
-    server,
-    MEALS_GROCERY_LIST_PREVIOUS_PUBLIC_TEMPLATE_URI,
-    MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
-  );
-  registerHiddenResourceReadAlias(
-    server,
-    MEALS_GROCERY_LIST_SECOND_PREVIOUS_PUBLIC_TEMPLATE_URI,
-    MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
-  );
-  registerHiddenResourceReadAlias(
-    server,
-    MEALS_GROCERY_LIST_SUBMITTED_SNAPSHOT_TEMPLATE_URI,
-    MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
-  );
-  registerHiddenResourceReadAlias(
-    server,
-    MEALS_GROCERY_LIST_LEGACY_SUBMITTED_SNAPSHOT_TEMPLATE_URI,
-    MEALS_GROCERY_LIST_PUBLIC_TEMPLATE_URI,
-  );
   return server;
-}
-
-type RegisteredResourceInternals = {
-  enabled: boolean;
-  name: string;
-  readCallback: (uri: URL, extra: unknown) => Promise<{
-    contents?: Array<Record<string, unknown>>;
-    [key: string]: unknown;
-  }>;
-  [key: string]: unknown;
-};
-
-function registerHiddenResourceReadAlias(server: McpServer, aliasUri: string, canonicalUri: string): void {
-  const internals = server as unknown as {
-    _registeredResources?: Record<string, RegisteredResourceInternals>;
-  };
-  const resources = internals._registeredResources;
-  const canonical = resources?.[canonicalUri];
-  if (!resources || !canonical || resources[aliasUri]) {
-    return;
-  }
-
-  const alias: RegisteredResourceInternals = {
-    ...canonical,
-    name: `${canonical.name}-submitted-snapshot-alias`,
-    async readCallback(_uri, extra) {
-      const result = await canonical.readCallback(new URL(canonicalUri), extra);
-      return {
-        ...result,
-        contents: result.contents?.map((content) => ({
-          ...content,
-          uri: content.uri === canonicalUri ? aliasUri : content.uri,
-        })),
-      };
-    },
-  };
-
-  Object.defineProperty(resources, aliasUri, {
-    configurable: false,
-    enumerable: false,
-    value: alias,
-    writable: false,
-  });
 }
 
 function applyMcpToolOutputSchemaDefaults(server: McpServer, profile: FluentMcpRuntimeProfile): void {
@@ -221,19 +146,27 @@ function applyMcpToolOutputSchemaDefaults(server: McpServer, profile: FluentMcpR
 
 const FLUENT_WRITE_TOOL_NAMES = new Set([
   'fluent_update_profile',
-  'fluent_update_shared_profile_patch',
-  'fluent_set_budget_envelope',
-  'fluent_log_budget_spend',
-  'fluent_update_style_item_patch',
-  'fluent_create_style_item',
-  'fluent_refresh_style_item_profile',
-  'fluent_set_style_item_image',
+  'fluent_update_profile',
+  'fluent_update_closet_item',
+  'fluent_set_closet_item_cover',
+  'fluent_reorder_closet_item_photos',
+  'fluent_hide_closet_item_photo',
+  'fluent_replace_closet_item_photo',
+  'fluent_undo_closet_item_photo_change',
+  'fluent_add_closet_item_photo',
+  'fluent_restore_closet_item',
+  'fluent_merge_closet_items',
+  'fluent_save_closet_item_product_details',
+  'fluent_undo_closet_item_merge',
+  'fluent_add_closet_item',
+  'fluent_record_closet_item_feedback',
+  'fluent_set_closet_item_photo',
   'fluent_save_recipe',
   'fluent_update_recipe_patch',
   'fluent_record_recipe_feedback',
   'fluent_apply_grocery_list_change',
   'fluent_upsert_item',
-  'fluent_archive_item',
+  'fluent_archive_closet_item',
   'fluent_record_event',
   'fluent_enable_domain',
   'fluent_disable_domain',
@@ -444,7 +377,7 @@ export function sanitizeCuratedMcpResult(
   return sanitizeChatGptAppValue(projectedValue, {
     allowedToolNames: new Set<string>(profile.tools),
     registeredWidgetResource: surface.startsWith('ui://widget/') && Boolean(profile.resources?.includes(surface)),
-    omitRootProfileId: surface === 'fluent_get_profile' || surface === 'fluent://core/profile',
+    omitRootProfileId: surface === 'fluent://core/profile',
     path: [],
     surface,
   });
@@ -528,7 +461,7 @@ function shouldOmitChatGptAppKey(
     return true;
   }
   if (
-    options.surface === 'fluent_create_style_item'
+    options.surface === 'fluent_add_closet_item'
     && isUrlBearingKey(key)
     && isTemporaryOpenAiAttachmentUrl(value)
   ) {
@@ -608,9 +541,9 @@ function projectCuratedCapabilitiesResult(
           `Fluent public capabilities (${contractVersion}).`,
           `Enabled domains: ${enabledDomains.length ? enabledDomains.join(', ') : 'none'}.`,
           `Ready domains: ${readyDomains.length ? readyDomains.join(', ') : 'none'}.`,
-          'Use MCP tools/list as the authoritative tool directory and start domain work with fluent_get_context.',
+          'Use MCP tools/list as the authoritative tool directory and start domain work with fluent_get_closet_context.',
           ...(readyDomains.includes('style')
-            ? ['Style photo import is reconciliation first. Search with discriminating brand, graphic-text, garment, color, and category queries; if nextCursor is returned, continue relevant pages until a confident match or relevant-result exhaustion, then inspect plausible matches with fluent_get_media_bundle. Existing complete: preserve Catalog and attach source/on-you media. Existing incomplete: repair Catalog and attach source/on-you media to the same item. New after sufficient search: create. Ambiguous: do not create. Missing Catalog media is incomplete presentation state, not evidence that the garment is new.']
+            ? ['Style photo import is reconciliation first. Search with discriminating brand, graphic-text, garment, color, and category queries; if nextCursor is returned, continue relevant pages until a confident match or relevant-result exhaustion, then inspect plausible matches with fluent_get_closet_item_photos. Existing complete: preserve Catalog and attach source/on-you media. Existing incomplete: repair Catalog and attach source/on-you media to the same item. New after sufficient search: create. Ambiguous: do not create. Missing Catalog media is incomplete presentation state, not evidence that the garment is new.']
             : []),
         ].join('\n'),
       },
@@ -655,7 +588,8 @@ function projectCuratedCapabilitiesPayload(
     availableDomains,
     enabledDomains: publicEnabledDomains,
     readyDomains: publicReadyDomains,
-    reservedDomains: ['health', 'wellbeing'],
+    // D23 (2026-09-24): Health/Wellbeing are retired, not reserved.
+    reservedDomains: [],
     onboarding: {
       core: onboardingCore ? pickDefined(onboardingCore, ['state', 'version']) : null,
       domains: onboardingDomains,
@@ -668,19 +602,19 @@ function projectCuratedCapabilitiesPayload(
     },
     routing: {
       accountStatusTool: publicTools.includes('fluent_get_account_status') ? 'fluent_get_account_status' : null,
-      startDomainWorkWith: publicTools.includes('fluent_get_context') ? 'fluent_get_context' : null,
+      startDomainWorkWith: publicTools.includes('fluent_get_closet_context') ? 'fluent_get_closet_context' : null,
       stylePhotoImport: publicReadyDomains.includes('style')
         ? {
             principle: 'reconciliation_first',
             candidateSearch: {
               queries: ['brand_or_graphic_text', 'garment_description', 'category_and_color'],
               pagination: 'continue_relevant_pages_while_nextCursor_until_confident_match_or_exhaustion',
-              inspect: 'fluent_get_media_bundle',
+              inspect: 'fluent_get_closet_item_photos',
             },
             outcomes: {
-              existingComplete: ['attach_source_media', 'fluent_set_style_item_image', 'fluent_render_style_closet_surface:detail'],
-              existingIncomplete: ['generate_catalog_media', 'fluent_set_style_item_image', 'attach_source_media', 'fluent_render_style_closet_surface:detail'],
-              genuinelyNew: ['catalog_image_generation', 'fluent_create_style_item', 'fluent_render_style_closet_surface:ingestion_review'],
+              existingComplete: ['attach_source_media', 'fluent_set_closet_item_photo', 'fluent_show_closet:detail'],
+              existingIncomplete: ['generate_catalog_media', 'fluent_set_closet_item_photo', 'attach_source_media', 'fluent_show_closet:detail'],
+              genuinelyNew: ['catalog_image_generation', 'fluent_add_closet_item', 'fluent_show_closet:ingestion_review'],
               ambiguous: ['do_not_create', 'ask_user_to_choose_or_provide_clearer_evidence'],
             },
           }

@@ -8,6 +8,7 @@ These limits are part of the supported `v0.1.0` public open-source release.
 - bearer-token auth only on `/mcp`
 - no OAuth, `/authorize`, or `/token` flow in OSS
 - plain HTTP runtime by default; use a reverse proxy for TLS and perimeter controls
+- no server-side download of image links other than files uploaded through ChatGPT: the Node runtime cannot recheck where other hostnames resolve, so ordinary photo links stay references, a Catalog-ready photo must be sent as image bytes (`image_file` or a `data:` URL), and remote image previews redirect the viewer to the source instead of proxying it
 
 ## Deployment Limits
 

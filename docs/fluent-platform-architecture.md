@@ -16,7 +16,7 @@ Shared across both runtime paths:
 - the Fluent MCP contract
 - domain lifecycle and onboarding truth
 - profile and capability reads
-- Meals and Style domain semantics, with Budgets as a narrow shared seam
+- Style domain semantics; Meals is retired and dormant; Fluent does not track budgets
 - audit event semantics
 
 Current runtime boundary in code:
@@ -81,14 +81,14 @@ Client packaging stays platform-specific even though the MCP contract is shared:
 
 Current public areas:
 
-- `meals`
 - `style`
-- `budgets` as a narrow shared seam for grocery and clothing spending context
 
-Reserved public areas:
+Retired areas (D23, 2026-09-24):
 
 - `health`
 - `wellbeing`
+
+Retired area (D30, 2026-10-06): `meals`. Its code, tables, account export and purge coverage stay in the repo, dormant; no public tool or resource exposes it.
 
 Lifecycle states:
 
@@ -125,4 +125,4 @@ Current payload includes:
 - Shared: MCP tool/resource surface and domain behavior
 - Out of scope for both core runtimes: retailer browser automation and cart execution
 
-Retailer automation remains owned by `fluent-meals`, not by Fluent Core.
+Retailer automation is not part of Fluent Core.

@@ -32,8 +32,8 @@ export function buildStyleDerivedImageAssetKey(
 export type StyleImageVariant = 'detail' | 'original' | 'thumbnail';
 
 const STYLE_HOSTED_FILE_MAX_REDIRECTS = 3;
-const STYLE_REMOTE_IMAGE_IMPORT_USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/145 Safari/537.36';
+// Honest fetch identity; never impersonate a browser. A source that refuses it is unavailable.
+const STYLE_REMOTE_IMAGE_IMPORT_USER_AGENT = 'FluentImageFetcher/1.0 (+https://meetfluent.app)';
 const OPENAI_FILE_DOWNLOAD_HOSTS = new Set([
   'api.openai.com',
   'files.openai.com',
@@ -717,7 +717,7 @@ function validateOpenAiFileDownloadUrl(value: string, options: { log?: boolean; 
 // live. The practical ~2 MB target keeps the tool-call argument small; the hard server limit is
 // STYLE_HOSTED_FILE_MAX_BYTES of decoded image bytes.
 export function styleUploadedPhotoDataUrlStep(itemId?: string | null): string {
-  return `To attach an uploaded photo: read the uploaded file's bytes, downscale to at most ~1600px on the long edge and re-encode as JPEG (quality ~85) so it stays under ~2 MB (Fluent's hard limit is ${STYLE_HOSTED_FILE_MAX_BYTES / 1_000_000} MB of image bytes), then call fluent_set_style_item_image with ${itemId ? `item_id "${itemId}", ` : ''}image_url set to data:image/jpeg;base64,<bytes> and image_type "fit" for an on-you photo or "alternate" otherwise ("primary" only for the cover). Never pass a local file path or an app-internal image handle.`;
+  return `To attach an uploaded photo: read the uploaded file's bytes, downscale to at most ~1600px on the long edge and re-encode as JPEG (quality ~85) so it stays under ~2 MB (Fluent's hard limit is ${STYLE_HOSTED_FILE_MAX_BYTES / 1_000_000} MB of image bytes), then call fluent_add_closet_item_photo with ${itemId ? `item_id "${itemId}", ` : ''}image_url set to data:image/jpeg;base64,<bytes> and image_type "fit" for an on-you photo or "alternate" for another product photo. For the item's cover (or its first photo), call fluent_set_closet_item_photo the same way with image_type "primary" instead; fluent_add_closet_item_photo never sets the cover. Never pass a local file path or an app-internal image handle.`;
 }
 export const STYLE_UPLOADED_PHOTO_DATA_URL_STEP = styleUploadedPhotoDataUrlStep();
 export const STYLE_NOT_IMAGE_DATA_REASON = 'that photo reference isn\'t image data (it looks like an app-internal image handle)';
@@ -726,6 +726,10 @@ const STYLE_NOT_IMAGE_DATA_DETAIL = 'That photo reference isn\'t image data (it 
 const STYLE_NOT_IMAGE_URL_DETAIL = 'That photo reference isn\'t a downloadable image URL (it looks like a local file path or an app-internal reference).';
 export const STYLE_NOT_IMAGE_DATA_MESSAGE = `${STYLE_NOT_IMAGE_DATA_DETAIL} ${STYLE_UPLOADED_PHOTO_DATA_URL_STEP}`;
 export const STYLE_NOT_IMAGE_URL_MESSAGE = `${STYLE_NOT_IMAGE_URL_DETAIL} ${STYLE_UPLOADED_PHOTO_DATA_URL_STEP}`;
+
+// Outcome-neutral reason for a runtime without strict public fetch (self-hosted/Node): it never
+// downloads a caller-supplied image link, so an image that must be owned has to arrive as bytes.
+export const STYLE_SELF_HOSTED_IMAGE_LINK_REASON = 'this self-hosted Fluent runtime does not download image links, so this photo must be sent as image bytes (image_file or a data: URL), not a link';
 
 // Thrown by the atomic Catalog create when its image bytes could not be ingested. It is raised only
 // before any item or photo row is written, so a caller may safely retry the create text-first (D24).

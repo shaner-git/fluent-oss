@@ -1,7 +1,7 @@
 {
   "name": "fluent",
   "version": "0.2.0",
-  "description": "Fluent helps Claude use personal Meals and Style memory for practical everyday decisions.",
+  "description": "Fluent helps Claude use your saved closet and Style context for practical everyday decisions.",
   "author": {
     "name": "Fluent"
   },
@@ -10,14 +10,14 @@
   "license": "MIT",
   "keywords": [
     "fluent",
-    "meals",
     "style",
+    "closet",
     "personal-mcp"
   ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "x-fluent": {
-    "minimumContractVersion": "2026-07-09.fluent-core-v2.0",
-    "currentReferenceContractVersion": "2026-07-09.fluent-core-v2.0"
+    "minimumContractVersion": "2026-10-08.fluent-core-v2.3",
+    "currentReferenceContractVersion": "2026-10-08.fluent-core-v2.3"
   }
 }

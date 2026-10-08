@@ -750,7 +750,7 @@ function buildSuggestedNextAction(input: {
     return {
       label,
       rationale: `${scopeText} ${input.presentationReadiness.recoverableSourceCount} source-photo candidate(s) require byte, decode, and exact-item inspection before preparation; ${input.presentationReadiness.photoUnavailableCount} item(s) need a replacement attachment and ${input.presentationReadiness.noPhotoCount} item(s) need their first photo. Nothing changes until each exact item is reviewed and written.`,
-      toolName: 'fluent_set_style_item_image',
+      toolName: 'fluent_set_closet_item_photo',
     };
   }
   if (input.profile.raw.budgetProfile == null) {

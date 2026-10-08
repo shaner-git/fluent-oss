@@ -18,9 +18,9 @@ assert.deepEqual(frozenContractSnapshot, {
   freeze: FLUENT_CONTRACT_FREEZE,
 });
 assert.deepEqual(frozenPublicProfile, fluentPublicProfile());
-assert.equal(FLUENT_TOOL_NAMES.length, 27);
-assert.equal(new Set(FLUENT_TOOL_NAMES).size, 27, 'The public contract must not contain duplicate tools.');
-assert.equal(FLUENT_RESOURCE_URIS.length, 14);
+assert.equal(FLUENT_TOOL_NAMES.length, 26);
+assert.equal(new Set(FLUENT_TOOL_NAMES).size, 26, 'The public contract must not contain duplicate tools.');
+assert.equal(FLUENT_RESOURCE_URIS.length, 1);
 assert.deepEqual(FLUENT_TOOL_ALIASES, [], 'The 2.0 launch contract has no public tool aliases.');
 
 for (const profile of ['assistant_app', 'chatgpt_app'] as const) {
@@ -82,6 +82,8 @@ const localServerSource = readFileSync('src/local/server.ts', 'utf8');
 assert.doesNotMatch(localServerSource, /candidate-full|profile:\s*['"]full['"]/);
 const mcpSource = readFileSync('src/mcp.ts', 'utf8');
 assert.doesNotMatch(mcpSource, /registerHealthMcpSurface\s*\(/);
+// Meals is retired (D30): the dormant Meals surface is never registered on a public server.
+assert.doesNotMatch(mcpSource, /registerMealsMcpSurface\s*\(/);
 assert.doesNotMatch(mcpSource, /allowPurchasePageExtraction/);
 const mcpStyleSource = readFileSync('src/mcp-style.ts', 'utf8');
 assert.doesNotMatch(mcpStyleSource, /allowPurchasePageExtraction/);
@@ -130,7 +132,7 @@ function assertRenderToolResourceBindings(
   profile: string,
 ) {
   const registeredResourceUris = new Set(Object.keys(server._registeredResources));
-  const renderTools = Object.entries(server._registeredTools).filter(([name]) => name.includes('render'));
+  const renderTools = Object.entries(server._registeredTools).filter(([name]) => name.includes('render') || name === 'fluent_show_closet');
   assert.ok(renderTools.length > 0, `${profile} must expose at least one render tool.`);
 
   for (const [name, tool] of renderTools) {

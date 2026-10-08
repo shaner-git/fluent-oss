@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getFluentIdentityContext } from './fluent-identity';
 import type { FluentProfileRecord } from './fluent-core';
 
-export const FLUENT_ACCOUNT_PROFILE_TOOL = 'fluent_get_account_profile';
+export const FLUENT_ACCOUNT_PROFILE_TOOL = 'fluent_get_account';
 export const accountProfileSchema = z.object({
   id: z.string().min(1).regex(/\S/),
   name: z.string().optional(),

@@ -95,7 +95,7 @@ async function softArchivesInventoryItemReversibly() {
 
     // ...but the row PERSISTS (this is NOT a hard delete) with status 'removed' and its quantity/unit
     // preserved, so an un-archive (status back to 'present') is lossless. This is the difference from
-    // deleteInventoryItem, and it honors fluent_archive_item's reversible / destructiveHint:false contract.
+    // deleteInventoryItem, and it honors fluent_archive_closet_item's reversible / destructiveHint:false contract.
     const row = runtime.sqliteDb.sqlite
       .prepare('SELECT status, quantity, unit FROM meal_inventory_items WHERE normalized_name = ?')
       .get('jarlic') as { status?: string; quantity?: number; unit?: string } | undefined;

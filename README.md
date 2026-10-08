@@ -1,10 +1,19 @@
 # Fluent open-source runtime
 
+> [!WARNING]
+> **This repository is archived. Fluent's open-source runtime is no longer maintained as of 2026-10-08.**
+>
+> - **Final version:** this export, contract `2026-10-08.fluent-core-v2.3`. The runtime is closet-only: Meals, budgets and Health are retired.
+> - **No security updates.** No fixes, security patches or support will be released. If you keep running it, keep it on `127.0.0.1` or behind your own network controls.
+> - **Hosted Fluent continues** at [meetfluent.app](https://meetfluent.app/).
+> - **Export your data** with `npm run oss:export:snapshot -- --out ./fluent-snapshot.json` (see [Backups](#backups)).
+> - The license is unchanged (see [LICENSE](./LICENSE)).
+
 **Make your AI fluent in what matters.**
 
-Fluent works inside compatible AI apps, bringing in the information that matters for each question. A clothing purchase can draw on your closet and clothing budget. A meal plan can draw on your tastes and preferences, current grocery needs, and grocery spending.
+Fluent works inside compatible AI apps, bringing in the information that matters for each question. A clothing purchase can draw on your closet.
 
-Use this repo when you want Fluent running on infrastructure you control. Managed Fluent is available at [meetfluent.app](https://meetfluent.app/), and Fluent itself is free to use. Both paths share the same MCP contract.
+This repo is the final snapshot of Fluent running on infrastructure you control. Managed Fluent is available at [meetfluent.app](https://meetfluent.app/), and Fluent itself is free to use. At the time of archiving, both paths shared the same MCP contract; the hosted service may change after this point.
 
 ## Public Release
 
@@ -13,7 +22,7 @@ Use this repo when you want Fluent running on infrastructure you control. Manage
 - current docs bucket: [docs/oss](https://github.com/shaner-git/fluent-oss/tree/main/docs/oss)
 - release history: [Fluent open-source runtime releases](https://github.com/shaner-git/fluent-oss/releases)
 - supported direct runtime: Node.js `22.x`
-- supported minimum contract version: `2026-07-09.fluent-core-v2.0`
+- supported minimum contract version: `2026-10-08.fluent-core-v2.3`
 
 ## Who This Is For
 
@@ -38,6 +47,7 @@ If you want Fluent managed for you, start at [meetfluent.app](https://meetfluent
 - bearer-token auth instead of OAuth
 - Postgres + S3 is experimental
 - this repo focuses on self-hosting; managed operation lives at `meetfluent.app`
+- the runtime does not download image links server-side, except files uploaded through ChatGPT (it cannot verify where other hostnames resolve): ordinary photo links are kept as references, and a Catalog-ready photo must be sent as image bytes (`image_file` or a `data:` URL)
 - `npm run scaffold:mcp -- --track cloud` remains a compatibility scaffold and requires an explicit `--base-url` in this public repo
 
 ## Managed Fluent And Running Fluent Yourself
@@ -96,8 +106,8 @@ npm run oss:seed:demo
 ```
 
 Expected result:
-- Fluent writes a demo closet, budget envelope with spend, recipes, a current meal plan, and inventory into the same local root used by the server
-- The seed is safe to rerun: stable records update, and budget spend is only topped up to the fixture target
+- Fluent writes a demo closet into the same local root used by the server (the seed also writes legacy recipe, meal-plan and inventory rows from the retired Meals domain; the closet-only tools do not expose them)
+- The seed is safe to rerun: stable records update
 
 ### 4. Start the server
 
@@ -118,7 +128,7 @@ Authenticated `/mcp` proof with the seeded closet:
 
 ```bash
 export TOKEN="$(npm run -s oss:token:print | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).token))')"
-node --input-type=module -e "import { Client } from '@modelcontextprotocol/sdk/client/index.js'; import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'; const transport = new StreamableHTTPClientTransport(new URL('http://127.0.0.1:8788/mcp'), { requestInit: { headers: { Authorization: 'Bearer ' + process.env.TOKEN } } }); const client = new Client({ name: 'fluent-oss-proof', version: '1.0.0' }, { capabilities: {} }); await client.connect(transport); const result = await client.callTool({ name: 'fluent_list_items', arguments: { domain: 'style', item_type: 'style_item', limit: 5 } }); console.log(JSON.stringify(result.structuredContent ?? result.content, null, 2)); await transport.close();"
+node --input-type=module -e "import { Client } from '@modelcontextprotocol/sdk/client/index.js'; import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'; const transport = new StreamableHTTPClientTransport(new URL('http://127.0.0.1:8788/mcp'), { requestInit: { headers: { Authorization: 'Bearer ' + process.env.TOKEN } } }); const client = new Client({ name: 'fluent-oss-proof', version: '1.0.0' }, { capabilities: {} }); await client.connect(transport); const result = await client.callTool({ name: 'fluent_list_closet_items', arguments: { domain: 'style', item_type: 'style_item', limit: 5 } }); console.log(JSON.stringify(result.structuredContent ?? result.content, null, 2)); await transport.close();"
 ```
 
 ### 5. Generate MCP client config
@@ -217,6 +227,6 @@ Then see the operator guide:
 
 ## About This Repo
 
-This public repo is generated from Fluent's canonical private source repo so managed and open-source paths stay aligned. Public contributions are welcome, but the source of truth remains the canonical repo and changes are re-exported here.
+This public repo was generated from Fluent's canonical private source repo so managed and open-source paths stayed aligned. It is archived and read-only: no further exports, contributions or releases will be made.
 
 The export boundary is documented in [docs/oss/fluent-oss-artifact-boundary.md](./docs/oss/fluent-oss-artifact-boundary.md), including what ships publicly, what stays private, and which scrub gates block unsafe exports.

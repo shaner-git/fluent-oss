@@ -10,7 +10,7 @@
 export type PcDomain = 'shared' | 'meals' | 'style' | 'budgets' | 'wellbeing';
 export type PcHost = 'claude' | 'chatgpt_app' | 'codex' | 'openclaw' | 'generic_mcp' | 'unknown';
 
-export type PersonFactSection = 'identity' | 'dietary' | 'household' | 'taste';
+export type PersonFactSection = 'identity' | 'dietary' | 'household' | 'taste' | 'style';
 export type PersonFactStatus = 'confirmed' | 'inferred' | 'system';
 
 // Slice-1 capture-wired Meals kinds: allergy, hard_avoid, dietary_pattern, anti_favorite,
@@ -24,7 +24,21 @@ export type PersonFactKind =
   | 'anti_favorite'
   | 'taste_pref'
   | 'timezone'
-  | 'display_name';
+  | 'display_name'
+  | 'style_pref';
+
+// Style taste, size and price facts (next ChatGPT version, plan #7). One kind, faceted, so a new
+// Style fact type is a server change rather than a new frozen tool enum value.
+export const STYLE_PREF_FACETS = ['aesthetic', 'avoid', 'size', 'fit', 'store', 'price_band'] as const;
+export type StylePrefFacet = (typeof STYLE_PREF_FACETS)[number];
+const STYLE_PREF_FACET_LABELS: Record<StylePrefFacet, string> = {
+  aesthetic: 'Aesthetic',
+  avoid: 'Avoid',
+  fit: 'Fit',
+  price_band: 'Price range',
+  size: 'Size',
+  store: 'Preferred store',
+};
 
 export type DietaryPatternIdentity = 'vegetarian' | 'vegan' | 'pescatarian';
 
@@ -36,6 +50,7 @@ export interface PersonFactValueMap {
   taste_pref: { label: string; polarity: 'like' | 'dislike'; strength?: 'mild' | 'strong' };
   timezone: { iana: string };
   display_name: { text: string };
+  style_pref: { facet: StylePrefFacet; label: string };
 }
 
 export interface ConsentVisibility {
@@ -114,6 +129,7 @@ const SECTION_OF: Record<PersonFactKind, PersonFactSection> = {
   taste_pref: 'taste',
   timezone: 'identity',
   display_name: 'identity',
+  style_pref: 'style',
 };
 
 // Per-section visibility defaults (codified here, NOT scattered — a wrong default would exfiltrate an
@@ -124,6 +140,8 @@ const SECTION_VISIBILITY_DEFAULTS: Record<PersonFactSection, ConsentVisibility> 
   dietary: { domains: 'all', hosts: 'all', derived_only_across: [] },
   taste: { domains: 'all', hosts: 'all', derived_only_across: [] },
   household: { domains: ['meals', 'shared'], hosts: 'all', derived_only_across: [] },
+  // Style facts are for Style (and the shared profile read), never Meals planning.
+  style: { domains: ['style', 'shared'], hosts: 'all', derived_only_across: [] },
 };
 
 export function defaultVisibilityForKind(kind: PersonFactKind): ConsentVisibility {
@@ -175,6 +193,11 @@ export function pathForFact(kind: PersonFactKind, value: PersonFactValueMap[Pers
       return `taste.dislikes.${slug((value as PersonFactValueMap['anti_favorite']).label)}`;
     case 'taste_pref':
       return `taste.preferences.${slug((value as PersonFactValueMap['taste_pref']).label)}`;
+    // The price range is a single slot; every other Style facet is list-like (one row per value).
+    case 'style_pref': {
+      const pref = value as PersonFactValueMap['style_pref'];
+      return pref.facet === 'price_band' ? 'style.price_band' : `style.${pref.facet}.${slug(pref.label)}`;
+    }
   }
 }
 
@@ -229,6 +252,14 @@ export function validatePersonFactValue<K extends PersonFactKind>(kind: K, raw: 
       if (!text) throw new Error('person_fact display_name requires text.');
       return { text } as PersonFactValueMap[K];
     }
+    case 'style_pref': {
+      const label = str(v.label);
+      if (!label) throw new Error('person_fact style_pref requires a non-empty label.');
+      if (!(STYLE_PREF_FACETS as readonly string[]).includes(String(v.facet))) {
+        throw new Error(`person_fact style_pref facet must be one of ${STYLE_PREF_FACETS.join(', ')}.`);
+      }
+      return { facet: v.facet as StylePrefFacet, label: label.slice(0, 240) } as PersonFactValueMap[K];
+    }
     default:
       throw new Error(`Unknown person_fact kind: ${String(kind)}`);
   }
@@ -243,6 +274,10 @@ export function factLabel(fact: Pick<PersonFact, 'kind' | 'value'>): string {
       return String((v as PersonFactValueMap['timezone']).iana);
     case 'display_name':
       return String((v as PersonFactValueMap['display_name']).text);
+    case 'style_pref': {
+      const pref = v as PersonFactValueMap['style_pref'];
+      return `${STYLE_PREF_FACET_LABELS[pref.facet] ?? pref.facet}: ${pref.label}`;
+    }
     default:
       return String((v as { label?: unknown }).label ?? '');
   }

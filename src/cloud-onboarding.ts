@@ -1571,20 +1571,22 @@ function buildSupportNote(status: FluentCloudSupportStatus, ticketRef: string | 
 }
 
 const REPEAT_CLIENT_EVENT_TYPES = ['cloud_onboarding.first_client_connected', 'cloud_onboarding.client_connected'] as const;
-const PROFILE_START_TOOL_NAMES = new Set(['fluent_update_profile', 'fluent_update_shared_profile_patch']);
-const MEALS_WRITE_TOOL_NAMES = new Set([
-  'fluent_save_recipe',
-  'fluent_update_recipe_patch',
-  'fluent_record_recipe_feedback',
-  'fluent_save_meal_plan',
-  'fluent_apply_grocery_list_change',
-  'fluent_apply_grocery_shopping_result',
-]);
+const PROFILE_START_TOOL_NAMES = new Set(['fluent_update_profile', 'fluent_update_profile']);
 const STYLE_WRITE_TOOL_NAMES = new Set([
-  'fluent_update_style_item_patch',
-  'fluent_create_style_item',
-  'fluent_refresh_style_item_profile',
-  'fluent_set_style_item_image',
+  'fluent_update_closet_item',
+  'fluent_set_closet_item_cover',
+  'fluent_reorder_closet_item_photos',
+  'fluent_hide_closet_item_photo',
+  'fluent_replace_closet_item_photo',
+  'fluent_undo_closet_item_photo_change',
+  'fluent_add_closet_item_photo',
+  'fluent_restore_closet_item',
+  'fluent_merge_closet_items',
+  'fluent_save_closet_item_product_details',
+  'fluent_undo_closet_item_merge',
+  'fluent_add_closet_item',
+  'fluent_record_closet_item_feedback',
+  'fluent_set_closet_item_photo',
 ]);
 
 type OnboardingMilestoneColumn = 'first_client_connected_at' | 'first_successful_tool_call_at';
@@ -1682,19 +1684,13 @@ function domainFromToolCall(toolName: string, args?: Record<string, unknown>): s
   if (toolName.startsWith('health_')) {
     return 'health';
   }
-  if (MEALS_WRITE_TOOL_NAMES.has(toolName)) {
-    return 'meals';
-  }
   if (STYLE_WRITE_TOOL_NAMES.has(toolName)) {
     return 'style';
   }
-  if (toolName === 'fluent_archive_item') {
+  if (toolName === 'fluent_archive_closet_item') {
     const domain = args?.domain;
-    return domain === 'meals' || domain === 'style' ? domain : null;
-  }
-  if (toolName === 'fluent_set_budget_envelope' || toolName === 'fluent_log_budget_spend') {
-    const category = args?.category;
-    return category === 'style-clothing' ? 'style' : category === 'meals-groceries' ? 'meals' : null;
+    // Meals is retired (D30): a meals archive writes nothing, so it starts no domain.
+    return domain === 'style' ? domain : null;
   }
   if (
     toolName === 'fluent_enable_domain' ||

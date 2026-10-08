@@ -3,11 +3,11 @@ import type { StylePhotoRecord } from './types';
 import { isStyleFitPhoto } from './helpers';
 
 export const photoLibraryActionSchema = z.discriminatedUnion('type', [
-  z.object({type:z.literal('remove'),photoId:z.string().min(1),coverId:z.string().min(1).nullable().optional()}),
-  z.object({type:z.literal('cover'),photoId:z.string().min(1)}),
-  z.object({type:z.literal('reorder'),ids:z.array(z.string().min(1)).max(500)}),
-  z.object({type:z.literal('replace'),photoId:z.string().min(1),replacementId:z.string().min(1)}),
-  z.object({type:z.literal('undo'),token:z.string().uuid()}),
+  z.object({type:z.literal('remove'),photoId:z.string().min(1),coverId:z.string().min(1).nullable().optional().describe('Required only when removing the current cover: the visible product photo to use as the next cover, or null to leave the item without a cover.')}).describe('Hide one visible photo from the item. The stored file is kept, so Undo can bring it back.'),
+  z.object({type:z.literal('cover'),photoId:z.string().min(1)}).describe('Make one visible product photo the item cover. On-you (fit) photos cannot be the cover.'),
+  z.object({type:z.literal('reorder'),ids:z.array(z.string().min(1)).max(500).describe('Every visible photo ID, each exactly once, in the new order.')}).describe('Set the display order of the visible photos.'),
+  z.object({type:z.literal('replace'),photoId:z.string().min(1),replacementId:z.string().min(1).describe('ID of the photo already added to this item (for example by fluent_add_closet_item_photo) that takes over the old photo slot.')}).describe('Swap one visible photo for an already-added photo of the same item. The old file is kept.'),
+  z.object({type:z.literal('undo'),token:z.string().uuid().describe('undoToken returned by the previous photo change.')}).describe('Reverse the most recent photo change while the saved revision is unchanged.'),
 ]);
 export type PhotoLibraryAction=z.infer<typeof photoLibraryActionSchema>;
 export type PhotoArrangement={hidden:string[];order:string[];hiddenVersions?:Record<string,string>;coverId?:string|null};

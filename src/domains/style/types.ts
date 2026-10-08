@@ -33,7 +33,10 @@ export type StyleComparatorKey =
   | 'boot'
   | 'sandal'
   | 'mule'
-  | 'other_shoe';
+  | 'other_shoe'
+  | 'dress'
+  | 'jumpsuit'
+  | 'other_one_piece';
 export type StyleComparatorCoverageMode = 'exact_comparator' | 'typed_role' | 'category_fallback' | 'sparse';
 export type StylePreferenceWeight = 'low' | 'medium' | 'high';
 export type StyleBrandAffinityStance = 'prefer' | 'avoid' | 'conditional';
@@ -501,24 +504,6 @@ export interface StylePurchaseAnalysisItemMatch {
   reasons: string[];
 }
 
-export interface StylePurchaseBudgetContext {
-  category: 'style-clothing';
-  categoryPressure: number | null;
-  caveats: string[];
-  liquidityFloor: null;
-  projectedRatio?: number | null;
-  purchaseSignal: 'comfortable' | 'tight' | 'no_signal';
-  targetSetup: {
-    category: 'style-clothing';
-    currency: string;
-    monthlyAmount: number;
-    periodStart: string;
-    remainingThisPeriod: number;
-    spentThisPeriod: number;
-    updatedAt: string;
-  } | null;
-}
-
 export type StylePurchaseComparisonRelation = 'duplicate' | 'replacement' | 'upgrade' | 'adjacent' | 'distinct' | 'uncertain';
 export type StylePurchaseComparisonConfidence = 'low' | 'medium' | 'high';
 export type StylePurchaseReasoningFraming = 'duplicate' | 'replacement' | 'upgrade' | 'adjacent' | 'addition' | 'uncertain';
@@ -622,7 +607,6 @@ export interface StylePurchaseAnalysis {
   comparatorReasoning: StylePurchaseComparatorReasoning;
   confidenceNotes: string[];
   contextBuckets: StylePurchaseAnalysisBuckets;
-  budgetContext: StylePurchaseBudgetContext | null;
   coverageImpact: {
     notes: string[];
     pilesIntoCoveredLane: boolean;

@@ -18,26 +18,33 @@ export const FLUENT_OPTIONAL_CAPABILITIES = FLUENT_PUBLIC_OPTIONAL_CAPABILITIES;
 export const FLUENT_CHATGPT_APP_WRITE_TOOL_NAMES = FLUENT_PUBLIC_WRITE_TOOL_NAMES;
 // Classify the most consequential supported mode. Reversible overwrites and
 // archive operations still count; audit history is not a non-destructive exemption.
+// fluent_add_closet_item and fluent_add_closet_item_photo are absent on purpose: they only create an
+// item or append a photo and never change, hide or archive anything that exists.
 export const FLUENT_CHATGPT_APP_DESTRUCTIVE_TOOL_NAMES = [
-  'fluent_update_shared_profile_patch',
-  'fluent_update_recipe_patch',
-  'fluent_record_recipe_feedback',
-  'fluent_save_meal_plan',
-  'fluent_apply_grocery_list_change',
-  'fluent_apply_grocery_shopping_result',
-  'fluent_set_budget_envelope',
-  'fluent_update_style_item_patch',
-  'fluent_create_style_item',
-  'fluent_refresh_style_item_profile',
-  'fluent_set_style_item_image',
-  'fluent_archive_item',
+  'fluent_update_profile',
+  'fluent_update_closet_item',
+  'fluent_set_closet_item_cover',
+  'fluent_reorder_closet_item_photos',
+  'fluent_hide_closet_item_photo',
+  'fluent_replace_closet_item_photo',
+  'fluent_undo_closet_item_photo_change',
+  'fluent_restore_closet_item',
+  'fluent_merge_closet_items',
+  'fluent_save_closet_item_product_details',
+  'fluent_undo_closet_item_merge',
+  'fluent_record_closet_item_feedback',
+  'fluent_set_closet_item_photo',
+  'fluent_archive_closet_item',
 ] as const;
 // These tools may fetch host-selected public image URLs, including retained
 // references. Merely accessing Fluent-owned storage is not open-world access.
 export const FLUENT_CHATGPT_APP_OPEN_WORLD_TOOL_NAMES = [
-  'fluent_get_item',
-  'fluent_get_media_bundle',
-  'fluent_create_style_item',
+  'fluent_get_closet_item',
+  'fluent_get_closet_item_photos',
+  'fluent_add_closet_item',
+  // Downloads OpenAI-hosted uploads into owned storage (scanner, 2026-10-02).
+  'fluent_set_closet_item_photo',
+  'fluent_add_closet_item_photo',
 ] as const;
 
 // Runtime guidance from retired generations is intentionally not part of the
@@ -55,14 +62,15 @@ export const FLUENT_CHATGPT_APP_PROFILE = {
     signIn: '/sign-in',
   },
   degradedDomainPolicy:
-    'Expose account helpers for every connected account; expose Meals and Style behavior only when the matching domain is ready.',
+    'Expose account helpers for every connected account; expose Style behavior only when the Style domain is ready.',
   excludedSurfacePolicy: [
     'Health and Wellbeing until a separately reviewed public contract exists',
+    'Meals, recipes, meal plans, and grocery lists (retired 2026-10-06, D30)',
     'Home dashboards and retired domain-specific tools',
     'browser, retailer, cart, checkout, and product-page extraction',
     'raw financial data and medical decisions',
     'operator, migration, diagnostic, and arbitrary generic-write tools',
-    'widgets other than Grocery List, Budgets Envelope Setup, and Style Closet',
+    'budgets, spend tracking, and widgets other than Style Closet',
   ],
   id: 'chatgpt-app',
   title: 'Fluent ChatGPT App',
@@ -115,13 +123,11 @@ export function fluentHostProfiles(_options?: {
     advertisedResources: profile.resources,
     advertisedTools: profile.tools,
     canonicalFallbacks: {
-      budgetEnvelopeSetup: 'Use structured budget-envelope data in text when the host cannot mount MCP Apps.',
-      groceryList: 'Use fluent_get_context or fluent_list_items when the host cannot mount MCP Apps.',
-      styleCloset: 'Use fluent_list_items, fluent_get_item, and fluent_get_media_bundle when the host cannot mount MCP Apps.',
+      styleCloset: 'Use fluent_list_closet_items, fluent_get_closet_item, and fluent_get_closet_item_photos when the host cannot mount MCP Apps.',
     },
     guidanceResources: [] as const,
     notes: [
-      'Meals and Style are current. Budgets are limited to manual clothing and grocery envelopes. Health and Wellbeing are reserved.',
+      'Style is current. Meals, Health, Wellbeing and budgets are retired; hosts bring finance context from the user\'s own tools.',
       'All hosts use the same public contract and explicit-write boundary.',
     ],
     renderAdapters: profile.renderAdapters,
@@ -135,7 +141,7 @@ export function fluentHostProfiles(_options?: {
       title: 'ChatGPT',
       packagedSkills: 'unavailable',
       defaultAnswerMode: 'widget_plus_text',
-      widgetPolicy: 'Use the three promoted MCP Apps resources when they materially help; always preserve a text fallback.',
+      widgetPolicy: 'Use the promoted Style Closet MCP Apps resource when it materially helps; always preserve a text fallback.',
     },
     {
       ...shared,
@@ -186,7 +192,7 @@ export const FLUENT_CONTRACT_FREEZE = {
   launchBoundary:
     'This pre-launch 2.0 reset intentionally drops every earlier public tool, resource alias, route, and compatibility profile. There are no external active users to migrate.',
   productScope:
-    'Meals and Style are current; Budgets is limited to manual meals-groceries and style-clothing envelopes; Health and Wellbeing are reserved.',
+    'Style is current; Meals, Health, Wellbeing and budgets are retired.',
   requiredFields: [
     'contractVersion',
     'availableDomains',

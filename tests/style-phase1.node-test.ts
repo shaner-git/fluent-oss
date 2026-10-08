@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { runWithFluentAuthProps, type FluentAuthProps } from '../src/auth';
-import { decryptStyleImageOwnerToken } from '../src/domains/style/media';
+import { buildSignedStyleRemoteImageUrl, decryptStyleImageOwnerToken } from '../src/domains/style/media';
 import { normalizeStyleProfile } from '../src/domains/style/helpers';
 import { buildPurchaseAnalysisViewModel } from '../src/domains/style/purchase-analysis';
 import { StyleService } from '../src/domains/style/service';
@@ -62,6 +62,7 @@ async function main() {
   await infersComparatorKeysForNewEdgeCategoryItems();
   await acceptsCandidateImageUrlsInPurchaseAnalysis();
   await rejectsHostedLocalUploadPathPhotos();
+  await localRuntimeNeverFetchesCallerImageLinks();
   await preservesExplicitSaveFlowWithoutGeneratedImages();
   await backfillsLegacyRelativePhotoPathsFromMountedRoot();
   await deliversOwnedStyleImagesFromLocalRuntime();
@@ -2665,6 +2666,48 @@ async function rejectsHostedLocalUploadPathPhotos() {
       /cannot ingest local upload paths directly/i,
     );
   } finally {
+    runtime.sqliteDb.close();
+  }
+}
+
+// The local (self-hosted) runtime has no strict public fetch, so it must never download a
+// caller-supplied image link server-side (a hostname can resolve to a private address): a photo
+// link stays a reference, and a signed remote image redirects the viewer instead of being proxied.
+async function localRuntimeNeverFetchesCallerImageLinks() {
+  const runtime = createTempRuntime();
+  const originalFetch = globalThis.fetch;
+  const fetched: string[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+    fetched.push(String(input instanceof Request ? input.url : input));
+    throw new Error('the local runtime must not fetch a caller-supplied image link');
+  }) as typeof fetch;
+  try {
+    const service = createStyleService(runtime);
+    const provenance = testProvenance();
+    await service.upsertItem({
+      item: { id: 'style-item:local-link', brand: 'Test', category: 'TOP', name: 'Link Tee', subcategory: 'Tee' },
+      provenance,
+    });
+    await service.upsertItemPhotos({
+      itemId: 'style-item:local-link',
+      photos: [{ id: 'style-photo:local-link-1', is_primary: true, url: 'https://images.example.test/link-tee.jpg' }],
+      provenance,
+    });
+    const item = await service.getItem('style-item:local-link');
+    assert.equal(item?.photos[0]?.artifactId ?? null, null, 'the link stays a reference');
+    assert.equal(item?.photos[0]?.sourceUrl, 'https://images.example.test/link-tee.jpg');
+
+    const signed = await buildSignedStyleRemoteImageUrl({
+      origin: runtime.env.PUBLIC_BASE_URL,
+      secret: runtime.env.IMAGE_DELIVERY_SECRET,
+      sourceUrl: 'https://images.example.test/link-tee.jpg',
+    });
+    const response = await maybeHandleStyleImageRequest(new Request(signed.originalUrl), runtime.env as never, null);
+    assert.equal(response?.status, 302, 'the remote image is not proxied');
+    assert.equal(response?.headers.get('location'), 'https://images.example.test/link-tee.jpg');
+    assert.deepEqual(fetched, [], 'no server-side fetch of a caller-supplied link');
+  } finally {
+    globalThis.fetch = originalFetch;
     runtime.sqliteDb.close();
   }
 }

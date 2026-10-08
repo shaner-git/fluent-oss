@@ -1,4 +1,3 @@
-import { dash } from '@better-auth/infra';
 import {
   oauthProvider,
   oauthProviderAuthServerMetadata,
@@ -42,7 +41,6 @@ import {
   renderFluentCloudEarlyAccessPage,
   renderFluentCloudAccessFailurePage,
   FLUENT_CLOUD_WAITLIST_URL,
-  FLUENT_OSS_AVAILABLE_URL,
   FLUENT_SUPPORT_EMAIL,
 } from './cloud-early-access';
 import {
@@ -1157,15 +1155,6 @@ export function createBetterAuthConfig(request: Request, env: CloudRuntimeEnv) {
         `${baseURL}/mcp/`,
       ],
     }),
-    ...(env.BETTER_AUTH_API_KEY?.trim()
-      ? [
-          dash({
-            apiKey: env.BETTER_AUTH_API_KEY.trim(),
-            apiUrl: env.BETTER_AUTH_API_URL?.trim(),
-            kvUrl: env.BETTER_AUTH_KV_URL?.trim(),
-          }),
-        ]
-      : []),
   ];
 
   return {
@@ -2609,7 +2598,7 @@ function renderSignedInAccountBody(input: {
     ${step(true, 'Account created', 'Your private Fluent space is ready.')}
     ${step(clientConnected, 'AI app connected', connectedClient ? `${connectedClient} connected.` : 'Connect ChatGPT, Codex, or Claude.')}
     ${step(firstResponse, 'First Fluent response', 'Ask Fluent to check your account and suggest a first area.')}
-    ${step(firstArea, 'First area started', 'Start with Meals or Style when you are ready.')}
+    ${step(firstArea, 'First area started', 'Start with your closet when you are ready.')}
   </ol>
   <div class="setup-actions">
     <a class="btn-primary" href="https://chatgpt.com/plugins/plugin_asdk_app_69e294401b9881919c1f050c35710f0b">Install in ChatGPT + Codex <span class="btn-arrow">→</span></a>
@@ -2634,8 +2623,8 @@ ${provisioningWarning}`;
 // Shown on the consent page so the step after approval is never a blank. The
 // prompts must work on an empty account and stay host-neutral.
 export const FLUENT_FIRST_PROMPT_EXAMPLES = [
-  'Plan three dinners for this week.',
-  'Add my navy wool coat to my Fluent closet.',
+  'Help me add a few clothes to my Fluent closet.',
+  'What should I wear today from my Fluent closet?',
 ] as const;
 const FLUENT_CONSENT_APPROVED_STATUS =
   `Approved. Returning you to your AI app. Start a new conversation and try: “${FLUENT_FIRST_PROMPT_EXAMPLES[0]}”`;
@@ -2870,8 +2859,7 @@ ${actions}
   <li>Deletion attempts to finish immediately after confirmation for both provisioned Fluent accounts and access request accounts.</li>
   <li>If the automatic purge fails, Fluent moves the request into manual review with the last error recorded.</li>
   <li>If deletion completes, connected clients lose OAuth access immediately and must not expect Fluent to reconnect.</li>
-  <li>Need Fluent access instead of deletion? Start free access at <a href="${escapeHtml(input.support.waitlistUrl)}">${escapeHtml(input.support.waitlistUrl)}</a>.</li>
-  <li>Need a local alternative? Run Fluent yourself with the open-source runtime at <a href="${escapeHtml(input.support.ossUrl)}">${escapeHtml(input.support.ossUrl)}</a>.</li>
+  <li>Changed your mind? Keep using Fluent: <a href="${escapeHtml(input.support.waitlistUrl)}">${escapeHtml(input.support.waitlistUrl)}</a>.</li>
   <li>Retained after completion: the deletion request record plus minimal audit metadata needed to prove fulfillment and satisfy legal, fraud, security, or safety obligations.</li>
   <li>Questions or retention exceptions: <a href="mailto:${escapeHtml(input.support.supportEmail)}">${escapeHtml(input.support.supportEmail)}</a>.</li>
   <li>Sign-in page: <a href="${escapeHtml(returnToSignIn)}">${escapeHtml(returnToSignIn)}</a>.</li>
@@ -2958,9 +2946,9 @@ function humanizeScope(scope: string): string {
     case 'email':
       return 'Read your email address';
     case FLUENT_MEALS_READ_SCOPE:
-      return 'Read your meal planning, grocery, and at-home food context';
+      return 'Read your shared Fluent profile';
     case FLUENT_MEALS_WRITE_SCOPE:
-      return 'Create and update meal plans and grocery lists';
+      return 'Update your shared Fluent profile';
     case FLUENT_STYLE_READ_SCOPE:
       return 'Read your closet and style preferences';
     case FLUENT_STYLE_WRITE_SCOPE:

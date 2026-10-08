@@ -2,6 +2,7 @@ import React,{useState,useEffect} from 'react';
 import {PhotoEditor} from './PhotoEditor';
 import {Plus,Check,ArrowLeft,ArrowRight,Trash,ArrowsClockwise,ImageBroken} from '@phosphor-icons/react';
 import {findPayload} from './model.mjs';
+import {photoChangeCall} from './photos.mjs';
 
 export function PhotoManager({item,host,refresh,busyChanged,close,embedded=false}){
  const [busy,B]=useState(false),[error,E]=useState(''),[undo,U]=useState(item.raw.photoUndoToken||null),[adding,A]=useState(false),[replace,R]=useState(null),[removing,D]=useState(null),[original,O]=useState(false),[selected,S]=useState(null),[failed,F]=useState([]);
@@ -11,7 +12,8 @@ export function PhotoManager({item,host,refresh,busyChanged,close,embedded=false
  useEffect(()=>{busyChanged(busy);return()=>busyChanged(false);},[busy]);
  async function change(action){B(true);E('');try{
   const operationId=crypto.randomUUID();
-  const result=await host.call('fluent_update_style_item_patch',{approval:'explicit_user_approved',item_id:item.id,patch:{},photo_library:{expected_revision:item.raw.photoRevision,operation_id:operationId,action},provenance:{sourceType:'user_confirmation'},response_mode:'read_after_write'});
+  const [tool,change]=photoChangeCall(action);
+  const result=await host.call(tool,{approval:'explicit_user_approved',item_id:item.id,expected_revision:item.raw.photoRevision,operation_id:operationId,...change,provenance:{sourceType:'user_confirmation'},response_mode:'read_after_write'});
   const ack=findPayload(result,v=>v.kind==='style_item_patch'&&v.target?.id===item.id);
   const proof=ack?.readAfterWrite;
   if(ack?.payload?.durable!==true||proof?.operationId!==operationId||proof?.revision!==ack.payload.photoLibrary?.revision)throw new Error('The change could not be confirmed. Refresh before retrying.');

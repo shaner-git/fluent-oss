@@ -3,7 +3,6 @@ import { isMealCoverageItemKey, mealCoverageItemKey, newMealCoverageRevision } f
 import { assertStyleImageDataUrl, decodeStyleImageDataUrl, parseOwnedStyleAsset, routeStyleImageUrl } from './domains/style/media';
 import { getFluentAuthProps, type MutationProvenance } from './auth';
 import { hasDietaryNegationOrHedgeCue, recognizeDietaryPattern, type DietaryPattern } from './domains/meals/dietary-patterns';
-import type { BudgetCategory } from './domains/budgets/service';
 import {
   STYLE_ITEM_FIT_FIELDS,
   type StyleAtomicCatalogMediaInput,
@@ -13,6 +12,8 @@ import {
 import type { MealsCalibrationResponseInput } from './domains/meals/onboarding-calibration';
 import { mirrorMealsTier1PersonFacts } from './domains/meals/person-facts-bridge';
 import type { JsonPatchOperation } from './domains/meals/recipe-document';
+import { recipeHasIngredients } from './domains/meals/recipe-document';
+import type { WriteOperationsStore } from './write-operations';
 import type {
   ConsentVisibility,
   PcHost,
@@ -21,6 +22,7 @@ import type {
   PersonFactSource,
   PersonFactStatus,
   PersonFactWriteAck,
+  StylePrefFacet,
 } from './personal-context';
 import type { FluentVNextDomain } from './vnext-contract';
 import { enforcePublicWriteRateLimit, type FluentRateLimitBinding } from './rate-limits';
@@ -28,7 +30,6 @@ import {
   getFluentVNextGroceryShoppingReconciliation,
   getFluentVNextCurrentGroceryListItem,
   getFluentVNextItem,
-  getFluentVNextPurchaseContext,
   getFluentVNextSharedProfile,
   projectFluentVNextCurrentGroceryListItem,
   listFluentVNextItemsPage,
@@ -61,15 +62,15 @@ export type FluentVNextWriteKind =
   | 'meal_plan_save'
   | 'recipe_save'
   | 'recipe_patch'
-  | 'recipe_feedback'
-  | 'budget_envelope_set'
-  | 'budget_spend_log';
+  | 'recipe_feedback';
 type FluentStyleImageType = 'primary' | 'alternate' | 'fit';
 export type FluentStyleImageOrigin = 'user_source' | 'host_generated';
 export type FluentVNextWriteStatus = 'applied' | 'not_implemented';
 
 export interface FluentVNextWriteServices extends FluentVNextReadServices {
   publicWriteRateLimiter?: FluentRateLimitBinding;
+  /** Retry-safe claims for writes with no natural key (save_recipe, record_recipe_feedback). */
+  writeOperations?: WriteOperationsStore;
   core: FluentVNextReadServices['core'] & {
     appendPersonConsentEvent: (
       input: { scopeKey: string; visibility: ConsentVisibility },
@@ -100,21 +101,6 @@ export interface FluentVNextWriteServices extends FluentVNextReadServices {
       },
       provenance: MutationProvenance,
     ) => Promise<PersonFactRejectAck>;
-  };
-  budgets?: FluentVNextReadServices['budgets'] & {
-    logBudgetSpend?: (input: {
-      amount: number;
-      category: BudgetCategory;
-      note?: string | null;
-      occurredOn?: string | null;
-      provenance: MutationProvenance;
-    }) => Promise<unknown>;
-    setBudgetEnvelope?: (input: {
-      category: BudgetCategory;
-      currency?: string | null;
-      monthlyAmount: number;
-      provenance: MutationProvenance;
-    }) => Promise<unknown>;
   };
   meals?: FluentVNextReadServices['meals'] & {
     createRecipe?: (input: { recipe: unknown; provenance: MutationProvenance }) => Promise<unknown>;
@@ -275,71 +261,11 @@ export interface FluentVNextWriteAck {
   recovery?: string;
 }
 
-export async function setFluentBudgetEnvelope(
-  services: FluentVNextWriteServices,
-  input: {
-    category: BudgetCategory;
-    currency?: string | null;
-    monthlyAmount: number;
-    provenance: MutationProvenance;
-  },
-): Promise<FluentVNextWriteAck> {
-  if (!services.budgets?.setBudgetEnvelope) {
-    return notImplementedAck(budgetDomain(input.category), 'budget_envelope_set', {
-      category: input.category,
-      currency: input.currency ?? 'CAD',
-      monthlyAmount: input.monthlyAmount,
-    }, {
-      id: input.category,
-      type: 'budget_envelope',
-    });
-  }
-  const result = await services.budgets.setBudgetEnvelope(input);
-  return writeAck({
-    domain: budgetDomain(input.category),
-    kind: 'budget_envelope_set',
-    payload: result,
-    readAfterWrite: await getFluentVNextPurchaseContext(services, { category: input.category }),
-    source: 'budgets.setBudgetEnvelope',
-    target: { id: input.category, type: 'budget_envelope' },
-  });
-}
-
-export async function logFluentBudgetSpend(
-  services: FluentVNextWriteServices,
-  input: {
-    amount: number;
-    category: BudgetCategory;
-    note?: string | null;
-    occurredOn?: string | null;
-    provenance: MutationProvenance;
-  },
-): Promise<FluentVNextWriteAck> {
-  if (!services.budgets?.logBudgetSpend) {
-    return notImplementedAck(budgetDomain(input.category), 'budget_spend_log', {
-      amount: input.amount,
-      category: input.category,
-      occurredOn: input.occurredOn ?? null,
-    }, {
-      id: null,
-      type: 'budget_spend_event',
-    });
-  }
-  const result = await services.budgets.logBudgetSpend(input);
-  return writeAck({
-    domain: budgetDomain(input.category),
-    kind: 'budget_spend_log',
-    payload: result,
-    readAfterWrite: await getFluentVNextPurchaseContext(services, { category: input.category }),
-    source: 'budgets.logBudgetSpend',
-    target: { id: stringField(result, 'eventId'), type: 'budget_spend_event' },
-  });
-}
-
 export async function saveFluentVNextRecipe(
   services: FluentVNextWriteServices,
   input: {
     approval: FluentVNextRecipeWriteApproval;
+    operationId?: string | null;
     provenance: MutationProvenance;
     recipe: unknown;
   },
@@ -352,16 +278,62 @@ export async function saveFluentVNextRecipe(
     });
   }
 
-  const result = await services.meals.createRecipe({ recipe: input.recipe, provenance: input.provenance });
-  const targetId = stringField(result, 'id') ?? stringField(input.recipe, 'id') ?? null;
-  return writeAck({
-    domain: 'meals',
-    kind: 'recipe_save',
-    payload: result,
-    readAfterWrite: targetId ? await getFluentVNextItem(services, { domain: 'meals', itemId: targetId, itemType: 'recipe' }) : null,
-    source: 'meals.createRecipe',
-    target: { id: targetId, type: 'recipe' },
-  });
+  const createRecipe = services.meals.createRecipe;
+  const operationId = input.operationId?.trim().toLowerCase() || null;
+  // "recipe:op:" ids are reserved for ids Fluent derives from an operation_id; a caller-chosen one could
+  // otherwise pose as an earlier attempt of some operation and turn a new save into a false replay.
+  if (/^recipe:op:/i.test((stringField(input.recipe, 'id') ?? '').trim())) {
+    throw new Error('Recipe ids starting with "recipe:op:" are reserved for Fluent. Omit recipe.id (pass operation_id for safe retries) or choose a different id.');
+  }
+  // With an operation_id and no explicit id, the recipe id is derived from it: a retry can never create
+  // a second recipe, even if the claim bookkeeping was lost or a stale claim was taken over.
+  const recipe = operationId && !stringField(input.recipe, 'id')
+    ? { ...asRecord(input.recipe), id: `recipe:op:${operationId}` }
+    : input.recipe;
+  const ackFor = async (payload: unknown, targetId: string | null) => {
+    const readAfterWrite = targetId ? await getFluentVNextItem(services, { domain: 'meals', itemId: targetId, itemType: 'recipe' }) : null;
+    const replayedButGone = asRecord(payload).replayed === true && !readAfterWrite;
+    const ack = writeAck({
+      domain: 'meals',
+      kind: 'recipe_save',
+      payload: replayedButGone
+        ? { ...asRecord(payload), currentlyExists: false, note: 'This operation_id already completed earlier; the recipe it saved no longer exists. Nothing new was saved.' }
+        : payload,
+      readAfterWrite,
+      source: 'meals.createRecipe',
+      target: { id: targetId, type: 'recipe' },
+    });
+    if (!replayedButGone) return ack;
+    return {
+      ...ack,
+      boundaries: ack.boundaries.map((boundary) => /Read-after-write proof is included/.test(boundary)
+        ? 'No read-after-write proof: the recipe this operation saved earlier no longer exists. Do not cite it as current state.'
+        : boundary),
+    };
+  };
+  const save = async () => {
+    const targetIdFromInput = stringField(recipe, 'id') ?? null;
+    try {
+      const result = await createRecipe({ recipe, provenance: input.provenance });
+      const targetId = stringField(result, 'id') ?? targetIdFromInput;
+      return { result: await ackFor(result, targetId), resultRef: targetId };
+    } catch (error) {
+      // Only the operation-derived id proves an earlier attempt of THIS operation committed. A caller-chosen
+      // id that already exists belongs to some other save, so it stays an error (never a false replay).
+      const derivedId = operationId ? `recipe:op:${operationId}` : null;
+      if (derivedId && targetIdFromInput === derivedId && error instanceof Error && error.message === `Recipe already exists: ${derivedId}`) {
+        return { result: await ackFor({ id: targetIdFromInput, replayed: true }, targetIdFromInput), resultRef: targetIdFromInput };
+      }
+      throw error;
+    }
+  };
+  if (!services.writeOperations || !input.operationId) return (await save()).result;
+  const outcome = await services.writeOperations.run(
+    { operationId: input.operationId, request: input.recipe, tool: 'fluent_save_recipe' },
+    save,
+    (recipeId) => ackFor({ id: recipeId, replayed: true }, recipeId),
+  );
+  return outcome.result;
 }
 
 export async function updateFluentVNextRecipePatch(
@@ -405,6 +377,7 @@ export async function recordFluentVNextRecipeFeedback(
   input: {
     approval: FluentVNextRecipeWriteApproval;
     feedback: Record<string, unknown>;
+    operationId?: string | null;
     provenance: MutationProvenance;
     recipeId: string;
   },
@@ -421,7 +394,18 @@ export async function recordFluentVNextRecipeFeedback(
   }
 
   const feedback = asRecord(input.feedback);
-  const result = await services.meals.logFeedback({
+  const logFeedback = services.meals.logFeedback;
+  const ackFor = async (payload: unknown) => writeAck({
+    domain: 'meals',
+    kind: 'recipe_feedback',
+    payload,
+    readAfterWrite: await getFluentVNextItem(services, { domain: 'meals', itemId: input.recipeId, itemType: 'recipe' }),
+    source: 'meals.logFeedback',
+    target: { id: input.recipeId, type: 'recipe_feedback' },
+  });
+  const record = async () => {
+    const result = await logFeedback({
+    operationId: input.operationId ?? null,
     date: stringOrNull(feedback.date),
     difficulty: feedback.difficulty ?? null,
     familyAcceptance: feedback.family_acceptance ?? feedback.familyAcceptance ?? null,
@@ -434,15 +418,16 @@ export async function recordFluentVNextRecipeFeedback(
     submittedBy: stringOrNull(feedback.submitted_by ?? feedback.submittedBy),
     taste: feedback.taste ?? null,
     timeReality: feedback.time_reality ?? feedback.timeReality ?? null,
-  });
-  return writeAck({
-    domain: 'meals',
-    kind: 'recipe_feedback',
-    payload: result,
-    readAfterWrite: await getFluentVNextItem(services, { domain: 'meals', itemId: input.recipeId, itemType: 'recipe' }),
-    source: 'meals.logFeedback',
-    target: { id: input.recipeId, type: 'recipe_feedback' },
-  });
+    });
+    return { result: await ackFor(result), resultRef: stringField(result, 'id') };
+  };
+  if (!services.writeOperations || !input.operationId) return (await record()).result;
+  const outcome = await services.writeOperations.run(
+    { operationId: input.operationId, request: { feedback: input.feedback, recipeId: input.recipeId }, tool: 'fluent_record_recipe_feedback' },
+    record,
+    (feedbackId) => ackFor({ id: feedbackId, recipeId: input.recipeId, replayed: true }),
+  );
+  return outcome.result;
 }
 
 export async function applyFluentVNextGroceryListChange(
@@ -841,26 +826,44 @@ export async function saveFluentVNextMealPlan(
   // Each save gets a fresh coverage revision; readback keys bind a confirmation to this revision
   // and the exact meal, so a later save or a replayed old key can never confirm a different meal.
   const coverageRevision = newMealCoverageRevision();
-  const uncoveredEntries = groceryItems.length === 0
-    ? entries.flatMap((entry, index) => {
+  // A meal is covered only when it links to a saved recipe that has ingredients. A linked draft
+  // recipe without ingredients is as unverified as an unlinked meal.
+  const uncoveredEntries: Array<{
+    date: string | null;
+    entry_index: number;
+    item_key: string;
+    meal_type: string | null;
+    recipe_name: string | null;
+  }> = [];
+  if (groceryItems.length === 0) {
+    const linkedRecipeHasIngredients = new Map<string, boolean>();
+    for (const [index, entry] of entries.entries()) {
       const record = objectOrNull(entry);
-      if (!record || stringOrNull(record.recipe_id ?? record.recipeId)) {
-        return [];
+      if (!record) continue;
+      const recipeId = stringOrNull(record.recipe_id ?? record.recipeId);
+      if (recipeId) {
+        // Without a recipe reader, keep the prior behavior (a linked meal counts as covered).
+        if (!services.meals.getRecipe) continue;
+        if (!linkedRecipeHasIngredients.has(recipeId)) {
+          const linked = await services.meals.getRecipe(recipeId);
+          linkedRecipeHasIngredients.set(recipeId, Boolean(linked) && recipeHasIngredients(objectOrNull(linked)?.raw ?? linked));
+        }
+        if (linkedRecipeHasIngredients.get(recipeId)) continue;
       }
       const meal = {
         date: stringOrNull(record.date),
         mealType: stringOrNull(record.meal_type ?? record.mealType),
         recipeName: stringOrNull(record.recipe_name ?? record.recipeName),
       };
-      return [{
+      uncoveredEntries.push({
         date: meal.date,
         entry_index: index,
         item_key: mealCoverageItemKey(coverageRevision, index, meal),
         meal_type: meal.mealType,
         recipe_name: meal.recipeName,
-      }];
-    })
-    : [];
+      });
+    }
+  }
   const { grocery_coverage: _hostCoverage, ...hostSourceSnapshot } = objectOrNull(plan.source_snapshot ?? plan.sourceSnapshot) ?? {};
   const result = await services.meals.upsertPlan({
     createNewPlan: true,
@@ -942,7 +945,7 @@ function mealPlanGroceryGap(
     kind: 'grocery_list_incomplete',
     summary:
       `The meal plan was saved, but Fluent could not verify grocery coverage for ${names}: ` +
-      'those meals are not linked to a saved Fluent recipe, so Fluent could not derive their ingredients. ' +
+      'those meals have no saved ingredients in Fluent (they are not linked to a saved recipe, or the linked recipe is a draft without ingredients), so Fluent could not derive their groceries. ' +
       'The grocery list is marked as not verified until each of these meals is confirmed.',
     nextStep:
       'Tell the user which meals are not verified. For each one, compare that meal’s ingredients with the current ' +
@@ -1051,6 +1054,27 @@ export async function updateFluentVNextSharedProfilePatch(
     });
   }
 
+  // Style taste, size and price facts are canonical person facts (visible to Style and the shared
+  // profile only). confirmed/corrected upserts the fact; rejected removes that exact fact.
+  const styleFacet = input.domain === 'style' && publicFactPatch ? stylePublicFactFacet(publicFactPatch.kind) : null;
+  if (styleFacet && publicFactPatch) {
+    const value = { facet: styleFacet, label: publicFactPatch.value };
+    const source = { origin: 'user_confirmed' as const, domain: 'style' as const, detail: 'shared_profile_patch' };
+    const result = publicFactPatch.status === 'rejected'
+      ? await services.core.rejectPersonFact({ kind: 'style_pref', value }, input.provenance)
+      : await services.core.upsertPersonFact({ kind: 'style_pref', source, status: 'confirmed', value }, input.provenance);
+    return writeAck({
+      domain: 'style',
+      kind: 'shared_profile_patch',
+      payload: result,
+      readAfterWrite: services.core.listPersonFacts
+        ? { object: 'SharedPersonFacts', facts: await services.core.listPersonFacts({ consumerDomain: 'style', host }) }
+        : null,
+      source: publicFactPatch.status === 'rejected' ? 'core.rejectPersonFact' : 'core.upsertPersonFact',
+      target: { id: stringField(result, 'path') ?? null, type: 'style_profile_fact' },
+    });
+  }
+
   if (input.domain === 'style' && services.style?.updateProfile) {
     const profilePatch = patch.profile ?? patch;
     const result = await services.style.updateProfile({ profile: profilePatch, provenance: input.provenance });
@@ -1127,10 +1151,6 @@ async function requireExplicitRecipeWriteApproval(
     throw new Error('Recipe writes require approval="explicit_user_approved".');
   }
   await enforcePublicWriteRateLimit(services.publicWriteRateLimiter, getFluentAuthProps());
-}
-
-function budgetDomain(category: BudgetCategory): FluentVNextDomain {
-  return category === 'style-clothing' ? 'style' : 'meals';
 }
 
 function recipePatchOperationsFromPatch(patch: Record<string, unknown>): JsonPatchOperation[] {
@@ -1352,6 +1372,23 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
+// Public Style fact kinds (plan #7) and the person-fact facet each one stores as.
+const STYLE_PUBLIC_FACT_FACETS = {
+  fit_preference: 'fit',
+  preferred_store: 'store',
+  price_band: 'price_band',
+  size_note: 'size',
+  style_aesthetic: 'aesthetic',
+  style_avoid: 'avoid',
+} as const satisfies Record<string, StylePrefFacet>;
+type StylePublicFactKind = keyof typeof STYLE_PUBLIC_FACT_FACETS;
+
+function stylePublicFactFacet(kind: string): StylePrefFacet | null {
+  return Object.prototype.hasOwnProperty.call(STYLE_PUBLIC_FACT_FACETS, kind)
+    ? STYLE_PUBLIC_FACT_FACETS[kind as StylePublicFactKind]
+    : null;
+}
+
 type PublicSharedProfileFactPatch = {
   kind:
     | 'allergy'
@@ -1366,7 +1403,8 @@ type PublicSharedProfileFactPatch = {
     | 'routine_note'
     | 'timezone'
     | 'display_name'
-    | 'closet_coverage';
+    | 'closet_coverage'
+    | StylePublicFactKind;
   note: string | null;
   pattern?: DietaryPattern;
   questionId: string | null;
@@ -1421,6 +1459,7 @@ function isSupportedPublicSharedProfileFact(domain: FluentVNextDomain, patch: Pu
     ].includes(kind);
   }
   if (domain === 'style') {
+    if (stylePublicFactFacet(kind)) return true;
     return kind === 'closet_coverage'
       && (patch.status === 'confirmed' || patch.status === 'corrected')
       && ['representative', 'partial', 'out_of_date', 'unknown'].includes(patch.value);
@@ -1678,6 +1717,125 @@ export async function upsertFluentVNextItem(
   });
 }
 
+/** Saves a host-researched product reference for one saved Style item (fluent_save_closet_item_product_details). */
+export async function saveFluentStyleItemProductReference(
+  services: FluentVNextWriteServices,
+  input: {
+    itemId: string;
+    productEnrichment: import('./domains/style/product-reference').ProductEnrichment;
+    provenance: MutationProvenance;
+  },
+): Promise<FluentVNextWriteAck> {
+  if (!input.itemId) throw new Error('fluent_save_closet_item_product_details requires item_id.');
+  if (!services.style?.saveProductReference) throw Error('Product enrichment is unavailable.');
+  if (isAcceptanceTestProvenance(input.provenance)) throw Error('Product enrichment acceptance_test provenance is non-durable.');
+  const result = await services.style.saveProductReference(input.itemId, input.productEnrichment);
+  const readAfterWrite = await getFluentVNextItem(services, {domain:'style',itemId:input.itemId,itemType:'style_item'});
+  return writeAck({domain:'style',kind:'style_item_patch',target:{id:input.itemId,type:'style_item'},source:'style.saveProductReference',payload:{durable:true,productReference:result},readAfterWrite});
+}
+
+/** Applies one photo-arrangement change (the fluent_set_closet_item_cover / reorder / hide / replace / undo_photo_change tools). */
+export async function arrangeFluentStyleItemPhotos(
+  services: FluentVNextWriteServices,
+  input: {
+    itemId: string;
+    photoLibrary: {expected_revision:string;operation_id:string;action:PhotoLibraryAction};
+    provenance: MutationProvenance;
+  },
+): Promise<FluentVNextWriteAck> {
+  if (!input.itemId) throw new Error('A closet photo change requires item_id.');
+  if(!services.style?.managePhotoLibrary)throw Error('Photo management is unavailable.');
+  if(isAcceptanceTestProvenance(input.provenance))throw Error('Photo management acceptance_test provenance is non-durable.');
+  const result=await services.style.managePhotoLibrary({itemId:input.itemId,expectedRevision:input.photoLibrary.expected_revision,operationId:input.photoLibrary.operation_id,action:input.photoLibrary.action,provenance:input.provenance});
+  const saved=await services.style.getPhotoLibrary?.(input.itemId) as any;
+  const readAfterWrite=saved?{revision:saved.revision,operationId:saved.state.operationId,undoToken:saved.state.undo?.token??null,hidden:saved.state.hidden,order:saved.state.order,coverId:saved.state.coverId}:null;
+  return writeAck({domain:'style',kind:'style_item_patch',target:{id:input.itemId,type:'style_item'},source:'style.managePhotoLibrary',payload:{durable:true,photoLibrary:result},readAfterWrite});
+}
+
+// The exact outstanding duplicate-merge redirect on an archived source item, or null.
+async function outstandingStyleDuplicateMerge(
+  services: FluentVNextWriteServices,
+  itemId: string,
+): Promise<{ mergeId: string | null; targetItemId: string } | null> {
+  const item = asRecord(await services.style?.getItem?.(itemId));
+  if (!item || stringField(item, 'status') !== 'archived') return null;
+  const provenance = asRecord(await services.style?.getItemProvenance?.(itemId));
+  const redirect = asRecord(asRecord(provenance?.sourceSnapshot)?.duplicateMergeRedirect);
+  const targetItemId = stringField(redirect, 'targetItemId');
+  if (!targetItemId || stringField(redirect, 'undoneAt')) return null;
+  return { mergeId: stringField(redirect, 'mergeId') ?? null, targetItemId };
+}
+
+/** Undoes one duplicate merge (fluent_undo_closet_item_merge). Requires the exact outstanding merge before any write. */
+export async function undoFluentStyleDuplicateMerge(
+  services: FluentVNextWriteServices,
+  input: { itemId: string; mergeId: string; provenance: MutationProvenance; sourceSnapshot?: unknown },
+): Promise<FluentVNextWriteAck> {
+  if (!input.itemId) throw new Error('fluent_undo_closet_item_merge requires item_id.');
+  if (!services.style?.getItem || !services.style.getItemProvenance) throw new Error('Duplicate-merge Undo is unavailable.');
+  const outstanding = await outstandingStyleDuplicateMerge(services, input.itemId);
+  if (!outstanding || outstanding.mergeId !== input.mergeId) {
+    throw new Error(`No outstanding duplicate merge with merge_id ${input.mergeId} exists for item ${input.itemId}. Nothing was changed. Read the item's duplicateMergeId from fluent_show_closet; to restore an item that was archived without a merge, use fluent_restore_closet_item.`);
+  }
+  return updateFluentStyleItemPatch(services, {
+    expectedDuplicateMergeId: input.mergeId,
+    itemId: input.itemId,
+    patch: { status: 'active' },
+    provenance: input.provenance,
+    sourceSnapshot: input.sourceSnapshot,
+  });
+}
+
+/** Restores one archived item to the active closet (fluent_restore_closet_item). Not for undoing a merge. */
+export async function restoreFluentStyleItem(
+  services: FluentVNextWriteServices,
+  input: { itemId: string; provenance: MutationProvenance; sourceSnapshot?: unknown },
+): Promise<FluentVNextWriteAck> {
+  if (!input.itemId) throw new Error('fluent_restore_closet_item requires item_id.');
+  // A merge bound to a cycle ID was already rejected by this path before the split; say why up front.
+  const outstanding = services.style?.getItemProvenance ? await outstandingStyleDuplicateMerge(services, input.itemId) : null;
+  if (outstanding?.mergeId) {
+    throw new Error(`Item ${input.itemId} was archived by a duplicate merge. Nothing was changed. To undo that merge, use fluent_undo_closet_item_merge with merge_id ${outstanding.mergeId}.`);
+  }
+  return updateFluentStyleItemPatch(services, {
+    itemId: input.itemId,
+    patch: { status: 'active' },
+    provenance: input.provenance,
+    sourceSnapshot: input.sourceSnapshot,
+  });
+}
+
+/** Merges a duplicate into the item that stays (fluent_merge_closet_items); same path as the former archive merge. */
+export async function mergeFluentStyleDuplicateItems(
+  services: FluentVNextWriteServices,
+  input: { itemId: string; mergeIntoItemId: string; mergeOperationId: string; provenance: MutationProvenance; reason?: string | null; sourceSnapshot?: unknown },
+): Promise<FluentVNextWriteAck> {
+  if (!input.itemId?.trim() || !input.mergeIntoItemId?.trim()) throw new Error('fluent_merge_closet_items requires item_id and merge_into_item_id.');
+  return archiveFluentVNextItem(services, {
+    disposition: 'duplicate',
+    domain: 'style',
+    itemId: input.itemId,
+    itemType: 'style_item',
+    mergeIntoItemId: input.mergeIntoItemId,
+    mergeOperationId: input.mergeOperationId,
+    provenance: input.provenance,
+    reason: input.reason,
+    sourceSnapshot: input.sourceSnapshot,
+  });
+}
+
+/** True when an archive call carries a duplicate merge (direct params or the legacy closet-widget note). */
+export function styleArchiveRequestsDuplicateMerge(input: {
+  mergeIntoItemId?: string | null;
+  mergeOperationId?: string | null;
+  provenance: MutationProvenance;
+  sourceSnapshot?: unknown;
+}): boolean {
+  return (input.mergeIntoItemId !== undefined && input.mergeIntoItemId !== null)
+    || (input.mergeOperationId !== undefined && input.mergeOperationId !== null)
+    || styleClosetWidgetDuplicateMergeTarget(input.sourceSnapshot, input.provenance) !== null;
+}
+
 export async function updateFluentStyleItemPatch(
   services: FluentVNextWriteServices,
   input: {
@@ -1691,31 +1849,22 @@ export async function updateFluentStyleItemPatch(
   },
 ): Promise<FluentVNextWriteAck> {
   if (!input.itemId) {
-    throw new Error('fluent_update_style_item_patch requires item_id.');
+    throw new Error('fluent_update_closet_item requires item_id.');
   }
   const unsupportedFields = unsupportedStylePatchFields(input.patch);
   if (unsupportedFields.length > 0) {
     throw new Error(
       `Unsupported Style patch fields: ${unsupportedFields.join(', ')}. No changes were saved. ` +
-      'Use fluent_refresh_style_item_profile for tags and styling descriptors, or product_enrichment with an empty patch for attributed care facts.',
+      'Use fluent_record_closet_item_feedback for tags and styling descriptors, or fluent_save_closet_item_product_details for attributed care facts.',
     );
   }
   if (input.productEnrichment) {
     if (Object.keys(input.patch).length || input.photoLibrary || input.expectedDuplicateMergeId) throw Error('Save product enrichment separately from item or photo edits, with an empty patch.');
-    if (!services.style?.saveProductReference) throw Error('Product enrichment is unavailable.');
-    if (isAcceptanceTestProvenance(input.provenance)) throw Error('Product enrichment acceptance_test provenance is non-durable.');
-    const result = await services.style.saveProductReference(input.itemId, input.productEnrichment);
-    const readAfterWrite = await getFluentVNextItem(services, {domain:'style',itemId:input.itemId,itemType:'style_item'});
-    return writeAck({domain:'style',kind:'style_item_patch',target:{id:input.itemId,type:'style_item'},source:'style.saveProductReference',payload:{durable:true,productReference:result},readAfterWrite});
+    return saveFluentStyleItemProductReference(services, { itemId: input.itemId, productEnrichment: input.productEnrichment, provenance: input.provenance });
   }
   if(input.photoLibrary){
     if(Object.keys(input.patch).length||input.expectedDuplicateMergeId)throw Error('Save photo changes separately from item details.');
-    if(!services.style?.managePhotoLibrary)throw Error('Photo management is unavailable.');
-    if(isAcceptanceTestProvenance(input.provenance))throw Error('Photo management acceptance_test provenance is non-durable.');
-    const result=await services.style.managePhotoLibrary({itemId:input.itemId,expectedRevision:input.photoLibrary.expected_revision,operationId:input.photoLibrary.operation_id,action:input.photoLibrary.action,provenance:input.provenance});
-    const saved=await services.style.getPhotoLibrary?.(input.itemId) as any;
-    const readAfterWrite=saved?{revision:saved.revision,operationId:saved.state.operationId,undoToken:saved.state.undo?.token??null,hidden:saved.state.hidden,order:saved.state.order,coverId:saved.state.coverId}:null;
-    return writeAck({domain:'style',kind:'style_item_patch',target:{id:input.itemId,type:'style_item'},source:'style.managePhotoLibrary',payload:{durable:true,photoLibrary:result},readAfterWrite});
+    return arrangeFluentStyleItemPhotos(services, { itemId: input.itemId, photoLibrary: input.photoLibrary, provenance: input.provenance });
   }
   if (!services.style?.upsertItem) {
     return notImplementedAck('style', 'style_item_patch', input.patch, { id: input.itemId, type: 'style_item' });
@@ -1963,10 +2112,10 @@ export async function refreshFluentStyleItemProfile(
   },
 ): Promise<FluentVNextWriteAck> {
   if (!input.itemId) {
-    throw new Error('fluent_refresh_style_item_profile requires item_id.');
+    throw new Error('fluent_record_closet_item_feedback requires item_id.');
   }
   if (!objectOrNull(input.profile)) {
-    throw new Error('fluent_refresh_style_item_profile requires a profile object.');
+    throw new Error('fluent_record_closet_item_feedback requires a profile object.');
   }
   const rawProfile = objectOrNull(input.profile) ?? {};
   const feedbackRequested = ['avoidFor', 'feedbackNote', 'feedbackSignals', 'wearUnderstanding', 'worksFor']
@@ -2022,7 +2171,7 @@ export async function refreshFluentStyleItemProfile(
   const sourceSnapshot = {
     ...(objectOrNull(input.sourceSnapshot) ?? {}),
     hostModel: input.hostModel ?? null,
-    refreshedVia: 'fluent_refresh_style_item_profile',
+    refreshedVia: 'fluent_record_closet_item_feedback',
   };
   if (!services.style?.upsertItemProfile) {
     return notImplementedAck('style', 'style_item_profile_refresh', {
@@ -2155,7 +2304,7 @@ async function prepareStylePhotoAddInput<T extends { hostedFileDownloadUrl?: str
   }
   if (hostedFileDownloadUrl && !imageDataUrl && !imageUrl) {
     const asset = await parseOwnedStyleAsset({ hostedFileDownloadUrl });
-    if (!asset) throw new Error('fluent_set_style_item_image could not read the uploaded image. Nothing was saved.');
+    if (!asset) throw new Error('fluent_set_closet_item_photo could not read the uploaded image. Nothing was saved.');
     imageDataUrl = `data:${asset.mimeType};base64,${Buffer.from(asset.bytes).toString('base64')}`;
     hostedFileDownloadUrl = null;
   }
@@ -2201,7 +2350,7 @@ async function setFluentStyleItemImageOnce(
   },
 ): Promise<FluentVNextWriteAck> {
   if (!input.itemId) {
-    throw new Error('fluent_set_style_item_image requires item_id.');
+    throw new Error('fluent_set_closet_item_photo requires item_id.');
   }
   // Defense in depth for every caller (not only the public tool): an image_url that is a data: URL
   // or an OpenAI upload link is routed to owned storage, and a non-image data URL or non-http(s)
@@ -2418,6 +2567,10 @@ export async function archiveFluentVNextItem(
     sourceSnapshot?: unknown;
   },
 ): Promise<FluentVNextWriteAck> {
+  // Retired item types (goal, budget_signal) stay accepted by the frozen schema but never target anything.
+  if (input.itemType === 'goal' || input.itemType === 'budget_signal') {
+    throw new Error(`item_type ${input.itemType} is retired and has no items. Nothing was archived.`);
+  }
   const directMergeIntoItemIdProvided = input.mergeIntoItemId !== undefined && input.mergeIntoItemId !== null;
   const compatibilityMergeIntoItemId = directMergeIntoItemIdProvided
     ? null
@@ -2989,7 +3142,7 @@ function isPublicSharedProfileFactKind(value: string): value is PublicSharedProf
     'timezone',
     'display_name',
     'closet_coverage',
-  ].includes(value);
+  ].includes(value) || stylePublicFactFacet(value) !== null;
 }
 
 function isPublicSharedProfileFactStatus(value: string): value is PublicSharedProfileFactPatch['status'] {
@@ -3018,7 +3171,7 @@ function styleItemPatchToUpsertItem(itemId: string, patch: Record<string, unknow
     'size',
     // status is restore-only here (schema accepts 'active'); the service merges it via
     // normalizeStyleItemStatus, preserving the prior status when omitted. Archiving stays on
-    // fluent_archive_item (explicit disposition + evidence trail).
+    // fluent_archive_closet_item (explicit disposition + evidence trail).
     'status',
     'subcategory',
   ];
@@ -3087,7 +3240,9 @@ function stylePhotosWithNewImage(
     kind: isFitImage ? 'fit' : 'product',
     note: input.caption ?? null,
     source: generated ? 'generated_metadata' : imageInput.kind === 'reference_url' ? 'host_inspected' : 'user_upload',
-    ...(imageInput.kind === 'reference_url' ? { source_url: imageInput.value, url: imageInput.value } : {}),
+    // A linked image is copied into owned storage (durable photos, 2026-10-03); the link is kept
+    // as the photo's source. A refused or unusable download rejects the photo.
+    ...(imageInput.kind === 'reference_url' ? { source_url: imageInput.value, url: imageInput.value, copy_source_to_owned: true } : {}),
     view: isFitImage ? 'fit_front' : 'front',
   };
   const existing = beforePhotos
@@ -3130,7 +3285,7 @@ function styleImageInput(input: {
   }
   if (candidates.length !== 1) {
     throw new Error(
-      'fluent_set_style_item_image requires exactly one of image_url, image_data_url, or hosted_file_download_url.',
+      'fluent_set_closet_item_photo requires exactly one of image_url, image_data_url, or hosted_file_download_url.',
     );
   }
   return candidates[0]!;

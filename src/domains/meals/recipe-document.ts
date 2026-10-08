@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_CURRENCY, normalizeSupportedCurrency, SUPPORTED_CURRENCY_DESCRIPTION } from '../currency';
 import { parseJsonLike } from './helpers';
 
 export const recipeInstructionSchema = z.union([
@@ -31,23 +32,34 @@ export const recipeIngredientSchema = z
   })
   .passthrough();
 
+// Nutrition per serving. Every field is optional: absent or null means unknown; 0 means zero.
+export const recipeMacrosSchema = z.object({
+  calories: z.number().min(0).nullable().optional(),
+  carbs_g: z.number().min(0).nullable().optional(),
+  fat_g: z.number().min(0).nullable().optional(),
+  fiber_g: z.number().min(0).nullable().optional(),
+  protein_g: z.number().min(0).nullable().optional(),
+  sodium_mg: z.number().min(0).nullable().optional(),
+});
+export const RECIPE_STATUSES = ['active', 'draft', 'retired', 'archived'] as const;
+
 export const recipeDocumentSchema = z
   .object({
     id: z.string().min(1).optional(),
     name: z.string().min(1),
+    status: z.enum(RECIPE_STATUSES).optional().describe('Omit for a normal save. Use draft to keep an incomplete recipe out of meal planning; a recipe without ingredients or instructions is always saved as a draft.'),
     meal_type: z.enum(['breakfast', 'lunch', 'dinner', 'snack', 'unknown']).optional(),
     servings: z.number().int().min(1).nullable().optional(),
     total_time: z.number().int().min(1).nullable().optional(),
     active_time: z.number().int().min(0).nullable().optional(),
-    macros: z.object({
-      calories: z.number(),
-      fiber_g: z.number(),
-      protein_g: z.number(),
-      sodium_mg: z.number(),
-    }).nullable().optional(),
-    cost_per_serving_cad: z.number().min(0).nullable().optional(),
-    instructions: z.array(recipeInstructionSchema).min(1),
-    ingredients: z.array(recipeIngredientSchema).min(1),
+    macros: recipeMacrosSchema.nullable().optional().describe('Per-serving nutrition. Include only the nutrients you know; 0 means zero.'),
+    cost_per_serving_cad: z.number().min(0).nullable().optional().describe('Legacy: estimated cost per serving in CAD. Prefer cost_per_serving with cost_currency.'),
+    cost_per_serving: z.number().min(0).nullable().optional().describe('Estimated cost per serving, in cost_currency.'),
+    cost_currency: z.string().regex(/^[A-Za-z]{3}$/).nullable().optional().describe(SUPPORTED_CURRENCY_DESCRIPTION),
+    source_url: z.string().url().nullable().optional().describe('Optional source URL for provenance only. Fluent does not browse it.'),
+    tags: z.array(z.string()).optional().describe('Optional user-facing tags for this recipe.'),
+    instructions: z.array(recipeInstructionSchema).min(1).optional(),
+    ingredients: z.array(recipeIngredientSchema).min(1).optional(),
   })
   .passthrough();
 
@@ -76,6 +88,28 @@ export interface RecipeColumns {
   status: string;
   slug: string;
   totalTimeMinutes: number | null;
+}
+
+// Sparse recipe patches replace whole top-level fields. Two fields need merge semantics so a partial
+// update never erases known data: macros merge per nutrient (null clears one nutrient), and a legacy
+// cost_per_serving_cad update (cached clients) also updates the canonical cost fields.
+export function resolveRecipePatchOperations(current: RecipeDocument, operations: JsonPatchOperation[]): JsonPatchOperation[] {
+  const resolved = operations.map((operation) => {
+    if (operation.path !== '/macros' || operation.op === 'remove' || !operation.value || typeof operation.value !== 'object') return operation;
+    const merged: Record<string, unknown> = { ...((current.macros as Record<string, unknown> | null | undefined) ?? {}) };
+    for (const [nutrient, value] of Object.entries(operation.value as Record<string, unknown>)) {
+      if (value === null) delete merged[nutrient];
+      else merged[nutrient] = value;
+    }
+    return { ...operation, value: merged };
+  });
+  const paths = new Set(resolved.map((operation) => operation.path));
+  const legacyCost = resolved.find((operation) => operation.path === '/cost_per_serving_cad' && operation.op !== 'remove');
+  if (legacyCost && !paths.has('/cost_per_serving')) {
+    resolved.push({ op: 'replace', path: '/cost_per_serving', value: legacyCost.value });
+    if (!paths.has('/cost_currency')) resolved.push({ op: 'replace', path: '/cost_currency', value: 'CAD' });
+  }
+  return resolved;
 }
 
 export function applyJsonPatch<T>(input: T, operations: JsonPatchOperation[]): T {
@@ -141,8 +175,41 @@ export function applyJsonPatch<T>(input: T, operations: JsonPatchOperation[]): T
   return document;
 }
 
+export const ACTIVE_RECIPE_REQUIRES_CONTENT_MESSAGE =
+  'An active recipe needs at least one ingredient and one instruction. Save it with status "draft", or add the missing ingredients or instructions.';
+
+export function recipeHasIngredients(recipe: unknown): boolean {
+  const ingredients = (recipe as { ingredients?: unknown } | null)?.ingredients;
+  return Array.isArray(ingredients) && ingredients.length > 0;
+}
+
+function recipeHasInstructions(recipe: unknown): boolean {
+  const instructions = (recipe as { instructions?: unknown } | null)?.instructions;
+  return Array.isArray(instructions) && instructions.length > 0;
+}
+
+// A recipe without ingredients or instructions is a draft: it is kept out of meal planning and
+// never counts toward grocery coverage. Cost is normalized so cost_per_serving + cost_currency is
+// canonical and the legacy cost_per_serving_cad stays in sync for CAD (cached 1.0.0/1.0.1 clients).
 export function validateRecipeDocument(input: unknown): RecipeDocument {
-  return recipeDocumentSchema.parse(parseJsonLike(input));
+  const recipe = recipeDocumentSchema.parse(parseJsonLike(input));
+  const complete = recipeHasIngredients(recipe) && recipeHasInstructions(recipe);
+  if (!complete) {
+    if (recipe.status === 'active') throw new Error(ACTIVE_RECIPE_REQUIRES_CONTENT_MESSAGE);
+    if (!recipe.status) recipe.status = 'draft';
+  }
+  const currency = normalizeSupportedCurrency(recipe.cost_currency, 'cost_currency');
+  if (typeof recipe.cost_per_serving === 'number') {
+    recipe.cost_currency = currency ?? DEFAULT_CURRENCY;
+    if (recipe.cost_currency === 'CAD') recipe.cost_per_serving_cad = recipe.cost_per_serving;
+    else delete recipe.cost_per_serving_cad;
+  } else if (typeof recipe.cost_per_serving_cad === 'number') {
+    recipe.cost_per_serving = recipe.cost_per_serving_cad;
+    recipe.cost_currency = 'CAD';
+  } else if (currency) {
+    recipe.cost_currency = currency;
+  }
+  return recipe;
 }
 
 export function deriveRecipeColumns(recipe: RecipeDocument & { id: string }): RecipeColumns {
@@ -150,7 +217,7 @@ export function deriveRecipeColumns(recipe: RecipeDocument & { id: string }): Re
   return {
     activeTimeMinutes: recipe.active_time ?? null,
     costPerServingCad: recipe.cost_per_serving_cad ?? null,
-    instructionsJson: JSON.stringify(recipe.instructions),
+    instructionsJson: JSON.stringify(recipe.instructions ?? []),
     kidFriendly: recipe.kid_friendly ? 1 : 0,
     macrosJson: recipe.macros ? JSON.stringify(recipe.macros) : null,
     mealType: recipe.meal_type ?? 'unknown',

@@ -19,6 +19,6 @@ Supported setup paths for the public `v0.1.0` release.
 
 ## Contract Support
 
-- supported minimum contract version: `2026-07-09.fluent-core-v2.0`
+- supported minimum contract version: `2026-10-08.fluent-core-v2.3`
 - contract artifact: [../../contracts/fluent-contract.v2.json](../../contracts/fluent-contract.v2.json)
 - contract notes: [../fluent-contract-v2.md](../fluent-contract-v2.md)

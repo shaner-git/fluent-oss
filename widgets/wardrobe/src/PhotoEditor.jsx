@@ -1,6 +1,6 @@
 import {findPayload} from './model.mjs';
 import React,{useState,useEffect,useRef} from 'react';
-import {fileDataUrl,verifyPhoto} from './photos.mjs';
+import {fileDataUrl,verifyPhoto,photoChangeCall} from './photos.mjs';
 
 export function PhotoEditor({item,host,close,refresh,busyChanged,replacePhotoId}){
  const [role,Role]=useState('alternate'),[file,File]=useState(null),[url,Url]=useState(''),[preview,Preview]=useState(null),[busy,Busy]=useState(false),[error,Error]=useState('');
@@ -11,17 +11,18 @@ export function PhotoEditor({item,host,close,refresh,busyChanged,replacePhotoId}
  async function save(event){
   event.preventDefault();if(!file&&!url.trim())return;Busy(true);Error('');let proven=false;
   try{
-   const input={approval:'explicit_user_approved',photo_action:'add',item_id:item.id,image_type:role,image_origin:'user_source',provenance:{sourceType:'user_confirmation'},response_mode:'read_after_write'};
+   const input={approval:'explicit_user_approved',item_id:item.id,image_type:role,provenance:{sourceType:'user_confirmation'},response_mode:'read_after_write'};
 
    if(file)input.image_data_url=await fileDataUrl(file);else{const source=new URL(url.trim());if(source.protocol!=='https:')throw new Error('Use an HTTPS image link.');input.image_url=source.href;}
-   const ack=verifyPhoto(await host.call('fluent_set_style_item_image',input),item.id,role,input);proven=true;
+   const ack=verifyPhoto(await host.call('fluent_add_closet_item_photo',input),item.id,role,input,true);proven=true;
    let undoToken;
    if(replacePhotoId){
     const fresh=await refresh();
     const revision=fresh?.photoRevision;
     if(!revision)throw Error('Refresh the item before replacing its old photo.');
     const operationId=crypto.randomUUID();
-    const result=await host.call('fluent_update_style_item_patch',{approval:'explicit_user_approved',item_id:item.id,patch:{},photo_library:{expected_revision:revision,operation_id:operationId,action:{type:'replace',photoId:replacePhotoId,replacementId:ack.payload.photoId}},provenance:{sourceType:'user_confirmation'},response_mode:'read_after_write'});
+    const [tool,change]=photoChangeCall({type:'replace',photoId:replacePhotoId,replacementId:ack.payload.photoId});
+    const result=await host.call(tool,{approval:'explicit_user_approved',item_id:item.id,expected_revision:revision,operation_id:operationId,...change,provenance:{sourceType:'user_confirmation'},response_mode:'read_after_write'});
     const proof=findPayload(result,v=>v.kind==='style_item_patch'&&v.target?.id===item.id);
     if(!proof?.payload?.durable||proof.readAfterWrite?.operationId!==operationId)throw Error('Replacement was not confirmed.');
     undoToken=proof.readAfterWrite.undoToken;

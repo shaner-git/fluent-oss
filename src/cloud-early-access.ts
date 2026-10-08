@@ -3,7 +3,7 @@ export const FLUENT_CLOUD_ACCESS_DOCS_URL = 'https://docs.meetfluent.app/getting
 export const FLUENT_OSS_AVAILABLE_URL = 'https://github.com/shaner-git/fluent-oss';
 export const FLUENT_SUPPORT_EMAIL = 'hello@meetfluent.app';
 
-const FLUENT_CLOUD_EARLY_ACCESS_NOTE = "Fluent is free. Online signup is open in the United States, Canada, and Mexico. The open-source runtime is also available.";
+const FLUENT_CLOUD_EARLY_ACCESS_NOTE = "Fluent is free. Online signup is open in the United States, Canada, and Mexico.";
 
 export type FluentCloudAccessEnvironment = 'production' | 'staging' | 'development' | 'local';
 export type FluentCloudConfiguredAccessMode = 'allowlist' | 'open_dev' | 'self_serve';
@@ -78,7 +78,6 @@ export type FluentCloudAccessFailureDetails = {
   status: number;
   supportPath: string;
   waitlistUrl: string | null;
-  ossFallback: string | null;
 };
 
 type FailureTemplate = {
@@ -86,7 +85,6 @@ type FailureTemplate = {
   explanationTemplate: string;
   nextActionTemplate: string;
   oauthError: FluentCloudAccessFailureDetails['oauthError'];
-  ossFallback: boolean;
   status: number;
   waitlist: boolean;
 };
@@ -99,7 +97,6 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'Start managed Fluent access',
     nextActionTemplate: 'Start free access on meetfluent.app, then reconnect with the same email.',
     oauthError: 'access_denied',
-    ossFallback: true,
     status: 403,
     waitlist: false,
   },
@@ -108,7 +105,6 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'Refresh your Fluent account',
     nextActionTemplate: 'Sign in on meetfluent.app or contact support if setup does not continue.',
     oauthError: 'access_denied',
-    ossFallback: true,
     status: 403,
     waitlist: false,
   },
@@ -117,16 +113,14 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'Refresh your Fluent account',
     nextActionTemplate: 'Sign in on meetfluent.app or contact support if setup does not continue.',
     oauthError: 'access_denied',
-    ossFallback: true,
     status: 403,
     waitlist: false,
   },
   waitlist_declined: {
     explanationTemplate: '{{account_label}} cannot start managed Fluent access in its current state.',
     heading: 'Managed access is unavailable for this account',
-    nextActionTemplate: 'Contact support or use the open-source runtime.',
+    nextActionTemplate: 'Contact support if you think this is a mistake.',
     oauthError: 'access_denied',
-    ossFallback: true,
     status: 403,
     waitlist: false,
   },
@@ -135,7 +129,6 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'Restart Fluent account setup',
     nextActionTemplate: 'Sign in on meetfluent.app or contact support if setup does not restart.',
     oauthError: 'access_denied',
-    ossFallback: true,
     status: 403,
     waitlist: false,
   },
@@ -144,7 +137,6 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'Restart Fluent account setup',
     nextActionTemplate: 'Sign in on meetfluent.app or contact support if setup does not restart.',
     oauthError: 'access_denied',
-    ossFallback: true,
     status: 403,
     waitlist: false,
   },
@@ -153,7 +145,6 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'Finish Fluent onboarding first',
     nextActionTemplate: 'Sign in on meetfluent.app to finish setup, then reconnect.',
     oauthError: 'access_denied',
-    ossFallback: true,
     status: 403,
     waitlist: false,
   },
@@ -162,7 +153,6 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'This Fluent account is already active',
     nextActionTemplate: 'Sign in with the existing account owner identity or contact support if the account should be transferred.',
     oauthError: 'access_denied',
-    ossFallback: false,
     status: 409,
     waitlist: false,
   },
@@ -171,16 +161,14 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'This Fluent account is disabled',
     nextActionTemplate: 'Contact support to restore access before reconnecting.',
     oauthError: 'access_denied',
-    ossFallback: true,
     status: 403,
     waitlist: false,
   },
   account_deleted: {
     explanationTemplate: '{{account_label}} has been deleted from Fluent.',
     heading: 'This Fluent account was deleted',
-    nextActionTemplate: 'Contact support if you expected this account to still exist, or run Fluent yourself instead.',
+    nextActionTemplate: 'Contact support if you expected this account to still exist.',
     oauthError: 'access_denied',
-    ossFallback: true,
     status: 403,
     waitlist: false,
   },
@@ -189,7 +177,6 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'Your Fluent sign-in expired',
     nextActionTemplate: 'Sign in again to refresh access, then reconnect.',
     oauthError: 'invalid_token',
-    ossFallback: false,
     status: 401,
     waitlist: false,
   },
@@ -199,25 +186,22 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'This Fluent contract version is not supported',
     nextActionTemplate: 'Update the Fluent client or plugin, then reconnect with a supported contract version.',
     oauthError: 'access_denied',
-    ossFallback: true,
     status: 426,
     waitlist: false,
   },
   client_unsupported: {
     explanationTemplate: 'The {{client_name}} client is not supported for Fluent right now.',
     heading: 'This Fluent client is not supported',
-    nextActionTemplate: 'Update to a supported Fluent client or run Fluent yourself.',
+    nextActionTemplate: 'Update to a supported Fluent client, such as ChatGPT, Claude, or another MCP-compatible app, then reconnect.',
     oauthError: 'invalid_client',
-    ossFallback: true,
     status: 400,
     waitlist: false,
   },
   self_serve_capacity_reached: {
     explanationTemplate: 'Fluent has reached today\'s self-serve account capacity.',
     heading: 'Fluent is at capacity today',
-    nextActionTemplate: 'Try again tomorrow, or run the open-source runtime today.',
+    nextActionTemplate: 'Try again tomorrow. If you need help sooner, contact support.',
     oauthError: 'temporarily_unavailable',
-    ossFallback: true,
     status: 429,
     waitlist: false,
   },
@@ -226,7 +210,6 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATES: Record<FluentCloudAccessFail
     heading: 'Fluent is temporarily unavailable',
     nextActionTemplate: 'Retry in a few minutes. If this keeps happening, contact support.',
     oauthError: 'temporarily_unavailable',
-    ossFallback: true,
     status: 503,
     waitlist: false,
   },
@@ -242,7 +225,6 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATE_EXPORT = (
     [
       template.explanationTemplate,
       `Next action: ${template.nextActionTemplate}`,
-      template.ossFallback ? `Open-source runtime: ${FLUENT_OSS_AVAILABLE_URL}` : null,
       template.waitlist ? `Sign up for Fluent: ${FLUENT_CLOUD_WAITLIST_URL}` : null,
       `Support: ${FLUENT_SUPPORT_EMAIL}`,
       FLUENT_CLOUD_EARLY_ACCESS_NOTE,
@@ -250,7 +232,6 @@ export const FLUENT_CLOUD_ACCESS_FAILURE_TEMPLATE_EXPORT = (
       .filter(Boolean)
       .join(' '),
   nextActionTemplate: template.nextActionTemplate,
-  includesOssFallback: template.ossFallback,
   includesWaitlist: template.waitlist,
 }));
 
@@ -373,7 +354,6 @@ export function buildFluentCloudAccessFailureDetails(
   const heading = context.heading?.trim() || template.heading;
   const nextAction = applyFailureTemplate(template.nextActionTemplate, context);
   const waitlistUrl = template.waitlist ? FLUENT_CLOUD_WAITLIST_URL : null;
-  const ossFallback = template.ossFallback ? `Open-source runtime: ${FLUENT_OSS_AVAILABLE_URL}` : null;
   const supportPath = `Support: ${FLUENT_SUPPORT_EMAIL}`;
   return {
     code,
@@ -381,7 +361,6 @@ export function buildFluentCloudAccessFailureDetails(
     message: [
       shortExplanation,
       `Next action: ${nextAction}`,
-      ossFallback,
       waitlistUrl ? `Sign up for Fluent: ${waitlistUrl}` : null,
       supportPath,
       FLUENT_CLOUD_EARLY_ACCESS_NOTE,
@@ -395,7 +374,6 @@ export function buildFluentCloudAccessFailureDetails(
     status: template.status,
     supportPath,
     waitlistUrl,
-    ossFallback,
   };
 }
 
@@ -412,7 +390,9 @@ export function createFluentCloudAccessFailurePayload(
       early_access_note: FLUENT_CLOUD_EARLY_ACCESS_NOTE,
       heading: details.heading,
       next_action: details.nextAction,
-      oss_fallback_url: details.ossFallback ? FLUENT_OSS_AVAILABLE_URL : null,
+      // Kept for response-shape compatibility with existing clients; hosted Fluent no longer
+      // points users at the self-hosted runtime (D29), so this is always null.
+      oss_fallback_url: null,
       short_explanation: details.shortExplanation,
       support_email: FLUENT_SUPPORT_EMAIL,
       waitlist_url: details.waitlistUrl,
@@ -562,7 +542,6 @@ export function renderFluentCloudAccessFailurePage(
     <ul>
       <li>Next action: ${escapeHtml(details.nextAction)}</li>
       ${details.waitlistUrl ? `<li>Sign up for Fluent: <a href="${escapeHtml(details.waitlistUrl)}">${escapeHtml(details.waitlistUrl)}</a></li>` : ''}
-      ${details.ossFallback ? `<li>Open-source runtime: <a href="${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}">${escapeHtml(FLUENT_OSS_AVAILABLE_URL)}</a></li>` : ''}
       <li>Support: <a href="mailto:${escapeHtml(FLUENT_SUPPORT_EMAIL)}">${escapeHtml(FLUENT_SUPPORT_EMAIL)}</a></li>
       <li>If you already signed in and need deletion instead, open <code>/account/delete</code>.</li>
     </ul>

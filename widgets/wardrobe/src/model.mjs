@@ -1,4 +1,4 @@
-const categoryNames={TOP:'Tops',BOTTOM:'Bottoms',OUTERWEAR:'Outerwear',SHOE:'Shoes',ACCESSORY:'Accessories'};
+const categoryNames={TOP:'Tops',BOTTOM:'Bottoms',ONE_PIECE:'Dresses & jumpsuits',OUTERWEAR:'Outerwear',SHOE:'Shoes',ACCESSORY:'Accessories'};
 export const displayCategory=value=>categoryNames[value]||value||'Unspecified';
 export const storedCategory=value=>Object.keys(categoryNames).find(key=>categoryNames[key]===value)||value;
 export function requestFilter(filter={}){

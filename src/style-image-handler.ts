@@ -22,12 +22,10 @@ const STYLE_REMOTE_IMAGE_MAX_REDIRECTS = 3;
 const STYLE_IMAGE_BROWSER_CACHE_CONTROL = 'private, max-age=600, immutable';
 const STYLE_IMAGE_OWNED_EDGE_TTL_SECONDS = 60 * 60 * 24 * 30;
 const STYLE_IMAGE_REMOTE_EDGE_TTL_SECONDS = 60 * 60;
-// Remote delivery must not vary with the assistant host's browser/webview user agent. In particular,
-// headless proof browsers and embedded hosts can carry bot-looking or product-specific UAs that a
-// retailer CDN rejects even though the same retained source is healthy. Use one stable fetch identity
-// for the server-side proxy and never forward caller-controlled header values upstream.
-const STYLE_REMOTE_IMAGE_PROXY_USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/145 Safari/537.36';
+// Remote delivery must not vary with the assistant host's browser/webview user agent. Use one stable,
+// honest fetch identity for the server-side proxy (never a browser impersonation) and never forward
+// caller-controlled header values upstream. A source that refuses it is treated as unavailable.
+const STYLE_REMOTE_IMAGE_PROXY_USER_AGENT = 'FluentImageFetcher/1.0 (+https://meetfluent.app)';
 
 export async function maybeHandleStyleImageRequest(
   request: Request,
@@ -169,7 +167,26 @@ async function serveSignedRemoteStyleImage(
     });
   }
 
+  // SSRF gate: only a runtime with strict public fetch (hosted Cloudflare) proxies a remote image.
+  // A self-hosted Node runtime cannot recheck resolved addresses, so it sends the viewer to the
+  // (signature-verified) source instead of fetching it server-side.
+  if (!hasStrictPublicFetch(env)) {
+    return new Response(null, {
+      status: 302,
+      headers: { 'cache-control': 'private, no-store', location: source.toString() },
+    });
+  }
+
   return fetchRemoteStyleImage(env, source, variant, true, url.origin);
+}
+
+// Hosted Workers environments (no core bindings) always run with global_fetch_strictly_public.
+// Core bindings (local/self-hosted and tests) declare it explicitly.
+function hasStrictPublicFetch(env: AppEnv | CloudRuntimeEnv | OAuthAppEnv): boolean {
+  if ('db' in env && 'artifacts' in env) {
+    return (env as CoreRuntimeBindings).strictPublicFetch === true;
+  }
+  return true;
 }
 
 async function fetchRemoteStyleImage(
@@ -191,9 +208,9 @@ async function fetchRemoteStyleImage(
   let current = source;
   let upstream: Response | null = null;
   for (let redirectCount = 0; redirectCount <= STYLE_REMOTE_IMAGE_MAX_REDIRECTS; redirectCount += 1) {
-    // Cloud deployments also enable global_fetch_strictly_public, which rechecks resolved DNS
-    // addresses and closes DNS-rebinding/private-resolution gaps that URL-literal validation alone
-    // cannot close. OSS runtimes retain the literal-address and redirect checks enforced here.
+    // Only reached with strict public fetch (see hasStrictPublicFetch): Cloud deployments enable
+    // global_fetch_strictly_public, which rechecks resolved DNS addresses and closes
+    // DNS-rebinding/private-resolution gaps that URL-literal validation alone cannot close.
     upstream = await fetch(current.toString(), {
       headers: {
         accept: 'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8',
